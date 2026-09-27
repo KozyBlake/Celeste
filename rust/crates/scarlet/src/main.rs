@@ -20,6 +20,8 @@
 //! docs), so double-check this threading split on a machine with a display
 //! before trusting it further.
 
+use std::sync::Arc;
+
 use scarlet_core::settings::{registry, Settings};
 
 fn main() -> anyhow::Result<()> {
@@ -32,7 +34,7 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!("App: {} {}", scarlet_core::identity::APP_NAME, scarlet_core::identity::VERSION);
 
-    let settings = Settings::open(&data_dir);
+    let settings = Arc::new(Settings::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(scarlet_core::identity::VERSION) {
         tracing::info!("Version changed since last run (or first run)");
     }
@@ -41,8 +43,13 @@ fn main() -> anyhow::Result<()> {
     let ui_state = scarlet_ui::UiState::new();
     ui_state.refresh_vrchat_api_status("not connected (VRChat client not wired up yet)");
 
-    let runtime = tokio::runtime::Runtime::new()?;
     let discord_token = registry::registry_string_encrypted(settings.encrypted.clone(), "discord.token").get_or_null();
+    // Port of ScarletDiscordJDA's "no token -> staff mode" fallback: the
+    // window title reflects it exactly like the Java version's
+    // `jframe.setTitle(Scarlet.NAME+" (staff mode)")`.
+    let staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
+
+    let runtime = tokio::runtime::Runtime::new()?;
     runtime.spawn(run_discord(discord_token));
 
     if scarlet_ui::platform::is_headless() {
@@ -51,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         // Blocks this (real OS main) thread until the window closes; Discord
         // keeps running on the tokio runtime's worker threads in the background.
-        if let Err(err) = scarlet_ui::run(ui_state) {
+        if let Err(err) = scarlet_ui::run(ui_state, Some(settings), data_dir, staff_mode) {
             tracing::error!("UI error: {}", err);
         }
     }

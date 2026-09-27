@@ -15,4 +15,5 @@ pub mod meta;
 pub mod permission;
 pub mod secure_store;
 pub mod settings;
+pub mod trust_rank;
 pub mod unique_strings;
