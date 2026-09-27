@@ -34,6 +34,39 @@ Crate layout (`rust/crates/`), each mapped to a Java package/class group:
 - `ScarletData.java` — 1,030
 - Plus `ext/`, `util/`, `util/tts/`, `server/discord/dave/` packages not yet inventoried in detail.
 
+## Scope decisions (agreed with the repo owner, 27 Sep 2026)
+
+The goal is a **full 1:1 port** of the Java build, with these exceptions,
+decided feature by feature rather than inferred:
+
+**Keep and port:** desktop TTS, DAVE E2EE voice, the animated-emoji tools,
+avatar-search providers, `/server-restart`, `/set-voice-channel`, and every
+Discord command (all of them, whatever the exact count turns out to be —
+Java has 50 top-level and 193 total `@SlashCmd` entries).
+
+**Dropped, do not port:** the mobile companion (`ScarletMobile`, FCM relay,
+pairing), evidence submission (`/submit-evidence`, `ScarletEvidence`), the
+report-template subsystem, LibreTranslate advisory translation, `/schedule`
+and calendar events, and training/simulation mode (`ScarletSimulation`, the
+UI's `parkedPlayers`/training view). Where Java calls into one of these, the
+Rust port omits the call and says so in a comment rather than stubbing it.
+
+**Other standing decisions:**
+
+- **Data compatibility is drop-in.** The Rust build reads and writes the
+  same `settings.json`, `discord_bot.json`, `watched_*.json`, `staff_list.json`,
+  per-entity data files and so on as the Java build, so either can run
+  against the same data directory. Never change a file name, field name or
+  enum spelling without checking the Java side.
+- **UI is "1:1 plus fixes":** match Java's tabs, columns, wording and
+  behaviour, but fix what was awkward in Swing where it doesn't change
+  behaviour. Anything that *does* change behaviour gets a comment saying so.
+- **Desktop first (Windows and Linux both), headless still supported.** The
+  PowerPC/Wii target stays possible — keep the crate split clean and don't
+  make the core depend on the GUI — but it isn't the focus.
+- **Bugs are found by diffing against Java**, command by command, rather
+  than waiting for them to be hit in testing.
+
 ## Design decisions made so far
 
 - Discord library: **serenity** (chosen over twilight — closer in spirit to JDA's higher-level API, easier 1:1 command mapping).
@@ -120,6 +153,56 @@ Crate layout (`rust/crates/`), each mapped to a Java package/class group:
 **Next**: continue the complete `ScarletDiscordCommands.java` inventory — event scheduling, remaining configuration, evidence/linking flows, and more — per the standing full-port goal. Important remaining component/modal work includes `link-vrchat-account`; other prerequisites include `VRChatHelpDeskURLs`, feature-gate-aware command registration, the moderation event-emission pipeline, and `ScarletDiscordUI` thread tracking for `/tag`.
 
 **Bug fix (found via user testing)**: the setup wizard's VRChat login step was being silently skipped on a second launch even after the first launch's login attempt was actually rejected by VRChat -- the wizard would jump straight to asking for a group ID with no VRChat prompt at all, exactly as if login had already succeeded. Root cause: `Action::VrChatCredentialsSubmit` persists the entered username/password to the encrypted store *before* the login attempt resolves (matching Java's own `ScarletVRChat.login()`, which does the same up front) -- but Java's `catch (ApiException)` block clears them back out (`this.username.set(null); this.password.set(null);`) when VRChat rejects the credentials, and that clear step never got ported. `compute_stage_after_discord()` only checks "is *something* stored", not "did it actually work", so the stale rejected credentials made every subsequent launch believe VRChat was already configured. The exact same bug existed in `scarlet_vrchat::client::login_with_stored_credentials` (the unattended background re-login every launch attempts), which also never cleared on rejection -- meaning once this happened, *every* future launch would keep silently retrying the same known-bad credentials forever with no way to notice or recover short of manually editing the encrypted store. Both are fixed now (`crates/scarlet-ui/src/setup.rs`, `crates/scarlet-vrchat/src/client.rs`), gated specifically on `VrChatError::Api` (an actual credential rejection) rather than any error, so a transient network hiccup during setup doesn't wrongly wipe good credentials -- matching Java's own distinction (only `ApiException` triggers the clear, not other exception types). Caught a second bug while fixing the first: `RegistryStringValued::set(None)` is a *deliberate* no-op (see its own doc comment, and the module's "Java re-prompts... leaving the prompt blank never stores anything" note) -- my first fix attempt used `.set(None)` expecting it to clear the value, and the regression test written alongside the fix caught that it didn't; `.clear()` is the actual "remove this value" method. Both fixes have regression tests (`a_rejected_login_clears_stored_credentials_so_the_stage_reappears_next_launch` in `setup.rs`, `a_rejected_unattended_login_clears_the_stored_credentials` / `a_network_error_during_unattended_login_leaves_stored_credentials_alone` in `scarlet-vrchat`).
+
+
+**Update 31 (event pipeline)**: the log tailer's `log_init`/`log_catchUp`
+callbacks and `ScarletEventListener` are now ported, which is what makes the
+Instance tab work at all. Before this, `main.rs` translated log events
+straight into `UiState` calls: rows appeared for joins and leaves and
+*nothing else in Java's pipeline ran*. There was no `clientLocation`, so
+nothing knew an instance was open (the reported symptom), no group-instance
+gate, no watched-list checks, no advisories, no announcements, no audit
+events.
+
+- `scarlet-vrchat::log_tail` now emits `TailerEvent::{Init, CatchUp, Entry}`
+  with Java's exact sequencing, including `CatchUp { file: None }` plus the
+  "The VRChat Client does not seem to be installed on this machine,
+  disabling log tailer-parser!" path and the 10s wait-for-a-log-file loop.
+  `VrcAppData` is ported properly (`resolve(relative)`, the override's
+  prefix stripping, the `TEMP` directory).
+- Java's `User Authenticated` branch is **unreachable** (nested
+  `startsWith("[Behaviour] ")` then `startsWith("[User Authenticated: ")` on
+  the same string), so Java never learns its own user id from the log. Fixed
+  here and pinned against a real client log — `clientUserId` is what stops
+  the local user being flagged by the mixed-name check.
+- New `scarlet-events` crate holds the listener. It talks to the UI through
+  `scarlet_core::ui::ScarletUi` (the ported `IScarletUI`, with a headless
+  no-op) and to Discord through an `AuditEmitter` trait, so no cycles and no
+  GUI dependency in a headless run.
+- Ported alongside: `InstanceRoster`, `Pacer`, `PronounLists`,
+  `PronounValidator`, `Names` (Unicode script analysis + the
+  visual-confusable table), `I18n` (reading the real `messages.properties`
+  catalogue via `include_str!` from the Java resources, so the two can't
+  drift), and `TtsService.sanitizeName`.
+- `ConnectedPlayer` moved to `scarlet-core` and gained the fields Java's
+  rows carry: the base/avatar advisory pair with `rebuildAdvisoryAndStyle`,
+  pronouns + flag, avatar info/note. `UiState` gained instance state, Java's
+  real sort comparator, and `playerUpdate`'s pending-update queue.
+- One `Entering Room:` line is now parsed that Java ignores, purely so the
+  status bar can name the world instead of showing a `wrld_` id.
+
+Still not ported in this area, tracked not hidden: avatar info hydration
+(needs the avatar-search providers and four more VRChat endpoints — the
+avatar *name* shows, its performance rating doesn't), the Discord
+`emitExtended*` implementations (the listener calls them, `NoopAuditEmitter`
+is wired in), the bundled alert tones before the nuisance and mixed-name
+announcements (no audio-file playback in the Rust TTS service yet), and
+alt-account group lookups.
+
+**New dependencies** added for the above, all pure Rust and
+cross-compilation-friendly: `unicode-script`, `unicode-normalization`,
+`unicode-general-category`, `deunicode` (Junidecode's equivalent),
+`async-trait`.
 
 ## Working rules for continuing this port
 
