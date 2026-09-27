@@ -14,3 +14,8 @@ serde_json.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+wiremock = "0.6"
