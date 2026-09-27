@@ -124,6 +124,12 @@ pub struct ScarletApp {
     settings: Option<Arc<Settings>>,
     data_dir: PathBuf,
     staff_mode: bool,
+    runtime_handle: tokio::runtime::Handle,
+    /// The first-run setup wizard (vibe-coded notice, Discord bot token,
+    /// VRChat login — see `crate::setup`). `None` once it's finished (or if
+    /// there's no settings store to run it against at all), at which point
+    /// `update()` renders the normal toolbar/tabs/table instead.
+    wizard: Option<crate::setup::SetupWizard>,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -142,12 +148,33 @@ pub struct ScarletApp {
 }
 
 impl ScarletApp {
-    pub fn new(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, staff_mode: bool) -> Self {
+    pub fn new(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> Self {
+        let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
+
+        // If setup already ran in an earlier session, the wizard is
+        // constructed already-`done` and won't render at all -- but Discord
+        // still needs to connect with whatever token is already stored,
+        // which is normally the wizard's own job when it finishes *this*
+        // session (see the `JustFinished` handling in `update()`).
+        let staff_mode = match &wizard {
+            Some(wizard) if wizard.is_done() => {
+                let token = wizard.stored_discord_token();
+                let staff_mode = token.as_deref().map(str::trim).unwrap_or("").is_empty();
+                runtime_handle.spawn(scarlet_discord::client::connect_and_serve(token));
+                staff_mode
+            }
+            // Unknown until the wizard finishes (or there's no settings
+            // store to check at all); the window title updates once it does.
+            _ => true,
+        };
+
         ScarletApp {
             state,
             settings,
             data_dir,
             staff_mode,
+            runtime_handle,
+            wizard,
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -430,6 +457,31 @@ impl eframe::App for ScarletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
 
+        // The setup wizard, while running, replaces the entire window
+        // (toolbar/tabs/table included) the same way a blocking Swing
+        // dialog sequence would have — nothing else is shown until it's
+        // done. `.map()` here (rather than an `if let` held across the
+        // match) keeps the borrow of `self.wizard` scoped to just this
+        // call, so the match arms below are free to touch other `self`
+        // fields (staff_mode, runtime_handle, wizard itself).
+        let outcome = self.wizard.as_mut().map(|wizard| wizard.render(ctx));
+        match outcome {
+            Some(crate::setup::SetupOutcome::JustFinished { discord_token }) => {
+                self.staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
+                self.runtime_handle.spawn(scarlet_discord::client::connect_and_serve(discord_token));
+                self.wizard = None;
+                // Fall through to render the normal UI below on this same frame.
+            }
+            Some(crate::setup::SetupOutcome::AlreadyDone) => {
+                self.wizard = None;
+            }
+            Some(crate::setup::SetupOutcome::InProgress) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                return;
+            }
+            None => {}
+        }
+
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.add_space(4.0);
             self.toolbar(ui);
@@ -472,12 +524,15 @@ impl eframe::App for ScarletApp {
 /// wherever the app decides to run graphically (e.g. the last step of
 /// `main`, with Discord/VRChat running on background tasks that share
 /// `state`), not concurrently with other blocking work on the same thread.
-pub fn run(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, staff_mode: bool) -> eframe::Result<()> {
+/// `runtime_handle` is used both by the setup wizard (to run the VRChat
+/// login/TOTP calls without blocking the UI thread) and, once setup
+/// resolves a Discord token, to spawn the Discord client itself.
+pub fn run(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> eframe::Result<()> {
     let options = eframe::NativeOptions::default();
     eframe::run_native(
         scarlet_core::identity::APP_NAME,
         options,
-        Box::new(move |_cc| Ok(Box::new(ScarletApp::new(state, settings, data_dir, staff_mode)))),
+        Box::new(move |_cc| Ok(Box::new(ScarletApp::new(state, settings, data_dir, runtime_handle)))),
     )
 }
 

@@ -21,6 +21,7 @@
 
 pub mod app;
 pub mod platform;
+pub mod setup;
 pub mod state;
 
 pub use app::run;

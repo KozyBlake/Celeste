@@ -142,6 +142,7 @@ pub struct Settings {
 
     // --- Scarlet.java: System ---
     pub vibecoded_notice_acknowledged: Arc<FileValued<bool>>,
+    pub discord_setup_prompted: Arc<FileValued<bool>>,
 
     // --- ScarletDiscordJDA.java: Integrations (VRChat Help Desk reporting) ---
     pub requesting_email: Arc<FileValued<String>>,
@@ -508,6 +509,15 @@ impl Settings {
             vibecoded_notice_acknowledged: registry.boolean(
                 "vibecoded_notice_acknowledged",
                 "Acknowledged the \"vibe-coded project\" notice",
+                SettingCategory::System,
+                false,
+            ),
+            // Not a direct Java field -- see scarlet_ui::setup module docs
+            // for why the Discord setup step is gated on this instead of
+            // Java's own "is a token stored" check.
+            discord_setup_prompted: registry.boolean(
+                "discord_setup_prompted",
+                "Discord setup wizard has run",
                 SettingCategory::System,
                 false,
             ),

@@ -3770,6 +3770,10 @@ dependencies = [
  "egui_extras",
  "open",
  "scarlet-core",
+ "scarlet-discord",
+ "scarlet-vrchat",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

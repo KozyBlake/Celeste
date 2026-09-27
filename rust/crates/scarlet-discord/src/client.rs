@@ -31,6 +31,42 @@ pub async fn build_client(raw_token: Option<&str>) -> Option<serenity::Result<Cl
     Some(Client::builder(&token, intents()).event_handler(Handler).await)
 }
 
+/// Builds and runs the Discord client to completion (i.e. until it errors
+/// or the process shuts down), logging rather than propagating errors —
+/// meant to be handed straight to `tokio::spawn`/`Handle::spawn` as a
+/// fire-and-forget background task. Port of the "no token -> staff mode"
+/// fallback in `ScarletDiscordJDA`'s constructor (`if (token0 != null &&
+/// !token0.isEmpty())`); with no token, this just logs and returns.
+///
+/// Pulled out of `scarlet` (the bin crate) so both its headless path and
+/// `scarlet-ui`'s setup wizard (which only knows the token once the user
+/// finishes entering it, not at process startup) can share one entry point
+/// instead of duplicating the connect-or-log-staff-mode logic.
+pub async fn connect_and_serve(token: Option<String>) {
+    match token {
+        Some(token) if !token.trim().is_empty() => {
+            tracing::info!(
+                "Discord bot token configured (fingerprint {}); connecting...",
+                crate::token::fingerprint_discord_token(Some(&token))
+            );
+            match build_client(Some(&token)).await {
+                Some(Ok(mut client)) => {
+                    if let Err(err) = client.start().await {
+                        tracing::error!("Discord client error: {}", err);
+                    }
+                }
+                Some(Err(err)) => tracing::error!("Failed to build Discord client: {}", err),
+                None => tracing::warn!("Discord token was configured but normalized to empty; not connecting"),
+            }
+        }
+        _ => {
+            tracing::warn!(
+                "No Discord bot token configured (setting `discord.token`); running without Discord connectivity"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

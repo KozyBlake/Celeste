@@ -3,10 +3,12 @@
 //! **Status: headless bootstrap only.** Ported so far: settings load,
 //! Discord connect-if-a-token-is-configured (mirroring
 //! `ScarletDiscordJDA`'s `if (token0 != null && !token0.isEmpty())` guard),
-//! and — when a display is available — a minimal `scarlet-ui` window. Not
-//! yet ported: the rest of `Scarlet.java`'s startup sequence (data-dir
-//! resolution beyond `SCARLET_HOME`, VRChat client, executors, restart/
-//! update exit-code handling). See ../../PORTING.md.
+//! and — when a display is available — a `scarlet-ui` window that opens
+//! with `scarlet_ui::setup`'s first-run wizard (vibe-coded notice, Discord
+//! bot token/guild, VRChat login) when it hasn't run yet. Not yet ported:
+//! the rest of `Scarlet.java`'s startup sequence (data-dir resolution
+//! beyond `SCARLET_HOME`, executors, restart/update exit-code handling).
+//! See ../../PORTING.md.
 //!
 //! ## Why this isn't `#[tokio::main] async fn main()`
 //!
@@ -14,15 +16,15 @@
 //! process's real main OS thread on some platforms (notably macOS) — it
 //! can't be handed to a `tokio::task::spawn_blocking` worker thread. So
 //! this builds the tokio runtime explicitly, spawns the async work
-//! (currently just Discord) onto it, and reserves the actual main thread
-//! for the GUI event loop when one is opened. Not visually verified in this
-//! environment (no display server here — see `scarlet_ui::app`'s module
-//! docs), so double-check this threading split on a machine with a display
-//! before trusting it further.
+//! (currently just Discord and the VRChat log tailer) onto it, and reserves
+//! the actual main thread for the GUI event loop when one is opened. Not
+//! visually verified in this environment (no display server here — see
+//! `scarlet_ui::app`'s module docs), so double-check this threading split
+//! on a machine with a display before trusting it further.
 
 use std::sync::Arc;
 
-use scarlet_core::settings::{registry, Settings};
+use scarlet_core::settings::Settings;
 
 fn main() -> anyhow::Result<()> {
     let data_dir = std::env::var_os("SCARLET_HOME")
@@ -43,25 +45,28 @@ fn main() -> anyhow::Result<()> {
     let ui_state = scarlet_ui::UiState::new();
     ui_state.refresh_vrchat_api_status("not connected (VRChat client not wired up yet)");
 
-    let discord_token = registry::registry_string_encrypted(settings.encrypted.clone(), "discord.token").get_or_null();
-    // Port of ScarletDiscordJDA's "no token -> staff mode" fallback: the
-    // window title reflects it exactly like the Java version's
-    // `jframe.setTitle(Scarlet.NAME+" (staff mode)")`.
-    let staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
-
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.spawn(run_discord(discord_token));
 
     let vrchat_log_events = scarlet_vrchat::log_tail::spawn_tailer(&runtime.handle().clone());
     runtime.spawn(dispatch_vrchat_log_events(vrchat_log_events, ui_state.clone()));
 
     if scarlet_ui::platform::is_headless() {
         tracing::info!("No display detected; running headless. Ctrl+C to exit.");
+        // Headless can't run the interactive setup wizard (no window to
+        // show it in), so — matching a scheduled/unattended Java run —
+        // just connect with whatever token is already on disk, if any.
+        let discord_token =
+            scarlet_core::settings::registry::registry_string_encrypted(settings.encrypted.clone(), "discord.token")
+                .get_or_null();
+        runtime.spawn(scarlet_discord::client::connect_and_serve(discord_token));
         runtime.block_on(std::future::pending::<()>());
     } else {
-        // Blocks this (real OS main) thread until the window closes; Discord
-        // keeps running on the tokio runtime's worker threads in the background.
-        if let Err(err) = scarlet_ui::run(ui_state, Some(settings), data_dir, staff_mode) {
+        // Blocks this (real OS main) thread until the window closes. The
+        // setup wizard (if it needs to run) and the main window share this
+        // one `eframe::run_native` call; Discord only connects once the
+        // wizard resolves a token (or immediately, if setup already ran on
+        // a previous launch) — see `scarlet_ui::setup`.
+        if let Err(err) = scarlet_ui::run(ui_state, Some(settings), data_dir, runtime.handle().clone()) {
             tracing::error!("UI error: {}", err);
         }
     }
@@ -135,31 +140,6 @@ async fn dispatch_vrchat_log_events(
                 let _ = title;
                 state.append_cli_output(format!("{display_name} loaded video: {url}"));
             }
-        }
-    }
-}
-
-async fn run_discord(token: Option<String>) {
-    match token {
-        Some(token) if !token.trim().is_empty() => {
-            tracing::info!(
-                "Discord bot token configured (fingerprint {}); connecting...",
-                scarlet_discord::token::fingerprint_discord_token(Some(&token))
-            );
-            match scarlet_discord::client::build_client(Some(&token)).await {
-                Some(Ok(mut client)) => {
-                    if let Err(err) = client.start().await {
-                        tracing::error!("Discord client error: {}", err);
-                    }
-                }
-                Some(Err(err)) => tracing::error!("Failed to build Discord client: {}", err),
-                None => tracing::warn!("Discord token was configured but normalized to empty; not connecting"),
-            }
-        }
-        _ => {
-            tracing::warn!(
-                "No Discord bot token configured (setting `discord.token`); running without Discord connectivity"
-            );
         }
     }
 }
