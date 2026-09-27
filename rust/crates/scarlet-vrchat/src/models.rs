@@ -35,6 +35,16 @@ pub struct User {
     pub current_avatar_image_url: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(rename = "ageVerificationStatus")]
+    pub age_verification_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PublicProfile {
+    pub id: Option<String>,
+    pub bio: Option<String>,
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
 }
 
 /// A hand-picked subset of `io.github.vrchatapi.model.GroupAuditLogEntry`'s

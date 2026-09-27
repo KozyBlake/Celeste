@@ -93,6 +93,13 @@ impl TypeMapKey for DiscordModerationDraftsKey {
     type Value = DiscordModerationDrafts;
 }
 
+pub type PendingVrChatLinks =
+    Arc<RwLock<HashMap<String, crate::commands::link_vrchat_account::PendingVrChatLink>>>;
+pub struct PendingVrChatLinksKey;
+impl TypeMapKey for PendingVrChatLinksKey {
+    type Value = PendingVrChatLinks;
+}
+
 /// Java-compatible, unknown-field-preserving `discord_bot.json` storage.
 /// Keeping the raw object is important while the port is incremental: saving
 /// one Rust-supported field must not erase settings still owned by Java.
@@ -308,6 +315,7 @@ impl SharedState {
         data.insert::<WatchedAvatarsKey>(self.watched_avatars);
         data.insert::<InstanceCreationsKey>(Arc::new(RwLock::new(HashMap::new())));
         data.insert::<DiscordModerationDraftsKey>(Arc::new(RwLock::new(HashMap::new())));
+        data.insert::<PendingVrChatLinksKey>(Arc::new(RwLock::new(HashMap::new())));
     }
 }
 

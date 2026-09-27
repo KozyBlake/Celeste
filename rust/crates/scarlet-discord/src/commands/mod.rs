@@ -29,6 +29,7 @@ pub mod aux_webhooks;
 pub mod moderation_tags;
 pub mod moderation_history;
 pub mod moderation_reports;
+pub mod link_vrchat_account;
 pub mod secret_staff_list;
 pub mod staff_list;
 pub mod unlink_vrchat_account;
@@ -186,6 +187,7 @@ pub async fn register_global_commands(ctx: &Context) {
         moderation_history::register_actor_summary(),
         moderation_reports::register_summary(),
         moderation_reports::register_outstanding(),
+        link_vrchat_account::register(),
         watched_group::register(),
         watched_user::register(),
         watched_avatar::register(),
@@ -241,6 +243,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         moderation_history::ACTOR_SUMMARY_NAME => moderation_history::run_actor_summary(ctx, command).await,
         moderation_reports::SUMMARY_NAME => moderation_reports::run_summary(ctx, command).await,
         moderation_reports::OUTSTANDING_NAME => moderation_reports::run_outstanding(ctx, command).await,
+        link_vrchat_account::NAME => link_vrchat_account::run(ctx, command).await,
         watched_group::NAME => watched_group::run(ctx, command).await,
         watched_user::NAME => watched_user::run(ctx, command).await,
         watched_avatar::NAME => watched_avatar::run(ctx, command).await,

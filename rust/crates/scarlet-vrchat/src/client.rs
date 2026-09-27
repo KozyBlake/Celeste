@@ -353,6 +353,21 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// Fetches the public-profile shape that carries `bio` in current API
+    /// versions (it is no longer present on the ordinary User response).
+    pub async fn get_public_profile(
+        &self,
+        user_id: &str,
+    ) -> Result<crate::models::PublicProfile, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/users/{user_id}/profile")))
+            .query(&[("asSelf", "false"), ("withGroupsAndWorlds", "false")])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     // ---- groups (moderation surface) ----
     //
     // Every endpoint below has its exact path, method, and request/response
@@ -425,6 +440,31 @@ impl VrChatClient {
             .send()
             .await?;
         Self::parse_response(response).await
+    }
+
+    /// Port of `createGroupInvite`.
+    pub async fn create_group_invite(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        confirm_override_block: bool,
+    ) -> Result<(), VrChatError> {
+        let response = self
+            .http
+            .post(self.url(&format!("/groups/{group_id}/invites")))
+            .json(&serde_json::json!({
+                "userId": user_id,
+                "confirmOverrideBlock": confirm_override_block
+            }))
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(VrChatError::Api { status, body })
+        }
     }
 
     /// Port of `getGroupJoinRequests`: `GET /groups/{groupId}/requests`.
@@ -1690,6 +1730,36 @@ mod tests {
         let invites = client.get_group_invites("grp_1", 10, 0).await.unwrap();
         assert_eq!(invites.len(), 1);
         assert_eq!(invites[0].user_id.as_deref(), Some("usr_1"));
+    }
+
+    #[tokio::test]
+    async fn public_profile_and_group_invite_use_current_shapes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1/profile"))
+            .and(query_param("asSelf", "false"))
+            .and(query_param("withGroupsAndWorlds", "false"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_1", "displayName": "Alice", "bio": "VRC-VERIFY-12345678"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/groups/grp_1/invites"))
+            .and(body_json(serde_json::json!({
+                "userId": "usr_1", "confirmOverrideBlock": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let profile = client.get_public_profile("usr_1").await.unwrap();
+        assert_eq!(profile.bio.as_deref(), Some("VRC-VERIFY-12345678"));
+        client
+            .create_group_invite("grp_1", "usr_1", false)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

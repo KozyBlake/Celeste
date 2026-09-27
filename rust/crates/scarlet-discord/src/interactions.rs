@@ -183,6 +183,16 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if interaction
         .data
         .custom_id
+        .starts_with(crate::commands::link_vrchat_account::VERIFY_PREFIX)
+    {
+        if let Err(err) = crate::commands::link_vrchat_account::verify(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling VRChat link verification: {err}");
+        }
+        return;
+    }
+    if interaction
+        .data
+        .custom_id
         .starts_with("discord-member-confirm:")
         || interaction
             .data
