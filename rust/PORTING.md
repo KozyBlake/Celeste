@@ -15,7 +15,7 @@ Crate layout (`rust/crates/`), each mapped to a Java package/class group:
 
 | Crate | Java equivalent | Status |
 |---|---|---|
-| `scarlet-core` | `net.sybyline.scarlet` root + `log` + `util` | log layer + app-identity constants ported; config/data model not started |
+| `scarlet-core` | `net.sybyline.scarlet` root + `log` + `util` | log layer, app-identity constants, `Features`, `ScarletPermission`, `ScarletMeta`/`ScarletAnnouncement`, `ScarletJsonCache` ported; `ScarletSettings`/`ScarletData` (the big ones) not started |
 | `scarlet-gif` | `com.madgag.gif.fmsware` | encoder side done (NeuQuant, LZWEncoder, AnimatedGifEncoder); GifDecoder not started |
 | `scarlet-discord` | `net.sybyline.scarlet.server.discord`, `ScarletDiscordJDA`, `ScarletDiscordCommands`, `ScarletEventListener` | skeleton only |
 | `scarlet-vrchat` | `ScarletVRChat*`, `net.sybyline.scarlet.ext` (VRC-related) | skeleton only |

@@ -35,6 +35,7 @@ serenity = { version = "0.12", default-features = false, features = [
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+lru = "0.12"
 
 scarlet-core = { path = "crates/scarlet-core" }
 scarlet-gif = { path = "crates/scarlet-gif" }
