@@ -229,6 +229,61 @@ impl GroupAnnouncement {
     }
 }
 
+/// Confirmed against `components/schemas/GroupPost.yaml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupPost {
+    pub id: Option<String>,
+    #[serde(rename = "groupId")]
+    pub group_id: Option<String>,
+    #[serde(rename = "authorId")]
+    pub author_id: Option<String>,
+    #[serde(rename = "editorId")]
+    pub editor_id: Option<String>,
+    pub title: Option<String>,
+    pub text: Option<String>,
+    #[serde(rename = "imageId")]
+    pub image_id: Option<String>,
+    #[serde(rename = "imageUrl")]
+    pub image_url: Option<String>,
+    #[serde(rename = "roleIds", default)]
+    pub role_ids: Vec<String>,
+    pub visibility: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+/// Confirmed against `components/responses/groups/GroupPostsResponse.yaml`
+/// -- `GET .../posts` wraps its results in `{posts, total}` rather than
+/// returning a bare array (unlike bans/invites/join-requests).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct GroupPostsResponse {
+    pub posts: Vec<GroupPost>,
+    #[allow(dead_code)]
+    pub total: i64,
+}
+
+/// Confirmed against `components/schemas/GroupTransferable.yaml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupTransferable {
+    pub requirements: Option<GroupTransferableRequirements>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupTransferableRequirements {
+    #[serde(rename = "groupNotMonetized", default)]
+    pub group_not_monetized: bool,
+    #[serde(rename = "hasVRCPlus", default)]
+    pub has_vrc_plus: bool,
+    #[serde(rename = "hasVerifiedEmail", default)]
+    pub has_verified_email: bool,
+    #[serde(rename = "targetCanOwnMoreGroups", default)]
+    pub target_can_own_more_groups: bool,
+    #[serde(rename = "targetIsGroupMember", default)]
+    pub target_is_group_member: bool,
+}
+
 /// Hand-picked subset of `Instance`. Not confirmed field-by-field against
 /// the spec (unlike the models above) -- kept intentionally small and
 /// `Option`-heavy since this is the shape `get_instance`/`close_instance`

@@ -55,6 +55,7 @@ pub const PERMISSION_GROUP_BANS_MANAGE: &str = "group-bans-manage";
 pub const PERMISSION_GROUP_MEMBERS_VIEWALL: &str = "group-members-viewall";
 pub const PERMISSION_GROUP_INVITES_MANAGE: &str = "group-invites-manage";
 pub const PERMISSION_GROUP_ANNOUNCEMENT_MANAGE: &str = "group-announcement-manage";
+pub const PERMISSION_GROUP_INSTANCE_MANAGE: &str = "group-instance-manage";
 
 #[derive(Debug, thiserror::Error)]
 pub enum VrChatError {
@@ -380,6 +381,115 @@ impl VrChatClient {
         Ok(())
     }
 
+    /// Port of `getGroupPosts(String groupId, boolean publicOnly, int
+    /// limit)`: `GET /groups/{groupId}/posts?number=...&offset=...&publicOnly=...`.
+    /// The response wraps results as `{posts, total}` rather than a bare
+    /// array (confirmed against
+    /// `components/responses/groups/GroupPostsResponse.yaml`) -- unlike
+    /// Java, which loops pages internally up to an overall `limit`, this
+    /// fetches a single page, matching the one-page-per-call shape already
+    /// used for bans/invites/join-requests/member-search in this client.
+    pub async fn get_group_posts(
+        &self,
+        group_id: &str,
+        public_only: bool,
+        n: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::models::GroupPost>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/posts")))
+            .query(&[("number", n.to_string()), ("offset", offset.to_string()), ("publicOnly", public_only.to_string())])
+            .send()
+            .await?;
+        let wrapper: crate::models::GroupPostsResponse = Self::parse_response(response).await?;
+        Ok(wrapper.posts)
+    }
+
+    /// Port of `createGroupPost`: `POST /groups/{groupId}/posts`, body shape
+    /// confirmed against `components/requests/CreateGroupPostRequest.yaml`.
+    pub async fn create_group_post(
+        &self,
+        group_id: &str,
+        title: &str,
+        text: &str,
+        visibility: &str,
+        send_notification: bool,
+        role_id: Option<&str>,
+    ) -> Result<crate::models::GroupPost, VrChatError> {
+        let mut body = serde_json::json!({
+            "title": title,
+            "text": text,
+            "visibility": visibility,
+            "sendNotification": send_notification,
+        });
+        if let Some(role_id) = role_id {
+            body["roleIds"] = serde_json::json!([role_id]);
+        }
+        let response = self.http.post(self.url(&format!("/groups/{group_id}/posts"))).json(&body).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `deleteGroupPost`: `DELETE /groups/{groupId}/posts/{postId}`.
+    pub async fn delete_group_post(&self, group_id: &str, post_id: &str) -> Result<(), VrChatError> {
+        let response = self.http.delete(self.url(&format!("/groups/{group_id}/posts/{post_id}"))).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        Ok(())
+    }
+
+    /// Port of `getGroupTransferability(String groupId, String
+    /// targetUserId)`: `GET
+    /// /groups/{groupId}/transfer?transferTargetId=...`, confirmed against
+    /// `components/schemas/GroupTransferable.yaml`.
+    pub async fn get_group_transferability(
+        &self,
+        group_id: &str,
+        target_user_id: &str,
+    ) -> Result<crate::models::GroupTransferable, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/transfer")))
+            .query(&[("transferTargetId", target_user_id)])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `initiateOrAcceptGroupTransfer`: `POST
+    /// /groups/{groupId}/transfer` with `{"transferTargetId": ...}`. "Must be
+    /// logged in as current owner to initiate; must be logged in as transfer
+    /// target to accept" per the spec -- this client doesn't distinguish the
+    /// two cases, matching Java's own `initiateOrAcceptGroupTransfer`.
+    pub async fn initiate_or_accept_group_transfer(&self, group_id: &str, target_user_id: &str) -> Result<(), VrChatError> {
+        let response = self
+            .http
+            .post(self.url(&format!("/groups/{group_id}/transfer")))
+            .json(&serde_json::json!({ "transferTargetId": target_user_id }))
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        Ok(())
+    }
+
+    /// Port of `cancelGroupTransfer`: `DELETE /groups/{groupId}/transfer`.
+    pub async fn cancel_group_transfer(&self, group_id: &str) -> Result<(), VrChatError> {
+        let response = self.http.delete(self.url(&format!("/groups/{group_id}/transfer"))).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        Ok(())
+    }
+
     // ---- worlds / avatars / instances ----
 
     /// Port of `getWorld(String worldId)`: `GET /worlds/{worldId}`.
@@ -401,14 +511,26 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
-    /// Port of `closeInstance(String worldId, String instanceId, ...)`:
-    /// `DELETE /instances/{worldId}:{instanceId}`. Java also accepts
-    /// optional `hardClose`/`closedAt` parameters; not ported here (not
-    /// confirmed against the spec yet) -- a plain close is still a real,
-    /// working close, just without those two knobs.
-    pub async fn close_instance(&self, world_id: &str, instance_id: &str) -> Result<crate::models::Instance, VrChatError> {
-        let response = self.http.delete(self.url(&format!("/instances/{world_id}:{instance_id}"))).send().await?;
-        Self::parse_response(response).await
+    /// Port of `closeInstance(String worldId, String instanceId, Boolean
+    /// hardClose, OffsetDateTime closedAt)`: `DELETE
+    /// /instances/{worldId}:{instanceId}` with optional `hardClose`/`closedAt`
+    /// query params, both confirmed against the spec
+    /// (`components/paths/instances.yaml`).
+    pub async fn close_instance(
+        &self,
+        world_id: &str,
+        instance_id: &str,
+        hard_close: Option<bool>,
+        closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<crate::models::Instance, VrChatError> {
+        let mut request = self.http.delete(self.url(&format!("/instances/{world_id}:{instance_id}")));
+        if let Some(hard_close) = hard_close {
+            request = request.query(&[("hardClose", hard_close.to_string())]);
+        }
+        if let Some(closed_at) = closed_at {
+            request = request.query(&[("closedAt", closed_at.to_rfc3339())]);
+        }
+        Self::parse_response(request.send().await?).await
     }
 
     /// Port of `checkUserHasVRChatPermission(GroupMember, GroupPermissions)`
@@ -796,7 +918,25 @@ mod tests {
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let instance = client.get_instance("wrld_1", "12345").await.unwrap();
         assert_eq!(instance.user_count, Some(3));
-        let closed = client.close_instance("wrld_1", "12345").await.unwrap();
+        let closed = client.close_instance("wrld_1", "12345", None, None).await.unwrap();
+        assert_eq!(closed.instance_id.as_deref(), Some("12345"));
+    }
+
+    #[tokio::test]
+    async fn close_instance_passes_hard_close_and_closed_at_query_params() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/instances/wrld_1:12345"))
+            .and(query_param("hardClose", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "worldId": "wrld_1", "instanceId": "12345", "closed": true
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let closed_at = chrono::Utc::now();
+        let closed = client.close_instance("wrld_1", "12345", Some(true), Some(closed_at)).await.unwrap();
         assert_eq!(closed.instance_id.as_deref(), Some("12345"));
     }
 
@@ -942,5 +1082,97 @@ mod tests {
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let requests = client.get_group_join_requests("grp_1", true, 10, 0).await.unwrap();
         assert_eq!(requests[0].user_id.as_deref(), Some("usr_2"));
+    }
+
+    #[tokio::test]
+    async fn get_group_posts_unwraps_the_posts_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/posts"))
+            .and(query_param("publicOnly", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "posts": [{"id": "not_1", "title": "Hello", "text": "World"}],
+                "total": 1
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let posts = client.get_group_posts("grp_1", true, 25, 0).await.unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].title.as_deref(), Some("Hello"));
+    }
+
+    #[tokio::test]
+    async fn create_group_post_sends_role_ids_only_when_given() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/groups/grp_1/posts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "not_1", "title": "Hello", "text": "World", "visibility": "group"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let post = client.create_group_post("grp_1", "Hello", "World", "group", false, None).await.unwrap();
+        assert_eq!(post.id.as_deref(), Some("not_1"));
+    }
+
+    #[tokio::test]
+    async fn delete_group_post_succeeds_on_2xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/groups/grp_1/posts/not_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        client.delete_group_post("grp_1", "not_1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_group_transferability_parses_requirements() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/transfer"))
+            .and(query_param("transferTargetId", "usr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requirements": {
+                    "groupNotMonetized": true,
+                    "hasVRCPlus": false,
+                    "hasVerifiedEmail": true,
+                    "targetCanOwnMoreGroups": true,
+                    "targetIsGroupMember": false
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let transferable = client.get_group_transferability("grp_1", "usr_1").await.unwrap();
+        let req = transferable.requirements.unwrap();
+        assert!(req.group_not_monetized);
+        assert!(!req.has_vrc_plus);
+    }
+
+    #[tokio::test]
+    async fn initiate_and_cancel_group_transfer_succeed_on_2xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/groups/grp_1/transfer"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/groups/grp_1/transfer"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        client.initiate_or_accept_group_transfer("grp_1", "usr_1").await.unwrap();
+        client.cancel_group_transfer("grp_1").await.unwrap();
     }
 }

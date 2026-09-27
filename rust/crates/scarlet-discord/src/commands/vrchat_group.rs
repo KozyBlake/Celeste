@@ -3,36 +3,52 @@
 //! `VrchatGroups` has ~15 subcommands; ported so far: `add-role`,
 //! `remove-role`, `search-members`, `list-bans`, `list-invites`,
 //! `list-join-requests`, `view-announcement`, `create-announcement`,
-//! `delete-announcement`. The rest (posts, transfers, open/close-instance)
-//! are a tracked gap (see PORTING.md) — adding more subcommands under this
-//! same parent command is how they'll land, matching Java's actual
-//! `/vrchat-group <subcommand>` shape rather than inventing separate
-//! top-level commands.
+//! `delete-announcement`, `list-posts`, `create-post`, `delete-post`,
+//! `transfer-check`, `transfer-start`, `transfer-cancel`, `close-instance`.
+//! **Not ported**: `open-instance` -- Java's version builds an interactive
+//! flow (select menus for access type/roles/region/content flags, then
+//! Create/Cancel/"Additional options..." buttons, then a followup modal)
+//! backed by `ScarletDiscordJDA.instanceCreation` state and component/modal
+//! interaction handlers. This crate has no component- or modal-interaction
+//! plumbing at all yet (only slash-command interactions are dispatched) --
+//! that's a separate, larger subsystem to build first, not something to
+//! fake as a single-shot command without losing the real picker UX. Tracked
+//! in PORTING.md rather than silently skipped.
 //!
-//! **Simplified**: `vrchat-user-id`/`vrchat-role-id` are plain string
-//! options rather than Java's autocomplete-resolved
+//! **Simplified**: `vrchat-user-id`/`vrchat-role-id`/`post-role-id` are
+//! plain string options rather than Java's autocomplete-resolved
 //! `io.github.vrchatapi.model.User`/`GroupRole` (see the `commands` module
-//! docs). `search-members`/`list-bans` render each member as one text line
-//! instead of Java's paginated per-member embeds
-//! (`discord.interactions.Pagination` with `MessageEmbed[]`) — still one
-//! line per member with the same core fields (id, display name, roles,
-//! status), just plain text split via [`super::paginate_on_lines`].
-//! `create-announcement` drops the optional `image-file-id` option (VRChat
-//! file uploads aren't ported — a Discord attachment would need to be
-//! re-uploaded to VRChat's file API first, a separate not-yet-ported
-//! endpoint). `delete-announcement` keeps Java's exact safety check: the
-//! `confirm-delete` option must be the literal string `DELETE`. Permission
+//! docs). `search-members`/`list-bans`/`list-invites`/`list-join-requests`/
+//! `list-posts` render each item as plain text instead of Java's paginated
+//! per-item embeds (`discord.interactions.Pagination` with
+//! `MessageEmbed[]`) — still one entry per item with the same core fields,
+//! just plain text split via [`super::paginate_on_lines`].
+//! `create-announcement`/`create-post` drop the optional `image-file-id`
+//! option (VRChat file uploads aren't ported — a Discord attachment would
+//! need to be re-uploaded to VRChat's file API first, a separate
+//! not-yet-ported endpoint). `delete-announcement`/`delete-post` keep
+//! Java's exact safety check: `confirm-delete` must be the literal string
+//! `DELETE`; `transfer-start`/`transfer-cancel` likewise require
+//! `confirm-group-id` to exactly match the configured group id.
+//! `close-instance` splits `vrchat-location` on the first `:` the same way
+//! Java's `Location.of` does, without porting the rest of `Location`'s
+//! tilde-delimited field parsing (owner/type/region/nonce) since
+//! `closeInstance` itself never uses those fields either. Permission
 //! checking uses [`super::moderation_context`] for every subcommand here
 //! except `add-role`/`remove-role`, which intentionally have no permission
-//! gate, matching Java's own ungated originals.
+//! gate, matching Java's own ungated originals; `transfer-start`/
+//! `transfer-cancel` check the group-id confirmation with the ungated
+//! [`super::vrchat_context`] first (matching Java, which checks the
+//! confirmation before the permission gate) and only then run the real
+//! `group_all`-permission-gated transfer.
 
 use serenity::builder::{CreateCommand, CreateCommandOption, CreateInteractionResponseFollowup};
 use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
 
 use scarlet_vrchat::client::{
-    PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_INVITES_MANAGE,
-    PERMISSION_GROUP_MEMBERS_VIEWALL,
+    PERMISSION_ALL, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_INSTANCE_MANAGE,
+    PERMISSION_GROUP_INVITES_MANAGE, PERMISSION_GROUP_MEMBERS_VIEWALL,
 };
 
 pub const NAME: &str = "vrchat-group";
@@ -127,6 +143,99 @@ pub fn register() -> CreateCommand {
             ),
     );
 
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "list-posts", "Lists recent group posts")
+            .add_sub_option(CreateCommandOption::new(CommandOptionType::Boolean, "public-only", "Only show public posts"))
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
+                    .min_int_value(1)
+                    .max_int_value(100),
+            ),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "create-post", "Creates a group post")
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "post-title", "Post title").required(true).max_length(100),
+            )
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "post-text", "Post body").required(true).max_length(2000),
+            )
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "post-visibility", "Who can see the post")
+                    .required(true)
+                    .add_string_choice("Group Members", "group")
+                    .add_string_choice("Public", "public"),
+            )
+            .add_sub_option(CreateCommandOption::new(CommandOptionType::Boolean, "send-notification", "Notify group members"))
+            .add_sub_option(CreateCommandOption::new(
+                CommandOptionType::String,
+                "post-role-id",
+                "Optional VRChat group role id (grol_...) that can see a group-only post",
+            )),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "delete-post", "Deletes a group post")
+            .add_sub_option(CreateCommandOption::new(CommandOptionType::String, "post-id", "The group post id").required(true))
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "confirm-delete", "Type DELETE exactly to confirm")
+                    .required(true),
+            ),
+    );
+
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "transfer-check", "Checks whether a user can receive group ownership")
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)").required(true),
+            ),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "transfer-start", "Starts or accepts group ownership transfer")
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)").required(true),
+            )
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "confirm-group-id",
+                    "Type this group's id exactly to confirm",
+                )
+                .required(true),
+            ),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "transfer-cancel", "Cancels an active group ownership transfer")
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "confirm-group-id",
+                    "Type this group's id exactly to confirm",
+                )
+                .required(true),
+            ),
+    );
+
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "close-instance", "Closes an instance")
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "vrchat-location", "The instance to close (worldId:instanceId)")
+                    .required(true),
+            )
+            .add_sub_option(CreateCommandOption::new(
+                CommandOptionType::Boolean,
+                "close-hard",
+                "Whether to kick users currently in the instance",
+            ))
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "close-in-minutes",
+                    "The number of minutes to wait before closing the instance (1-600)",
+                )
+                .min_int_value(1)
+                .max_int_value(600),
+            ),
+    );
+
     command
 }
 
@@ -152,6 +261,13 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         "view-announcement" => view_announcement(ctx, command).await,
         "create-announcement" => create_announcement(ctx, command, sub_options).await,
         "delete-announcement" => delete_announcement(ctx, command, sub_options).await,
+        "list-posts" => list_posts(ctx, command, sub_options).await,
+        "create-post" => create_post(ctx, command, sub_options).await,
+        "delete-post" => delete_post(ctx, command, sub_options).await,
+        "transfer-check" => transfer_check(ctx, command, sub_options).await,
+        "transfer-start" => transfer_start(ctx, command, sub_options).await,
+        "transfer-cancel" => transfer_cancel(ctx, command, sub_options).await,
+        "close-instance" => close_instance(ctx, command, sub_options).await,
         other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
     }
 }
@@ -428,6 +544,247 @@ async fn delete_announcement(ctx: &Context, command: &CommandInteraction, sub_op
     }
 }
 
+fn post_line(post: &scarlet_vrchat::models::GroupPost) -> String {
+    let id = post.id.as_deref().unwrap_or("unknown");
+    let title = post.title.as_deref().filter(|t| !t.is_empty()).unwrap_or(id);
+    let visibility = post.visibility.as_deref().unwrap_or("unknown");
+    format!("### {title}\n`{id}` — visibility: {visibility}\n{}", post.text.as_deref().unwrap_or(""))
+}
+
+async fn list_posts(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let public_only = find_bool(sub_options, "public-only").unwrap_or(false);
+    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    let posts = match context.client.get_group_posts(&context.group_id, public_only, limit, 0).await {
+        Ok(posts) => posts,
+        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to fetch group posts: {err}")).await,
+    };
+    if posts.is_empty() {
+        return super::reply_ephemeral(ctx, command, "No group posts were returned.").await;
+    }
+
+    let lines: Vec<String> = posts.iter().map(post_line).collect();
+    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n\n"), 2000)).await
+}
+
+async fn create_post(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let (Some(title), Some(text), Some(visibility)) = (
+        find_string(sub_options, "post-title"),
+        find_string(sub_options, "post-text"),
+        find_string(sub_options, "post-visibility"),
+    ) else {
+        return super::reply_ephemeral(ctx, command, "`post-title`, `post-text`, and `post-visibility` are all required.").await;
+    };
+    let send_notification = find_bool(sub_options, "send-notification").unwrap_or(false);
+    let role_id = find_string(sub_options, "post-role-id");
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    match context.client.create_group_post(&context.group_id, title, text, visibility, send_notification, role_id).await {
+        Ok(post) => {
+            command
+                .create_followup(
+                    &ctx.http,
+                    CreateInteractionResponseFollowup::new()
+                        .content(format!("Created group post.\n{}", post_line(&post)))
+                        .ephemeral(true),
+                )
+                .await
+                .map(|_| ())
+        }
+        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to create the group post: {err}")).await,
+    }
+}
+
+async fn delete_post(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let Some(post_id) = find_string(sub_options, "post-id") else {
+        return super::reply_ephemeral(ctx, command, "`post-id` is required.").await;
+    };
+    let Some(confirm) = find_string(sub_options, "confirm-delete") else {
+        return super::reply_ephemeral(ctx, command, "`confirm-delete` is required.").await;
+    };
+    if confirm != "DELETE" {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "Deletion cancelled. Type `DELETE` exactly in the confirmation option to delete the post.",
+        )
+        .await;
+    }
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    match context.client.delete_group_post(&context.group_id, post_id).await {
+        Ok(()) => super::reply_ephemeral(ctx, command, &format!("Deleted group post `{post_id}`.")).await,
+        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to delete group post `{post_id}`: {err}")).await,
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "Yes" } else { "No" }
+}
+
+async fn transfer_check(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let Some(user_id) = find_string(sub_options, "vrchat-user-id") else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-user-id` is required.").await;
+    };
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_ALL).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    let display_name = match context.client.get_user(user_id).await {
+        Ok(user) => user.display_name.unwrap_or_else(|| user_id.to_string()),
+        Err(err) => {
+            return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {user_id} ({err})")).await;
+        }
+    };
+
+    let transferable = match context.client.get_group_transferability(&context.group_id, user_id).await {
+        Ok(transferable) => transferable,
+        Err(err) => {
+            return super::reply_ephemeral(ctx, command, &format!("Failed to check group transfer eligibility: {err}")).await;
+        }
+    };
+    let Some(req) = transferable.requirements else {
+        return super::reply_ephemeral(ctx, command, "VRChat did not return transfer eligibility details.").await;
+    };
+
+    let message = format!(
+        "### Group Transfer Check: {display_name}\n\
+        Group not monetized: {}\n\
+        Target has VRC+: {}\n\
+        Target has verified email: {}\n\
+        Target can own more groups: {}\n\
+        Target is group member: {}",
+        yes_no(req.group_not_monetized),
+        yes_no(req.has_vrc_plus),
+        yes_no(req.has_verified_email),
+        yes_no(req.target_can_own_more_groups),
+        yes_no(req.target_is_group_member),
+    );
+    super::reply_ephemeral(ctx, command, &message).await
+}
+
+async fn transfer_start(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let (Some(user_id), Some(confirm_group_id)) =
+        (find_string(sub_options, "vrchat-user-id"), find_string(sub_options, "confirm-group-id"))
+    else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-user-id` and `confirm-group-id` are both required.").await;
+    };
+
+    let context = match super::vrchat_context(ctx).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+    if confirm_group_id != context.group_id {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("Transfer cancelled. The confirmation must exactly match this group id: `{}`", context.group_id),
+        )
+        .await;
+    }
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_ALL).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    let display_name = match context.client.get_user(user_id).await {
+        Ok(user) => user.display_name.unwrap_or_else(|| user_id.to_string()),
+        Err(err) => {
+            return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {user_id} ({err})")).await;
+        }
+    };
+
+    match context.client.initiate_or_accept_group_transfer(&context.group_id, user_id).await {
+        Ok(()) => super::reply_ephemeral(ctx, command, &format!("Submitted the group transfer request for {display_name}.")).await,
+        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to submit the group transfer request: {err}")).await,
+    }
+}
+
+async fn transfer_cancel(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let Some(confirm_group_id) = find_string(sub_options, "confirm-group-id") else {
+        return super::reply_ephemeral(ctx, command, "`confirm-group-id` is required.").await;
+    };
+
+    let context = match super::vrchat_context(ctx).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+    if confirm_group_id != context.group_id {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("Transfer cancellation skipped. The confirmation must exactly match this group id: `{}`", context.group_id),
+        )
+        .await;
+    }
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_ALL).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    match context.client.cancel_group_transfer(&context.group_id).await {
+        Ok(()) => super::reply_ephemeral(ctx, command, "Cancelled the active group transfer.").await,
+        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to cancel the group transfer: {err}")).await,
+    }
+}
+
+/// Splits a VRChat location string into `(worldId, instanceId)` at the
+/// first `:`, matching `Location.of(String)`'s own split. Java's `Location`
+/// goes on to parse the instance half into structured fields (owner, type,
+/// region, nonce...) for other display purposes, but `closeInstance` itself
+/// only ever needs the two raw halves, so that structured parsing isn't
+/// ported here -- not a gap for this subcommand, since Java doesn't use it
+/// for this call either.
+fn split_location(location: &str) -> Option<(&str, &str)> {
+    let (world, instance) = location.split_once(':')?;
+    if world.is_empty() || instance.is_empty() {
+        return None;
+    }
+    Some((world, instance))
+}
+
+async fn close_instance(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let Some(location) = find_string(sub_options, "vrchat-location") else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-location` is required.").await;
+    };
+    let Some((world_id, instance_id)) = split_location(location) else {
+        return super::reply_ephemeral(ctx, command, "Invalid instance location. Expected format: `worldId:instanceId`.").await;
+    };
+    let hard_close = find_bool(sub_options, "close-hard");
+    let close_in_minutes = find_int(sub_options, "close-in-minutes");
+    let closed_at = close_in_minutes.map(|minutes| chrono::Utc::now() + chrono::Duration::minutes(minutes));
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_INSTANCE_MANAGE).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    match context.client.close_instance(world_id, instance_id, hard_close, closed_at).await {
+        Ok(instance) => {
+            let id = instance.id.as_deref().unwrap_or(instance_id);
+            super::reply_ephemeral(ctx, command, &format!("Closed instance `{id}`")).await
+        }
+        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to close instance `{location}`: {err}")).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +843,49 @@ mod tests {
         let rendered = announcement_text(&announcement);
         assert!(rendered.contains("Event tonight"));
         assert!(rendered.contains("Come join us!"));
+    }
+
+    #[test]
+    fn post_line_falls_back_to_id_when_title_is_blank() {
+        let post = scarlet_vrchat::models::GroupPost {
+            id: Some("not_1".to_string()),
+            title: Some("".to_string()),
+            text: Some("body".to_string()),
+            visibility: Some("group".to_string()),
+            ..Default::default()
+        };
+        let line = post_line(&post);
+        assert!(line.contains("not_1"));
+        assert!(line.contains("visibility: group"));
+        assert!(line.contains("body"));
+    }
+
+    #[test]
+    fn post_line_renders_title_when_present() {
+        let post = scarlet_vrchat::models::GroupPost {
+            id: Some("not_1".to_string()),
+            title: Some("Big Event".to_string()),
+            ..Default::default()
+        };
+        assert!(post_line(&post).contains("Big Event"));
+    }
+
+    #[test]
+    fn split_location_splits_on_first_colon() {
+        assert_eq!(split_location("wrld_1:12345"), Some(("wrld_1", "12345")));
+        assert_eq!(split_location("wrld_1:12345~region(us)"), Some(("wrld_1", "12345~region(us)")));
+    }
+
+    #[test]
+    fn split_location_rejects_missing_colon_or_empty_halves() {
+        assert_eq!(split_location("wrld_1"), None);
+        assert_eq!(split_location(":12345"), None);
+        assert_eq!(split_location("wrld_1:"), None);
+    }
+
+    #[test]
+    fn yes_no_formats_booleans() {
+        assert_eq!(yes_no(true), "Yes");
+        assert_eq!(yes_no(false), "No");
     }
 }
