@@ -3,12 +3,7 @@
 //! `scarlet_core::watched_groups::WatchedGroups`. Ported: `list`, `add`,
 //! `delete-watched-group`, `view`, `set-critical`, `set-silent`, `set-type`,
 //! `set-priority`, `set-message`, `set-notes`, `set-tags`, `add-tag`,
-//! `remove-tag`, and the component-backed `remove-menu`.
-//!
-//! **Not ported**: `export`/`import` (send/receive
-//! `watched_groups.json` as a Discord file attachment; a real, doable
-//! feature, just not built this round -- `scarlet_core::watched_groups`
-//! itself has no `import_json`/`export_json` yet either, tracked together).
+//! `remove-tag`, `export`, `import`, and the component-backed `remove-menu`.
 //!
 //! **Simplified**: `vrchat-group` is a plain string option rather than
 //! Java's autocomplete-resolved id (see the `commands` module docs). Every
@@ -26,9 +21,15 @@
 //! just without that client-side range hint. Not gated (matches Java's
 //! `@DefaultPerms`-only `WatchedGroup_`).
 
-use serenity::builder::{CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateModal};
+use serenity::builder::{
+    CreateActionRow, CreateAttachment, CreateCommand, CreateCommandOption, CreateInputText,
+    CreateInteractionResponse, CreateInteractionResponseFollowup, CreateModal,
+};
 use serenity::client::Context;
-use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
+use serenity::model::application::{
+    CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue,
+};
+use serenity::model::channel::Attachment;
 use serenity::model::prelude::InputTextStyle;
 
 use scarlet_core::watched_groups::{WatchedGroup, WatchedGroupType};
@@ -47,7 +48,9 @@ fn group_id_option() -> CreateCommandOption {
 }
 
 fn group_type_option(name: &str) -> CreateCommandOption {
-    let mut option = CreateCommandOption::new(CommandOptionType::String, name, "The type of watched group").required(true);
+    let mut option =
+        CreateCommandOption::new(CommandOptionType::String, name, "The type of watched group")
+            .required(true);
     for t in WatchedGroupType::ALL {
         option = option.add_string_choice(t.as_str(), t.as_str());
     }
@@ -57,8 +60,36 @@ fn group_type_option(name: &str) -> CreateCommandOption {
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME)
         .description("Configures watched groups")
-        .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "list", "Lists all watched groups"))
-        .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "remove-menu", "Remove watched groups from a dropdown of their names"))
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "list",
+            "Lists all watched groups",
+        ))
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "remove-menu",
+            "Remove watched groups from a dropdown of their names",
+        ))
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "export",
+            "Exports watched groups as a JSON file",
+        ))
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "import",
+                "Imports watched groups from an attached file",
+            )
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Attachment,
+                    "import-file",
+                    "A watched-groups JSON or legacy CSV file",
+                )
+                .required(true),
+            ),
+        )
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "add", "Adds a watched group")
                 .add_sub_option(group_id_option())
@@ -80,105 +111,190 @@ pub fn register() -> CreateCommand {
                 )),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "delete-watched-group", "Removes a watched group")
-                .add_sub_option(group_id_option()),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "delete-watched-group",
+                "Removes a watched group",
+            )
+            .add_sub_option(group_id_option()),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "view", "Views a group's watch information")
-                .add_sub_option(group_id_option()),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "view",
+                "Views a group's watch information",
+            )
+            .add_sub_option(group_id_option()),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-critical", "Sets a group's critical status")
-                .add_sub_option(group_id_option())
-                .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::Boolean, "critical", "The critical status of the group")
-                        .required(true),
-                ),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-critical",
+                "Sets a group's critical status",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Boolean,
+                    "critical",
+                    "The critical status of the group",
+                )
+                .required(true),
+            ),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-silent", "Sets a group's silent status")
-                .add_sub_option(group_id_option())
-                .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::Boolean, "silent", "The silent status of the group")
-                        .required(true),
-                ),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-silent",
+                "Sets a group's silent status",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Boolean,
+                    "silent",
+                    "The silent status of the group",
+                )
+                .required(true),
+            ),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-type", "Sets a group's watch type")
-                .add_sub_option(group_id_option())
-                .add_sub_option(group_type_option("group-type")),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-type",
+                "Sets a group's watch type",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(group_type_option("group-type")),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-priority", "Sets a group's priority")
-                .add_sub_option(group_id_option())
-                .add_sub_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::Integer,
-                        "group-priority",
-                        "The priority of this group (-100 to 100)",
-                    )
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-priority",
+                "Sets a group's priority",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "group-priority",
+                    "The priority of this group (-100 to 100)",
+                )
+                .required(true),
+            ),
+        )
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-message",
+                "Sets a group's TTS announcement message",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "message",
+                    "A message to announce with TTS",
+                )
+                .required(true),
+            ),
+        )
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-notes",
+                "Sets a group's notes",
+            )
+            .add_sub_option(group_id_option()),
+        )
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-tags",
+                "Sets a group's tags",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "group-tags",
+                    "A list of tags, separated by one of ',', ';', '/'",
+                )
+                .required(true),
+            ),
+        )
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "add-tag",
+                "Adds a tag for a group",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "group-tag", "A tag")
                     .required(true),
-                ),
+            ),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-message", "Sets a group's TTS announcement message")
-                .add_sub_option(group_id_option())
-                .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::String, "message", "A message to announce with TTS")
-                        .required(true),
-                ),
-        )
-        .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-notes", "Sets a group's notes")
-                .add_sub_option(group_id_option()),
-        )
-        .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-tags", "Sets a group's tags")
-                .add_sub_option(group_id_option())
-                .add_sub_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::String,
-                        "group-tags",
-                        "A list of tags, separated by one of ',', ';', '/'",
-                    )
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "remove-tag",
+                "Removes a tag from a group",
+            )
+            .add_sub_option(group_id_option())
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "group-tag", "A tag")
                     .required(true),
-                ),
-        )
-        .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "add-tag", "Adds a tag for a group")
-                .add_sub_option(group_id_option())
-                .add_sub_option(CreateCommandOption::new(CommandOptionType::String, "group-tag", "A tag").required(true)),
-        )
-        .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "remove-tag", "Removes a tag from a group")
-                .add_sub_option(group_id_option())
-                .add_sub_option(CreateCommandOption::new(CommandOptionType::String, "group-tag", "A tag").required(true)),
+            ),
         )
 }
 
 fn find_string<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a str> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::String(s) => Some(*s),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::String(s) => Some(*s),
+            _ => None,
+        })
 }
 
 fn find_int(options: &[ResolvedOption<'_>], name: &str) -> Option<i64> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::Integer(n) => Some(*n),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Integer(n) => Some(*n),
+            _ => None,
+        })
 }
 
 fn find_bool(options: &[ResolvedOption<'_>], name: &str) -> Option<bool> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::Boolean(b) => Some(*b),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Boolean(b) => Some(*b),
+            _ => None,
+        })
+}
+
+fn find_attachment<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a Attachment> {
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Attachment(attachment) => Some(*attachment),
+            _ => None,
+        })
 }
 
 fn split_tags(input: &str) -> Vec<String> {
-    input.split(['/', ',', ';']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    input
+        .split(['/', ',', ';'])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
@@ -203,6 +319,8 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     match subcommand.name {
         "list" => run_list(ctx, command, &watched).await,
         "remove-menu" => run_remove_menu(ctx, command, &watched).await,
+        "export" => run_export(ctx, command, &watched).await,
+        "import" => run_import(ctx, command, sub_options, &watched).await,
         "add" => run_add(ctx, command, sub_options, &watched).await,
         "delete-watched-group" => run_delete(ctx, command, sub_options, &watched).await,
         "view" => run_view(ctx, command, sub_options, &watched).await,
@@ -214,7 +332,97 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         "set-tags" => run_set_tags(ctx, command, sub_options, &watched).await,
         "add-tag" => run_add_tag(ctx, command, sub_options, &watched).await,
         "remove-tag" => run_remove_tag(ctx, command, sub_options, &watched).await,
-        other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
+        other => {
+            super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await
+        }
+    }
+}
+
+async fn run_export(
+    ctx: &Context,
+    command: &CommandInteraction,
+    watched: &scarlet_core::watched_groups::WatchedGroups,
+) -> serenity::Result<()> {
+    match watched.export_json() {
+        Ok(json) => {
+            command
+                .create_followup(
+                    &ctx.http,
+                    CreateInteractionResponseFollowup::new()
+                        .content("Exported watched groups.")
+                        .add_file(CreateAttachment::bytes(json, "watched_groups.json")),
+                )
+                .await?;
+            Ok(())
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Could not export watched groups: {err}"),
+            )
+            .await
+        }
+    }
+}
+
+async fn run_import(
+    ctx: &Context,
+    command: &CommandInteraction,
+    options: &[ResolvedOption<'_>],
+    watched: &scarlet_core::watched_groups::WatchedGroups,
+) -> serenity::Result<()> {
+    let Some(attachment) = find_attachment(options, "import-file") else {
+        return super::reply_ephemeral(ctx, command, "`import-file` is required.").await;
+    };
+    let bytes = match attachment.download().await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Could not download `{}`: {err}", attachment.filename),
+            )
+            .await
+        }
+    };
+    let filename = attachment.filename.to_lowercase();
+    let result = if filename.ends_with(".csv") {
+        watched
+            .import_legacy_csv(&bytes, true)
+            .map(|count| (count, "legacy CSV"))
+    } else if filename.ends_with(".json") {
+        watched
+            .import_json(&bytes, true)
+            .map(|count| (count, "JSON"))
+    } else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "File `{}` is not importable; use `.json` or `.csv`.",
+                attachment.filename
+            ),
+        )
+        .await;
+    };
+    match result {
+        Ok((count, format)) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Successfully imported watched groups {format} ({count} valid entries)."),
+            )
+            .await
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Exception while importing `{}`: {err}", attachment.filename),
+            )
+            .await
+        }
     }
 }
 
@@ -227,9 +435,15 @@ async fn run_remove_menu(
     let mut entries = Vec::new();
     for group in watched.get_all() {
         let name = match &context {
-            Some(context) => context.client.get_group(&group.id, false).await.ok().map(|group| group.name),
+            Some(context) => context
+                .client
+                .get_group(&group.id, false)
+                .await
+                .ok()
+                .map(|group| group.name),
             None => None,
-        }.unwrap_or_else(|| group.id.clone());
+        }
+        .unwrap_or_else(|| group.id.clone());
         entries.push((group.id, name));
     }
     entries.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
@@ -243,21 +457,44 @@ async fn run_set_notes_modal(
     watched: &scarlet_core::watched_groups::WatchedGroups,
 ) -> serenity::Result<()> {
     let Some(group_id) = find_string(sub_options, "vrchat-group") else {
-        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
-            serenity::builder::CreateInteractionResponseMessage::new().content("`vrchat-group` is required.").ephemeral(true),
-        )).await;
+        return command
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    serenity::builder::CreateInteractionResponseMessage::new()
+                        .content("`vrchat-group` is required.")
+                        .ephemeral(true),
+                ),
+            )
+            .await;
     };
     let Some(group) = watched.get_watched_group(group_id) else {
-        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
-            serenity::builder::CreateInteractionResponseMessage::new().content("That group is not watched").ephemeral(true),
-        )).await;
+        return command
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    serenity::builder::CreateInteractionResponseMessage::new()
+                        .content("That group is not watched")
+                        .ephemeral(true),
+                ),
+            )
+            .await;
     };
-    let mut input = CreateInputText::new(InputTextStyle::Paragraph, "Notes", "notes").required(false).max_length(1024);
-    if let Some(notes) = group.notes.filter(|notes| !notes.is_empty()) { input = input.value(notes); }
-    command.create_response(&ctx.http, CreateInteractionResponse::Modal(
-        CreateModal::new(format!("watched-group-set-notes:{group_id}"), "Edit notes")
-            .components(vec![CreateActionRow::InputText(input)]),
-    )).await
+    let mut input = CreateInputText::new(InputTextStyle::Paragraph, "Notes", "notes")
+        .required(false)
+        .max_length(1024);
+    if let Some(notes) = group.notes.filter(|notes| !notes.is_empty()) {
+        input = input.value(notes);
+    }
+    command
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Modal(
+                CreateModal::new(format!("watched-group-set-notes:{group_id}"), "Edit notes")
+                    .components(vec![CreateActionRow::InputText(input)]),
+            ),
+        )
+        .await
 }
 
 fn tags_joined(group: &WatchedGroup) -> String {
@@ -285,7 +522,12 @@ async fn run_list(
             group.silent
         ));
     }
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&lines.join("\n"), 2000),
+    )
+    .await
 }
 
 async fn run_add(
@@ -300,7 +542,8 @@ async fn run_add(
     if watched.get_watched_group(group_id).is_some() {
         return super::reply_ephemeral(ctx, command, "That group is already watched").await;
     }
-    let Some(group_type) = find_string(sub_options, "group-type").and_then(WatchedGroupType::parse) else {
+    let Some(group_type) = find_string(sub_options, "group-type").and_then(WatchedGroupType::parse)
+    else {
         return super::reply_ephemeral(ctx, command, "`group-type` is required.").await;
     };
     let group_tags = find_string(sub_options, "group-tags");
@@ -313,7 +556,9 @@ async fn run_add(
     };
     let group_name = match context.client.get_group(group_id, false).await {
         Ok(group) => group.name,
-        Err(_) => return super::reply_ephemeral(ctx, command, "That group doesn't seem to exist").await,
+        Err(_) => {
+            return super::reply_ephemeral(ctx, command, "That group doesn't seem to exist").await
+        }
     };
 
     let mut watched_group = WatchedGroup::new(group_id);
@@ -349,11 +594,21 @@ async fn run_delete(
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     }
     let name = match super::vrchat_context(ctx).await {
-        Ok(context) => context.client.get_group(group_id, false).await.ok().map(|g| g.name),
+        Ok(context) => context
+            .client
+            .get_group(group_id, false)
+            .await
+            .ok()
+            .map(|g| g.name),
         Err(_) => None,
     };
     let name = name.unwrap_or_else(|| group_id.to_string());
-    super::reply_ephemeral(ctx, command, &format!("Removed group [{name}](<https://vrchat.com/home/group/{group_id}>)")).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("Removed group [{name}](<https://vrchat.com/home/group/{group_id}>)"),
+    )
+    .await
 }
 
 async fn run_view(
@@ -388,20 +643,34 @@ async fn run_set_critical(
     sub_options: &[ResolvedOption<'_>],
     watched: &scarlet_core::watched_groups::WatchedGroups,
 ) -> serenity::Result<()> {
-    let (Some(group_id), Some(critical)) = (find_string(sub_options, "vrchat-group"), find_bool(sub_options, "critical"))
-    else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-group` and `critical` are both required.").await;
+    let (Some(group_id), Some(critical)) = (
+        find_string(sub_options, "vrchat-group"),
+        find_bool(sub_options, "critical"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`vrchat-group` and `critical` are both required.",
+        )
+        .await;
     };
     let Some(current) = watched.get_watched_group(group_id) else {
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     };
     if current.critical == critical {
-        let message =
-            if critical { "That group is already flagged as critical" } else { "That group is already not flagged as critical" };
+        let message = if critical {
+            "That group is already flagged as critical"
+        } else {
+            "That group is already not flagged as critical"
+        };
         return super::reply_ephemeral(ctx, command, message).await;
     }
     watched.update(group_id, |g| g.critical = critical);
-    let message = if critical { "Flagged group as critical" } else { "Unflagged group as critical" };
+    let message = if critical {
+        "Flagged group as critical"
+    } else {
+        "Unflagged group as critical"
+    };
     super::reply_ephemeral(ctx, command, message).await
 }
 
@@ -411,19 +680,34 @@ async fn run_set_silent(
     sub_options: &[ResolvedOption<'_>],
     watched: &scarlet_core::watched_groups::WatchedGroups,
 ) -> serenity::Result<()> {
-    let (Some(group_id), Some(silent)) = (find_string(sub_options, "vrchat-group"), find_bool(sub_options, "silent")) else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-group` and `silent` are both required.").await;
+    let (Some(group_id), Some(silent)) = (
+        find_string(sub_options, "vrchat-group"),
+        find_bool(sub_options, "silent"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`vrchat-group` and `silent` are both required.",
+        )
+        .await;
     };
     let Some(current) = watched.get_watched_group(group_id) else {
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     };
     if current.silent == silent {
-        let message =
-            if silent { "That group is already flagged as silent" } else { "That group is already not flagged as silent" };
+        let message = if silent {
+            "That group is already flagged as silent"
+        } else {
+            "That group is already not flagged as silent"
+        };
         return super::reply_ephemeral(ctx, command, message).await;
     }
     watched.update(group_id, |g| g.silent = silent);
-    let message = if silent { "Flagged group as silent" } else { "Unflagged group as silent" };
+    let message = if silent {
+        "Flagged group as silent"
+    } else {
+        "Unflagged group as silent"
+    };
     super::reply_ephemeral(ctx, command, message).await
 }
 
@@ -436,17 +720,28 @@ async fn run_set_type(
     let Some(group_id) = find_string(sub_options, "vrchat-group") else {
         return super::reply_ephemeral(ctx, command, "`vrchat-group` is required.").await;
     };
-    let Some(group_type) = find_string(sub_options, "group-type").and_then(WatchedGroupType::parse) else {
+    let Some(group_type) = find_string(sub_options, "group-type").and_then(WatchedGroupType::parse)
+    else {
         return super::reply_ephemeral(ctx, command, "`group-type` is required.").await;
     };
     let Some(current) = watched.get_watched_group(group_id) else {
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     };
     if current.r#type == group_type {
-        return super::reply_ephemeral(ctx, command, &format!("That group is already marked as {}", group_type.as_str())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That group is already marked as {}", group_type.as_str()),
+        )
+        .await;
     }
     watched.update(group_id, |g| g.r#type = group_type);
-    super::reply_ephemeral(ctx, command, &format!("Marking group as {}", group_type.as_str())).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("Marking group as {}", group_type.as_str()),
+    )
+    .await
 }
 
 async fn run_set_priority(
@@ -465,7 +760,12 @@ async fn run_set_priority(
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     }
     watched.update(group_id, |g| g.priority = priority as i32);
-    super::reply_ephemeral(ctx, command, &format!("Setting group priority to {priority}")).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("Setting group priority to {priority}"),
+    )
+    .await
 }
 
 async fn run_set_message(
@@ -484,15 +784,27 @@ async fn run_set_message(
     let reply = match message {
         None => {
             if current.message.is_none() {
-                return super::reply_ephemeral(ctx, command, "That group already has no message").await;
+                return super::reply_ephemeral(ctx, command, "That group already has no message")
+                    .await;
             }
-            format!("Removing group's message (was `{}`)", current.message.as_deref().unwrap_or(""))
+            format!(
+                "Removing group's message (was `{}`)",
+                current.message.as_deref().unwrap_or("")
+            )
         }
         Some(message) => {
             if current.message.as_deref() == Some(message) {
-                return super::reply_ephemeral(ctx, command, "That group's message is already exactly that").await;
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    "That group's message is already exactly that",
+                )
+                .await;
             }
-            format!("Setting group TTS announcement to `{message}` (was `{}`)", current.message.as_deref().unwrap_or("none"))
+            format!(
+                "Setting group TTS announcement to `{message}` (was `{}`)",
+                current.message.as_deref().unwrap_or("none")
+            )
         }
     };
     watched.update(group_id, |g| g.message = message.map(str::to_string));
@@ -516,7 +828,8 @@ async fn run_set_tags(
     let reply = match group_tags {
         None => {
             if current.tags.is_empty() {
-                return super::reply_ephemeral(ctx, command, "That group already has no tags").await;
+                return super::reply_ephemeral(ctx, command, "That group already has no tags")
+                    .await;
             }
             format!("Removing group's tags (was `{old_tags}`)")
         }
@@ -532,9 +845,17 @@ async fn run_set_tags(
                 a == b
             };
             if unchanged {
-                return super::reply_ephemeral(ctx, command, "That group already has those exact tags").await;
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    "That group already has those exact tags",
+                )
+                .await;
             }
-            format!("Setting group tags to `{}` (was `{old_tags}`)", new_tags.join(", "))
+            format!(
+                "Setting group tags to `{}` (was `{old_tags}`)",
+                new_tags.join(", ")
+            )
         }
     };
     let new_tags: Vec<String> = group_tags.map(split_tags).unwrap_or_default();
@@ -551,8 +872,16 @@ async fn run_add_tag(
     sub_options: &[ResolvedOption<'_>],
     watched: &scarlet_core::watched_groups::WatchedGroups,
 ) -> serenity::Result<()> {
-    let (Some(group_id), Some(tag)) = (find_string(sub_options, "vrchat-group"), find_string(sub_options, "group-tag")) else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-group` and `group-tag` are both required.").await;
+    let (Some(group_id), Some(tag)) = (
+        find_string(sub_options, "vrchat-group"),
+        find_string(sub_options, "group-tag"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`vrchat-group` and `group-tag` are both required.",
+        )
+        .await;
     };
     let tag = tag.trim().to_string();
     if watched.get_watched_group(group_id).is_none() {
@@ -584,8 +913,16 @@ async fn run_remove_tag(
     sub_options: &[ResolvedOption<'_>],
     watched: &scarlet_core::watched_groups::WatchedGroups,
 ) -> serenity::Result<()> {
-    let (Some(group_id), Some(tag)) = (find_string(sub_options, "vrchat-group"), find_string(sub_options, "group-tag")) else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-group` and `group-tag` are both required.").await;
+    let (Some(group_id), Some(tag)) = (
+        find_string(sub_options, "vrchat-group"),
+        find_string(sub_options, "group-tag"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`vrchat-group` and `group-tag` are both required.",
+        )
+        .await;
     };
     let Some(current) = watched.get_watched_group(group_id) else {
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
@@ -595,7 +932,11 @@ async fn run_remove_tag(
     }
     let mut removed = false;
     watched.update(group_id, |g| removed = g.tags.remove(tag));
-    let message = if removed { format!("Removed tag `{tag}`") } else { format!("That group doesn't have the tag `{tag}`") };
+    let message = if removed {
+        format!("Removed tag `{tag}`")
+    } else {
+        format!("That group doesn't have the tag `{tag}`")
+    };
     super::reply_ephemeral(ctx, command, &message).await
 }
 

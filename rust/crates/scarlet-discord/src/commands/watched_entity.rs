@@ -4,19 +4,25 @@
 //! `scarlet_core::watched_entities::WatchedEntities`. See
 //! [`super::watched_user`]/[`super::watched_avatar`] for the thin
 //! per-entity-kind wrappers, and [`super::watched_group`]'s docs for the
-//! gaps this shares with `/watched-group` (`export`/`import` not ported)
-//! and simplifications (no autocomplete,
+//! simplifications (no autocomplete,
 //! `entity-priority`'s `-100..=100` range not enforced at the Discord-option
 //! level).
 //!
 //! Ported subcommands: `list`, `add`, `remove`, `view`, `set-critical`,
 //! `set-silent`, `set-type`, `set-priority`, `set-message`, `set-tags`,
-//! `add-tag`, `remove-tag`, `set-notes`, and `remove-menu`. Note Java names the deletion subcommand
+//! `add-tag`, `remove-tag`, `set-notes`, `remove-menu`, `export`, and
+//! `import`. Note Java names the deletion subcommand
 //! `remove` here (unlike `watched-group`'s `delete-watched-group`).
 
-use serenity::builder::{CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateModal};
+use serenity::builder::{
+    CreateActionRow, CreateAttachment, CreateCommand, CreateCommandOption, CreateInputText,
+    CreateInteractionResponse, CreateInteractionResponseFollowup, CreateModal,
+};
 use serenity::client::Context;
-use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
+use serenity::model::application::{
+    CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue,
+};
+use serenity::model::channel::Attachment;
 use serenity::model::prelude::InputTextStyle;
 
 use scarlet_core::watched_entities::{WatchedEntities, WatchedEntity};
@@ -46,7 +52,9 @@ impl EntityKind {
     fn id_option_description(&self) -> &'static str {
         match self {
             EntityKind::User => "The VRChat user id (usr_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX)",
-            EntityKind::Avatar => "The VRChat avatar id (avtr_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX)",
+            EntityKind::Avatar => {
+                "The VRChat avatar id (avtr_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX)"
+            }
         }
     }
 
@@ -57,7 +65,25 @@ impl EntityKind {
         }
     }
 
-    async fn fetch_name(&self, client: &scarlet_vrchat::client::VrChatClient, id: &str) -> Option<String> {
+    fn plural(&self) -> &'static str {
+        match self {
+            EntityKind::User => "users",
+            EntityKind::Avatar => "avatars",
+        }
+    }
+
+    fn export_filename(&self) -> &'static str {
+        match self {
+            EntityKind::User => "watched_users.json",
+            EntityKind::Avatar => "watched_avatars.json",
+        }
+    }
+
+    async fn fetch_name(
+        &self,
+        client: &scarlet_vrchat::client::VrChatClient,
+        id: &str,
+    ) -> Option<String> {
         match self {
             EntityKind::User => client.get_user(id).await.ok().and_then(|u| u.display_name),
             EntityKind::Avatar => client.get_avatar(id).await.ok().map(|a| a.name),
@@ -75,7 +101,12 @@ impl EntityKind {
 }
 
 fn group_type_option(name: &str) -> CreateCommandOption {
-    let mut option = CreateCommandOption::new(CommandOptionType::String, name, "The type of watched entity").required(true);
+    let mut option = CreateCommandOption::new(
+        CommandOptionType::String,
+        name,
+        "The type of watched entity",
+    )
+    .required(true);
     for t in WatchedGroupType::ALL {
         option = option.add_string_choice(t.as_str(), t.as_str());
     }
@@ -83,7 +114,14 @@ fn group_type_option(name: &str) -> CreateCommandOption {
 }
 
 pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) -> CreateCommand {
-    let id_option = || CreateCommandOption::new(CommandOptionType::String, kind.id_option_name(), kind.id_option_description()).required(true);
+    let id_option = || {
+        CreateCommandOption::new(
+            CommandOptionType::String,
+            kind.id_option_name(),
+            kind.id_option_description(),
+        )
+        .required(true)
+    };
 
     CreateCommand::new(name)
         .description(description)
@@ -94,32 +132,63 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
         ))
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
-            "remove-menu",
-            format!("Remove watched {}s from a dropdown of their names", kind.singular()),
+            "export",
+            format!("Exports watched {} as a JSON file", kind.plural()),
         ))
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "add", format!("Adds a watched {}", kind.singular()))
-                .add_sub_option(id_option())
-                .add_sub_option(group_type_option("entity-type"))
-                .add_sub_option(CreateCommandOption::new(
-                    CommandOptionType::String,
-                    "entity-tags",
-                    "A list of tags, separated by one of ',', ';', '/'",
-                ))
-                .add_sub_option(CreateCommandOption::new(
-                    CommandOptionType::Integer,
-                    "entity-priority",
-                    "The priority of this entity (-100 to 100)",
-                ))
-                .add_sub_option(CreateCommandOption::new(
-                    CommandOptionType::String,
-                    "entity-message",
-                    "A message to announce with TTS",
-                )),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "import",
+                format!("Imports watched {} from an attached file", kind.plural()),
+            )
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Attachment,
+                    "import-file",
+                    "A watched-entity JSON or legacy CSV file",
+                )
+                .required(true),
+            ),
+        )
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "remove-menu",
+            format!(
+                "Remove watched {}s from a dropdown of their names",
+                kind.singular()
+            ),
+        ))
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "add",
+                format!("Adds a watched {}", kind.singular()),
+            )
+            .add_sub_option(id_option())
+            .add_sub_option(group_type_option("entity-type"))
+            .add_sub_option(CreateCommandOption::new(
+                CommandOptionType::String,
+                "entity-tags",
+                "A list of tags, separated by one of ',', ';', '/'",
+            ))
+            .add_sub_option(CreateCommandOption::new(
+                CommandOptionType::Integer,
+                "entity-priority",
+                "The priority of this entity (-100 to 100)",
+            ))
+            .add_sub_option(CreateCommandOption::new(
+                CommandOptionType::String,
+                "entity-message",
+                "A message to announce with TTS",
+            )),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "remove", format!("Removes a watched {}", kind.singular()))
-                .add_sub_option(id_option()),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "remove",
+                format!("Removes a watched {}", kind.singular()),
+            )
+            .add_sub_option(id_option()),
         )
         .add_option(
             CreateCommandOption::new(
@@ -137,13 +206,21 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
             )
             .add_sub_option(id_option())
             .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::Boolean, "entity-critical", "The critical status of the entity")
-                    .required(true),
+                CreateCommandOption::new(
+                    CommandOptionType::Boolean,
+                    "entity-critical",
+                    "The critical status of the entity",
+                )
+                .required(true),
             ),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-notes", format!("Sets a {}'s notes", kind.singular()))
-                .add_sub_option(id_option()),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-notes",
+                format!("Sets a {}'s notes", kind.singular()),
+            )
+            .add_sub_option(id_option()),
         )
         .add_option(
             CreateCommandOption::new(
@@ -153,26 +230,38 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
             )
             .add_sub_option(id_option())
             .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::Boolean, "entity-silent", "The silent status of the entity")
-                    .required(true),
+                CreateCommandOption::new(
+                    CommandOptionType::Boolean,
+                    "entity-silent",
+                    "The silent status of the entity",
+                )
+                .required(true),
             ),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-type", format!("Sets a {}'s watch type", kind.singular()))
-                .add_sub_option(id_option())
-                .add_sub_option(group_type_option("entity-type")),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-type",
+                format!("Sets a {}'s watch type", kind.singular()),
+            )
+            .add_sub_option(id_option())
+            .add_sub_option(group_type_option("entity-type")),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-priority", format!("Sets a {}'s priority", kind.singular()))
-                .add_sub_option(id_option())
-                .add_sub_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::Integer,
-                        "entity-priority",
-                        "The priority of this entity (-100 to 100)",
-                    )
-                    .required(true),
-                ),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-priority",
+                format!("Sets a {}'s priority", kind.singular()),
+            )
+            .add_sub_option(id_option())
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "entity-priority",
+                    "The priority of this entity (-100 to 100)",
+                )
+                .required(true),
+            ),
         )
         .add_option(
             CreateCommandOption::new(
@@ -182,26 +271,41 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
             )
             .add_sub_option(id_option())
             .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "entity-message", "A message to announce with TTS")
-                    .required(true),
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "entity-message",
+                    "A message to announce with TTS",
+                )
+                .required(true),
             ),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "set-tags", format!("Sets a {}'s tags", kind.singular()))
-                .add_sub_option(id_option())
-                .add_sub_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::String,
-                        "entity-tags",
-                        "A list of tags, separated by one of ',', ';', '/'",
-                    )
-                    .required(true),
-                ),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "set-tags",
+                format!("Sets a {}'s tags", kind.singular()),
+            )
+            .add_sub_option(id_option())
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "entity-tags",
+                    "A list of tags, separated by one of ',', ';', '/'",
+                )
+                .required(true),
+            ),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "add-tag", format!("Adds a tag for a {}", kind.singular()))
-                .add_sub_option(id_option())
-                .add_sub_option(CreateCommandOption::new(CommandOptionType::String, "entity-tag", "A tag").required(true)),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "add-tag",
+                format!("Adds a tag for a {}", kind.singular()),
+            )
+            .add_sub_option(id_option())
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "entity-tag", "A tag")
+                    .required(true),
+            ),
         )
         .add_option(
             CreateCommandOption::new(
@@ -210,33 +314,59 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
                 format!("Removes a tag from a {}", kind.singular()),
             )
             .add_sub_option(id_option())
-            .add_sub_option(CreateCommandOption::new(CommandOptionType::String, "entity-tag", "A tag").required(true)),
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "entity-tag", "A tag")
+                    .required(true),
+            ),
         )
 }
 
 fn find_string<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a str> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::String(s) => Some(*s),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::String(s) => Some(*s),
+            _ => None,
+        })
 }
 
 fn find_int(options: &[ResolvedOption<'_>], name: &str) -> Option<i64> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::Integer(n) => Some(*n),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Integer(n) => Some(*n),
+            _ => None,
+        })
 }
 
 fn find_bool(options: &[ResolvedOption<'_>], name: &str) -> Option<bool> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::Boolean(b) => Some(*b),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Boolean(b) => Some(*b),
+            _ => None,
+        })
+}
+
+fn find_attachment<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a Attachment> {
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Attachment(attachment) => Some(*attachment),
+            _ => None,
+        })
 }
 
 fn split_tags(input: &str) -> Vec<String> {
-    input.split(['/', ',', ';']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    input
+        .split(['/', ',', ';'])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn tags_joined(entity: &WatchedEntity) -> String {
@@ -266,6 +396,8 @@ pub(crate) async fn run_generic(
     match subcommand.name {
         "list" => run_list(ctx, command, &entities, kind).await,
         "remove-menu" => run_remove_menu(ctx, command, &entities, kind).await,
+        "export" => run_export(ctx, command, &entities, kind).await,
+        "import" => run_import(ctx, command, sub_options, &entities, kind).await,
         "add" => run_add(ctx, command, sub_options, &entities, kind).await,
         "remove" => run_remove(ctx, command, sub_options, &entities, kind).await,
         "view" => run_view(ctx, command, sub_options, &entities, kind).await,
@@ -277,7 +409,102 @@ pub(crate) async fn run_generic(
         "set-tags" => run_set_tags(ctx, command, sub_options, &entities, kind).await,
         "add-tag" => run_add_tag(ctx, command, sub_options, &entities, kind).await,
         "remove-tag" => run_remove_tag(ctx, command, sub_options, &entities, kind).await,
-        other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
+        other => {
+            super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await
+        }
+    }
+}
+
+async fn run_export(
+    ctx: &Context,
+    command: &CommandInteraction,
+    entities: &WatchedEntities,
+    kind: EntityKind,
+) -> serenity::Result<()> {
+    match entities.export_json() {
+        Ok(json) => {
+            command
+                .create_followup(
+                    &ctx.http,
+                    CreateInteractionResponseFollowup::new()
+                        .content(format!("Exported watched {}.", kind.plural()))
+                        .add_file(CreateAttachment::bytes(json, kind.export_filename())),
+                )
+                .await?;
+            Ok(())
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Could not export watched {}: {err}", kind.plural()),
+            )
+            .await
+        }
+    }
+}
+
+async fn run_import(
+    ctx: &Context,
+    command: &CommandInteraction,
+    options: &[ResolvedOption<'_>],
+    entities: &WatchedEntities,
+    kind: EntityKind,
+) -> serenity::Result<()> {
+    let Some(attachment) = find_attachment(options, "import-file") else {
+        return super::reply_ephemeral(ctx, command, "`import-file` is required.").await;
+    };
+    let bytes = match attachment.download().await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Could not download `{}`: {err}", attachment.filename),
+            )
+            .await
+        }
+    };
+    let filename = attachment.filename.to_lowercase();
+    let result = if filename.ends_with(".csv") {
+        entities
+            .import_legacy_csv(&bytes, true)
+            .map(|count| (count, "legacy CSV"))
+    } else if filename.ends_with(".json") {
+        entities
+            .import_json(&bytes, true)
+            .map(|count| (count, "JSON"))
+    } else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "File `{}` is not importable; use `.json` or `.csv`.",
+                attachment.filename
+            ),
+        )
+        .await;
+    };
+    match result {
+        Ok((count, format)) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!(
+                    "Successfully imported watched {} {format} ({count} valid entries).",
+                    kind.plural()
+                ),
+            )
+            .await
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Exception while importing `{}`: {err}", attachment.filename),
+            )
+            .await
+        }
     }
 }
 
@@ -293,11 +520,12 @@ async fn run_remove_menu(
         let name = match &context {
             Some(context) => kind.fetch_name(&context.client, &entity.id).await,
             None => None,
-        }.unwrap_or_else(|| entity.id.clone());
+        }
+        .unwrap_or_else(|| entity.id.clone());
         entries.push((entity.id, name));
     }
     entries.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
-    super::watched_remove_menu(ctx, command, kind.singular(), &format!("{}s", kind.singular()), entries).await
+    super::watched_remove_menu(ctx, command, kind.singular(), kind.plural(), entries).await
 }
 
 async fn run_set_notes_modal(
@@ -308,29 +536,63 @@ async fn run_set_notes_modal(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
-            serenity::builder::CreateInteractionResponseMessage::new()
-                .content(format!("`{}` is required.", kind.id_option_name())).ephemeral(true),
-        )).await;
+        return command
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    serenity::builder::CreateInteractionResponseMessage::new()
+                        .content(format!("`{}` is required.", kind.id_option_name()))
+                        .ephemeral(true),
+                ),
+            )
+            .await;
     };
     let Some(entity) = entities.get_watched_entity(id) else {
-        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
-            serenity::builder::CreateInteractionResponseMessage::new()
-                .content(format!("That {} is not watched", kind.singular())).ephemeral(true),
-        )).await;
+        return command
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    serenity::builder::CreateInteractionResponseMessage::new()
+                        .content(format!("That {} is not watched", kind.singular()))
+                        .ephemeral(true),
+                ),
+            )
+            .await;
     };
-    let mut input = CreateInputText::new(InputTextStyle::Paragraph, "Notes", "notes").required(false).max_length(1024);
-    if let Some(notes) = entity.notes.filter(|notes| !notes.is_empty()) { input = input.value(notes); }
-    command.create_response(&ctx.http, CreateInteractionResponse::Modal(
-        CreateModal::new(format!("watched-entity-set-notes:{}:{id}", kind.singular()), "Edit notes")
-            .components(vec![CreateActionRow::InputText(input)]),
-    )).await
+    let mut input = CreateInputText::new(InputTextStyle::Paragraph, "Notes", "notes")
+        .required(false)
+        .max_length(1024);
+    if let Some(notes) = entity.notes.filter(|notes| !notes.is_empty()) {
+        input = input.value(notes);
+    }
+    command
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Modal(
+                CreateModal::new(
+                    format!("watched-entity-set-notes:{}:{id}", kind.singular()),
+                    "Edit notes",
+                )
+                .components(vec![CreateActionRow::InputText(input)]),
+            ),
+        )
+        .await
 }
 
-async fn run_list(ctx: &Context, command: &CommandInteraction, entities: &WatchedEntities, kind: EntityKind) -> serenity::Result<()> {
+async fn run_list(
+    ctx: &Context,
+    command: &CommandInteraction,
+    entities: &WatchedEntities,
+    kind: EntityKind,
+) -> serenity::Result<()> {
     let all = entities.get_all();
     if all.is_empty() {
-        return super::reply_ephemeral(ctx, command, &format!("No {}s are watched.", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("No {}s are watched.", kind.singular()),
+        )
+        .await;
     }
     let mut lines = vec![format!("### Watched {}s", kind.singular())];
     for entity in &all {
@@ -344,7 +606,12 @@ async fn run_list(ctx: &Context, command: &CommandInteraction, entities: &Watche
             entity.silent
         ));
     }
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&lines.join("\n"), 2000),
+    )
+    .await
 }
 
 async fn run_add(
@@ -355,12 +622,24 @@ async fn run_add(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` is required.", kind.id_option_name())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("`{}` is required.", kind.id_option_name()),
+        )
+        .await;
     };
     if entities.get_watched_entity(id).is_some() {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is already watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is already watched", kind.singular()),
+        )
+        .await;
     }
-    let Some(entity_type) = find_string(sub_options, "entity-type").and_then(WatchedGroupType::parse) else {
+    let Some(entity_type) =
+        find_string(sub_options, "entity-type").and_then(WatchedGroupType::parse)
+    else {
         return super::reply_ephemeral(ctx, command, "`entity-type` is required.").await;
     };
     let entity_tags = find_string(sub_options, "entity-tags");
@@ -372,9 +651,17 @@ async fn run_add(
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
     if !kind.exists(&context.client, id).await {
-        return super::reply_ephemeral(ctx, command, &format!("That {} doesn't seem to exist", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} doesn't seem to exist", kind.singular()),
+        )
+        .await;
     }
-    let name = kind.fetch_name(&context.client, id).await.unwrap_or_else(|| id.to_string());
+    let name = kind
+        .fetch_name(&context.client, id)
+        .await
+        .unwrap_or_else(|| id.to_string());
 
     let mut entity = WatchedEntity::new(id);
     entity.r#type = entity_type;
@@ -388,7 +675,12 @@ async fn run_add(
     entity.priority = entity_priority;
     entities.add_watched_entity(entity);
 
-    super::reply_ephemeral(ctx, command, &format!("Added {} [{name}](<{}>)", kind.singular(), kind.url(id))).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("Added {} [{name}](<{}>)", kind.singular(), kind.url(id)),
+    )
+    .await
 }
 
 async fn run_remove(
@@ -399,17 +691,32 @@ async fn run_remove(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` is required.", kind.id_option_name())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("`{}` is required.", kind.id_option_name()),
+        )
+        .await;
     };
     if !entities.remove_watched_entity(id) {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     }
     let name = match super::vrchat_context(ctx).await {
         Ok(context) => kind.fetch_name(&context.client, id).await,
         Err(_) => None,
     }
     .unwrap_or_else(|| id.to_string());
-    super::reply_ephemeral(ctx, command, &format!("Removed {} [{name}](<{}>)", kind.singular(), kind.url(id))).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("Removed {} [{name}](<{}>)", kind.singular(), kind.url(id)),
+    )
+    .await
 }
 
 async fn run_view(
@@ -420,10 +727,20 @@ async fn run_view(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` is required.", kind.id_option_name())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("`{}` is required.", kind.id_option_name()),
+        )
+        .await;
     };
     let Some(entity) = entities.get_watched_entity(id) else {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     };
     let message = format!(
         "### Watch info for `{}`\ntype: {}\npriority: {}\ncritical: {}\nsilent: {}\nmessage: {}\ntags: {}\nnotes: {}",
@@ -446,25 +763,47 @@ async fn run_set_critical(
     entities: &WatchedEntities,
     kind: EntityKind,
 ) -> serenity::Result<()> {
-    let (Some(id), Some(critical)) = (find_string(sub_options, kind.id_option_name()), find_bool(sub_options, "entity-critical"))
-    else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` and `entity-critical` are both required.", kind.id_option_name()))
-            .await;
+    let (Some(id), Some(critical)) = (
+        find_string(sub_options, kind.id_option_name()),
+        find_bool(sub_options, "entity-critical"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "`{}` and `entity-critical` are both required.",
+                kind.id_option_name()
+            ),
+        )
+        .await;
     };
     let Some(current) = entities.get_watched_entity(id) else {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     };
     if current.critical == critical {
         let message = if critical {
             format!("That {} is already flagged as critical", kind.singular())
         } else {
-            format!("That {} is already not flagged as critical", kind.singular())
+            format!(
+                "That {} is already not flagged as critical",
+                kind.singular()
+            )
         };
         return super::reply_ephemeral(ctx, command, &message).await;
     }
     entities.update(id, |e| e.critical = critical);
     let message = if critical { "Flagged" } else { "Unflagged" };
-    super::reply_ephemeral(ctx, command, &format!("{message} {} as critical", kind.singular())).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("{message} {} as critical", kind.singular()),
+    )
+    .await
 }
 
 async fn run_set_silent(
@@ -474,12 +813,27 @@ async fn run_set_silent(
     entities: &WatchedEntities,
     kind: EntityKind,
 ) -> serenity::Result<()> {
-    let (Some(id), Some(silent)) = (find_string(sub_options, kind.id_option_name()), find_bool(sub_options, "entity-silent")) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` and `entity-silent` are both required.", kind.id_option_name()))
-            .await;
+    let (Some(id), Some(silent)) = (
+        find_string(sub_options, kind.id_option_name()),
+        find_bool(sub_options, "entity-silent"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "`{}` and `entity-silent` are both required.",
+                kind.id_option_name()
+            ),
+        )
+        .await;
     };
     let Some(current) = entities.get_watched_entity(id) else {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     };
     if current.silent == silent {
         let message = if silent {
@@ -491,7 +845,12 @@ async fn run_set_silent(
     }
     entities.update(id, |e| e.silent = silent);
     let message = if silent { "Flagged" } else { "Unflagged" };
-    super::reply_ephemeral(ctx, command, &format!("{message} {} as silent", kind.singular())).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("{message} {} as silent", kind.singular()),
+    )
+    .await
 }
 
 async fn run_set_type(
@@ -502,20 +861,45 @@ async fn run_set_type(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` is required.", kind.id_option_name())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("`{}` is required.", kind.id_option_name()),
+        )
+        .await;
     };
-    let Some(entity_type) = find_string(sub_options, "entity-type").and_then(WatchedGroupType::parse) else {
+    let Some(entity_type) =
+        find_string(sub_options, "entity-type").and_then(WatchedGroupType::parse)
+    else {
         return super::reply_ephemeral(ctx, command, "`entity-type` is required.").await;
     };
     let Some(current) = entities.get_watched_entity(id) else {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     };
     if current.r#type == entity_type {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is already marked as {}", kind.singular(), entity_type.as_str()))
-            .await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "That {} is already marked as {}",
+                kind.singular(),
+                entity_type.as_str()
+            ),
+        )
+        .await;
     }
     entities.update(id, |e| e.r#type = entity_type);
-    super::reply_ephemeral(ctx, command, &format!("Marking {} as {}", kind.singular(), entity_type.as_str())).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("Marking {} as {}", kind.singular(), entity_type.as_str()),
+    )
+    .await
 }
 
 async fn run_set_priority(
@@ -526,16 +910,31 @@ async fn run_set_priority(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` is required.", kind.id_option_name())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("`{}` is required.", kind.id_option_name()),
+        )
+        .await;
     };
     let Some(priority) = find_int(sub_options, "entity-priority") else {
         return super::reply_ephemeral(ctx, command, "`entity-priority` is required.").await;
     };
     if entities.get_watched_entity(id).is_none() {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     }
     entities.update(id, |e| e.priority = priority as i32);
-    super::reply_ephemeral(ctx, command, &format!("Setting {} priority to {priority}", kind.singular())).await
+    super::reply_ephemeral(
+        ctx,
+        command,
+        &format!("Setting {} priority to {priority}", kind.singular()),
+    )
+    .await
 }
 
 async fn run_set_message(
@@ -546,23 +945,46 @@ async fn run_set_message(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` is required.", kind.id_option_name())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("`{}` is required.", kind.id_option_name()),
+        )
+        .await;
     };
     let message = find_string(sub_options, "entity-message");
     let Some(current) = entities.get_watched_entity(id) else {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     };
     let reply = match message {
         None => {
             if current.message.is_none() {
-                return super::reply_ephemeral(ctx, command, &format!("That {} already has no message", kind.singular())).await;
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    &format!("That {} already has no message", kind.singular()),
+                )
+                .await;
             }
-            format!("Removing {}'s message (was `{}`)", kind.singular(), current.message.as_deref().unwrap_or(""))
+            format!(
+                "Removing {}'s message (was `{}`)",
+                kind.singular(),
+                current.message.as_deref().unwrap_or("")
+            )
         }
         Some(message) => {
             if current.message.as_deref() == Some(message) {
-                return super::reply_ephemeral(ctx, command, &format!("That {}'s message is already exactly that", kind.singular()))
-                    .await;
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    &format!("That {}'s message is already exactly that", kind.singular()),
+                )
+                .await;
             }
             format!(
                 "Setting {} TTS announcement to `{message}` (was `{}`)",
@@ -583,17 +1005,32 @@ async fn run_set_tags(
     kind: EntityKind,
 ) -> serenity::Result<()> {
     let Some(id) = find_string(sub_options, kind.id_option_name()) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` is required.", kind.id_option_name())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("`{}` is required.", kind.id_option_name()),
+        )
+        .await;
     };
     let entity_tags = find_string(sub_options, "entity-tags");
     let Some(current) = entities.get_watched_entity(id) else {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     };
     let old_tags = tags_joined(&current);
     let reply = match entity_tags {
         None => {
             if current.tags.is_empty() {
-                return super::reply_ephemeral(ctx, command, &format!("That {} already has no tags", kind.singular())).await;
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    &format!("That {} already has no tags", kind.singular()),
+                )
+                .await;
             }
             format!("Removing {}'s tags (was `{old_tags}`)", kind.singular())
         }
@@ -609,9 +1046,18 @@ async fn run_set_tags(
                 a == b
             };
             if unchanged {
-                return super::reply_ephemeral(ctx, command, &format!("That {} already has those exact tags", kind.singular())).await;
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    &format!("That {} already has those exact tags", kind.singular()),
+                )
+                .await;
             }
-            format!("Setting {} tags to `{}` (was `{old_tags}`)", kind.singular(), new_tags.join(", "))
+            format!(
+                "Setting {} tags to `{}` (was `{old_tags}`)",
+                kind.singular(),
+                new_tags.join(", ")
+            )
         }
     };
     let new_tags: Vec<String> = entity_tags.map(split_tags).unwrap_or_default();
@@ -629,12 +1075,28 @@ async fn run_add_tag(
     entities: &WatchedEntities,
     kind: EntityKind,
 ) -> serenity::Result<()> {
-    let (Some(id), Some(tag)) = (find_string(sub_options, kind.id_option_name()), find_string(sub_options, "entity-tag")) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` and `entity-tag` are both required.", kind.id_option_name())).await;
+    let (Some(id), Some(tag)) = (
+        find_string(sub_options, kind.id_option_name()),
+        find_string(sub_options, "entity-tag"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "`{}` and `entity-tag` are both required.",
+                kind.id_option_name()
+            ),
+        )
+        .await;
     };
     let tag = tag.trim().to_string();
     if entities.get_watched_entity(id).is_none() {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     }
     let mut added = false;
     let mut was_empty = false;
@@ -663,14 +1125,35 @@ async fn run_remove_tag(
     entities: &WatchedEntities,
     kind: EntityKind,
 ) -> serenity::Result<()> {
-    let (Some(id), Some(tag)) = (find_string(sub_options, kind.id_option_name()), find_string(sub_options, "entity-tag")) else {
-        return super::reply_ephemeral(ctx, command, &format!("`{}` and `entity-tag` are both required.", kind.id_option_name())).await;
+    let (Some(id), Some(tag)) = (
+        find_string(sub_options, kind.id_option_name()),
+        find_string(sub_options, "entity-tag"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "`{}` and `entity-tag` are both required.",
+                kind.id_option_name()
+            ),
+        )
+        .await;
     };
     let Some(current) = entities.get_watched_entity(id) else {
-        return super::reply_ephemeral(ctx, command, &format!("That {} is not watched", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} is not watched", kind.singular()),
+        )
+        .await;
     };
     if current.tags.is_empty() {
-        return super::reply_ephemeral(ctx, command, &format!("That {} already has no tags", kind.singular())).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("That {} already has no tags", kind.singular()),
+        )
+        .await;
     }
     let mut removed = false;
     entities.update(id, |e| removed = e.tags.remove(tag));
@@ -693,8 +1176,14 @@ mod tests {
 
     #[test]
     fn entity_kind_urls_differ_by_kind() {
-        assert_eq!(EntityKind::User.url("usr_1"), "https://vrchat.com/home/user/usr_1");
-        assert_eq!(EntityKind::Avatar.url("avtr_1"), "https://vrchat.com/home/avatar/avtr_1");
+        assert_eq!(
+            EntityKind::User.url("usr_1"),
+            "https://vrchat.com/home/user/usr_1"
+        );
+        assert_eq!(
+            EntityKind::Avatar.url("avtr_1"),
+            "https://vrchat.com/home/avatar/avtr_1"
+        );
     }
 
     #[test]

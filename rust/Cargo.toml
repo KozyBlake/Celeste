@@ -43,6 +43,7 @@ hmac = "0.12"
 rand = "0.8"
 base64 = "0.22"
 regex = "1"
+csv = "1"
 
 scarlet-core = { path = "crates/scarlet-core" }
 scarlet-gif = { path = "crates/scarlet-gif" }

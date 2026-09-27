@@ -4,10 +4,7 @@
 //! critical/silent flags, a TTS announcement message, and free-form notes
 //! and tags.
 //!
-//! **Not ported in this pass**: `importLegacyCSV`/`importJson`/`exportJson`
-//! (file import/export — the Discord command layer for `/watched-group
-//! import`/`export` isn't ported either, see PORTING.md) and
-//! `translateAdvisories`/`restoreAdvisories` (the same not-ported
+//! **Not ported in this pass**: `translateAdvisories`/`restoreAdvisories` (the same not-ported
 //! LibreTranslate integration as `scarlet_core::moderation_tags`).
 //! `message_original`/`notes_original`/`translated_lang` are kept on
 //! [`WatchedGroup`] purely so a shared data directory round-trips them.
@@ -16,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::unique_strings::UniqueStrings;
@@ -65,7 +63,9 @@ impl WatchedGroupType {
     }
 
     pub fn parse(value: &str) -> Option<WatchedGroupType> {
-        WatchedGroupType::ALL.into_iter().find(|t| t.as_str() == value)
+        WatchedGroupType::ALL
+            .into_iter()
+            .find(|t| t.as_str() == value)
     }
 }
 
@@ -130,13 +130,20 @@ impl WatchedGroups {
                     .map(|g| (g.id.clone(), g))
                     .collect(),
                 Err(err) => {
-                    tracing::error!("Exception loading watched groups {}: {}", file.display(), err);
+                    tracing::error!(
+                        "Exception loading watched groups {}: {}",
+                        file.display(),
+                        err
+                    );
                     HashMap::new()
                 }
             },
             Err(_) => HashMap::new(),
         };
-        let list = WatchedGroups { file, groups: Mutex::new(groups) };
+        let list = WatchedGroups {
+            file,
+            groups: Mutex::new(groups),
+        };
         if !list.file.is_file() {
             list.save();
         }
@@ -149,10 +156,18 @@ impl WatchedGroups {
         match serde_json::to_string_pretty(&groups) {
             Ok(json) => {
                 if let Err(err) = crate::file_backups::write(&self.file, &json) {
-                    tracing::error!("Exception saving watched groups {}: {}", self.file.display(), err);
+                    tracing::error!(
+                        "Exception saving watched groups {}: {}",
+                        self.file.display(),
+                        err
+                    );
                 }
             }
-            Err(err) => tracing::error!("Exception serializing watched groups {}: {}", self.file.display(), err),
+            Err(err) => tracing::error!(
+                "Exception serializing watched groups {}: {}",
+                self.file.display(),
+                err
+            ),
         }
     }
 
@@ -162,6 +177,75 @@ impl WatchedGroups {
 
     pub fn get_all(&self) -> Vec<WatchedGroup> {
         self.groups.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Serializes the current list in the same pretty-printed JSON array
+    /// format as the Java `exportJson` implementation.
+    pub fn export_json(&self) -> Result<Vec<u8>> {
+        let groups: Vec<WatchedGroup> = self.groups.lock().unwrap().values().cloned().collect();
+        serde_json::to_vec_pretty(&groups).context("serializing watched groups")
+    }
+
+    /// Imports Java-compatible watched-group JSON. Invalid ids and `null`
+    /// array entries are ignored, just as they are when loading the file.
+    pub fn import_json(&self, input: &[u8], overwrite: bool) -> Result<usize> {
+        let groups: Vec<Option<WatchedGroup>> =
+            serde_json::from_slice(input).context("parsing watched groups JSON")?;
+        Ok(self.import_groups(groups.into_iter().flatten(), overwrite))
+    }
+
+    /// Imports the six-column legacy Excel CSV used by Scarlet Java:
+    /// id, legacy type, unused, critical, message, tags.
+    pub fn import_legacy_csv(&self, input: &[u8], overwrite: bool) -> Result<usize> {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .flexible(true)
+            .from_reader(input);
+        let mut groups = Vec::new();
+        for (index, record) in reader.records().enumerate() {
+            let record = record.with_context(|| format!("parsing CSV row {}", index + 1))?;
+            if record.len() < 6 {
+                anyhow::bail!(
+                    "CSV row {} has {} columns; expected at least 6",
+                    index + 1,
+                    record.len()
+                );
+            }
+            let mut group = WatchedGroup::new(&record[0]);
+            group.r#type = legacy_type(&record[1]);
+            group.critical = record[3].eq_ignore_ascii_case("true");
+            group.message = Some(record[4].to_string());
+            for tag in record[5]
+                .split([',', ';', '/', '|'])
+                .filter(|tag| !tag.is_empty())
+            {
+                group.tags.add(tag.to_lowercase());
+            }
+            groups.push(group);
+        }
+        Ok(self.import_groups(groups, overwrite))
+    }
+
+    fn import_groups(
+        &self,
+        groups: impl IntoIterator<Item = WatchedGroup>,
+        overwrite: bool,
+    ) -> usize {
+        let mut imported = 0;
+        {
+            let mut current = self.groups.lock().unwrap();
+            for group in groups
+                .into_iter()
+                .filter(|group| group.id.starts_with("grp_"))
+            {
+                if overwrite || !current.contains_key(&group.id) {
+                    current.insert(group.id.clone(), group);
+                    imported += 1;
+                }
+            }
+        }
+        self.save();
+        imported
     }
 
     /// Port of `addWatchedGroup`. Java's version returns `boolean` for a
@@ -186,7 +270,11 @@ impl WatchedGroups {
     /// check/compare, mutate, save), matching Java's "get the reference,
     /// mutate its fields, call `.save()`" pattern without needing a lock
     /// held across the whole call.
-    pub fn update(&self, group_id: &str, f: impl FnOnce(&mut WatchedGroup)) -> Option<WatchedGroup> {
+    pub fn update(
+        &self,
+        group_id: &str,
+        f: impl FnOnce(&mut WatchedGroup),
+    ) -> Option<WatchedGroup> {
         let updated = {
             let mut groups = self.groups.lock().unwrap();
             let group = groups.get_mut(group_id)?;
@@ -195,6 +283,16 @@ impl WatchedGroups {
         };
         self.save();
         Some(updated)
+    }
+}
+
+fn legacy_type(value: &str) -> WatchedGroupType {
+    match value {
+        "TOXIC" => WatchedGroupType::Malicious,
+        "WATCH" => WatchedGroupType::Nuisance,
+        "SPECIAL" => WatchedGroupType::Community,
+        "PARTNER" => WatchedGroupType::Affiliated,
+        _ => WatchedGroupType::Other,
     }
 }
 
@@ -246,7 +344,9 @@ mod tests {
     fn update_on_missing_group_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
-        assert!(groups.update("grp_missing", |g| g.critical = true).is_none());
+        assert!(groups
+            .update("grp_missing", |g| g.critical = true)
+            .is_none());
     }
 
     #[test]
@@ -263,5 +363,47 @@ mod tests {
         let group = reopened.get_watched_group("grp_1").unwrap();
         assert_eq!(group.priority, 5);
         assert!(group.tags.contains("toxic"));
+    }
+
+    #[test]
+    fn imports_legacy_csv_and_exports_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        let csv =
+            b"grp_one,TOXIC,unused,true,Alert,TagA;TAGB\ninvalid,WATCH,unused,false,nope,tag\n";
+        assert_eq!(groups.import_legacy_csv(csv, true).unwrap(), 1);
+        let group = groups.get_watched_group("grp_one").unwrap();
+        assert_eq!(group.r#type, WatchedGroupType::Malicious);
+        assert!(group.critical);
+        assert!(group.tags.contains("taga"));
+        let exported: Vec<WatchedGroup> =
+            serde_json::from_slice(&groups.export_json().unwrap()).unwrap();
+        assert_eq!(exported.len(), 1);
+    }
+
+    #[test]
+    fn json_import_honors_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        let mut original = WatchedGroup::new("grp_one");
+        original.priority = 1;
+        groups.add_watched_group(original);
+        assert_eq!(
+            groups
+                .import_json(
+                    br#"[{"id":"grp_one","priority":9},{"id":"grp_two"}]"#,
+                    false
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(groups.get_watched_group("grp_one").unwrap().priority, 1);
+        assert_eq!(
+            groups
+                .import_json(br#"[{"id":"grp_one","priority":9}]"#, true)
+                .unwrap(),
+            1
+        );
+        assert_eq!(groups.get_watched_group("grp_one").unwrap().priority, 9);
     }
 }

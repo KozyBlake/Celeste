@@ -21,6 +21,7 @@ sha2.workspace = true
 rand.workspace = true
 base64.workspace = true
 regex.workspace = true
+csv.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
