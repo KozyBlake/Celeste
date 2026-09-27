@@ -61,6 +61,8 @@ fn main() -> anyhow::Result<()> {
             scarlet_core::settings::registry::registry_string_encrypted(settings.encrypted.clone(), "discord.token")
                 .get_or_null();
         let scarlet_data = Arc::new(scarlet_core::data::ScarletData::open(&data_dir));
+        let staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json"));
+        let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
         let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
         runtime.spawn({
             let slot = vrchat_slot.clone();
@@ -71,7 +73,14 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         });
-        runtime.spawn(scarlet_discord::client::connect_and_serve(discord_token, vrchat_slot, scarlet_data, settings));
+        runtime.spawn(scarlet_discord::client::connect_and_serve(
+            discord_token,
+            vrchat_slot,
+            scarlet_data,
+            settings,
+            staff_list,
+            secret_staff_list,
+        ));
         runtime.block_on(std::future::pending::<()>());
     } else {
         // Blocks this (real OS main) thread until the window closes. The

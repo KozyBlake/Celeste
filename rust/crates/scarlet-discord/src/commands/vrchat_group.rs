@@ -365,7 +365,12 @@ async fn role_change(
 /// Builds a `role_id -> role_name` lookup for rendering members with role
 /// names instead of bare ids, matching Java's `roleNames`. Best-effort: on
 /// failure, returns an empty map and callers fall back to showing raw ids.
-async fn role_names(client: &scarlet_vrchat::client::VrChatClient, group_id: &str) -> std::collections::HashMap<String, String> {
+/// `pub(crate)` so `staff_list`/`secret_staff_list` can reuse it rather than
+/// duplicating the same fresh-`get_group_roles`-lookup logic.
+pub(crate) async fn role_names(
+    client: &scarlet_vrchat::client::VrChatClient,
+    group_id: &str,
+) -> std::collections::HashMap<String, String> {
     match client.get_group_roles(group_id).await {
         Ok(roles) => roles.into_iter().map(|r| (r.id, r.name)).collect(),
         Err(_) => std::collections::HashMap::new(),

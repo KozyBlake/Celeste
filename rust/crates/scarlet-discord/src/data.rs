@@ -36,3 +36,16 @@ pub struct SettingsKey;
 impl TypeMapKey for SettingsKey {
     type Value = Arc<scarlet_core::settings::Settings>;
 }
+
+/// Port of `Scarlet.staffList` (`staff_list.json`).
+pub struct StaffListKey;
+impl TypeMapKey for StaffListKey {
+    type Value = Arc<scarlet_core::staff_list::StaffList>;
+}
+
+/// Port of `Scarlet.secretStaffList` (`secret_staff_list.json`) -- the same
+/// shape as [`StaffListKey`], a separate independent list.
+pub struct SecretStaffListKey;
+impl TypeMapKey for SecretStaffListKey {
+    type Value = Arc<scarlet_core::staff_list::StaffList>;
+}

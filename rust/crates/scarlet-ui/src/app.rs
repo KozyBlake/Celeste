@@ -136,6 +136,8 @@ pub struct ScarletApp {
     /// unattended background login using already-stored credentials.
     vrchat_slot: scarlet_discord::data::SharedVrChatClient,
     scarlet_data: Arc<scarlet_core::data::ScarletData>,
+    staff_list: Arc<scarlet_core::staff_list::StaffList>,
+    secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -156,6 +158,8 @@ pub struct ScarletApp {
 impl ScarletApp {
     pub fn new(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> Self {
         let scarlet_data = Arc::new(scarlet_core::data::ScarletData::open(&data_dir));
+        let staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json"));
+        let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
         let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
@@ -183,6 +187,8 @@ impl ScarletApp {
                     vrchat_slot.clone(),
                     scarlet_data.clone(),
                     settings.clone(),
+                    staff_list.clone(),
+                    secret_staff_list.clone(),
                 ));
                 staff_mode
             }
@@ -200,6 +206,8 @@ impl ScarletApp {
             wizard,
             vrchat_slot,
             scarlet_data,
+            staff_list,
+            secret_staff_list,
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -528,6 +536,8 @@ impl eframe::App for ScarletApp {
                         self.vrchat_slot.clone(),
                         self.scarlet_data.clone(),
                         settings,
+                        self.staff_list.clone(),
+                        self.secret_staff_list.clone(),
                     ));
                 }
                 self.wizard = None;
