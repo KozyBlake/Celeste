@@ -12,3 +12,4 @@ pub mod maths;
 pub mod meta;
 pub mod permission;
 pub mod secure_store;
+pub mod settings;
