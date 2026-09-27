@@ -139,6 +139,7 @@ pub struct ScarletApp {
     staff_list: Arc<scarlet_core::staff_list::StaffList>,
     secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
     moderation_tags: Arc<scarlet_core::moderation_tags::ModerationTags>,
+    watched_groups: Arc<scarlet_core::watched_groups::WatchedGroups>,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -162,6 +163,7 @@ impl ScarletApp {
         let staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json"));
         let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
         let moderation_tags = Arc::new(scarlet_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json"));
+        let watched_groups = Arc::new(scarlet_core::watched_groups::WatchedGroups::open(&data_dir, "watched_groups.json"));
         let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
@@ -186,12 +188,15 @@ impl ScarletApp {
 
                 runtime_handle.spawn(scarlet_discord::client::connect_and_serve(
                     token,
-                    vrchat_slot.clone(),
-                    scarlet_data.clone(),
-                    settings.clone(),
-                    staff_list.clone(),
-                    secret_staff_list.clone(),
-                    moderation_tags.clone(),
+                    scarlet_discord::data::SharedState {
+                        vrchat_client: vrchat_slot.clone(),
+                        scarlet_data: scarlet_data.clone(),
+                        settings: settings.clone(),
+                        staff_list: staff_list.clone(),
+                        secret_staff_list: secret_staff_list.clone(),
+                        moderation_tags: moderation_tags.clone(),
+                        watched_groups: watched_groups.clone(),
+                    },
                 ));
                 staff_mode
             }
@@ -212,6 +217,7 @@ impl ScarletApp {
             staff_list,
             secret_staff_list,
             moderation_tags,
+            watched_groups,
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -537,12 +543,15 @@ impl eframe::App for ScarletApp {
                 if let Some(settings) = self.settings.clone() {
                     self.runtime_handle.spawn(scarlet_discord::client::connect_and_serve(
                         discord_token,
-                        self.vrchat_slot.clone(),
-                        self.scarlet_data.clone(),
-                        settings,
-                        self.staff_list.clone(),
-                        self.secret_staff_list.clone(),
-                        self.moderation_tags.clone(),
+                        scarlet_discord::data::SharedState {
+                            vrchat_client: self.vrchat_slot.clone(),
+                            scarlet_data: self.scarlet_data.clone(),
+                            settings,
+                            staff_list: self.staff_list.clone(),
+                            secret_staff_list: self.secret_staff_list.clone(),
+                            moderation_tags: self.moderation_tags.clone(),
+                            watched_groups: self.watched_groups.clone(),
+                        },
                     ));
                 }
                 self.wizard = None;

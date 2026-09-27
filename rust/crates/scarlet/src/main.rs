@@ -64,6 +64,7 @@ fn main() -> anyhow::Result<()> {
         let staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json"));
         let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
         let moderation_tags = Arc::new(scarlet_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json"));
+        let watched_groups = Arc::new(scarlet_core::watched_groups::WatchedGroups::open(&data_dir, "watched_groups.json"));
         let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
         runtime.spawn({
             let slot = vrchat_slot.clone();
@@ -76,12 +77,15 @@ fn main() -> anyhow::Result<()> {
         });
         runtime.spawn(scarlet_discord::client::connect_and_serve(
             discord_token,
-            vrchat_slot,
-            scarlet_data,
-            settings,
-            staff_list,
-            secret_staff_list,
-            moderation_tags,
+            scarlet_discord::data::SharedState {
+                vrchat_client: vrchat_slot,
+                scarlet_data,
+                settings,
+                staff_list,
+                secret_staff_list,
+                moderation_tags,
+                watched_groups,
+            },
         ));
         runtime.block_on(std::future::pending::<()>());
     } else {

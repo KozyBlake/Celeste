@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use serenity::prelude::TypeMapKey;
+use serenity::prelude::{TypeMap, TypeMapKey};
 use tokio::sync::RwLock;
 
 /// The primary VRChat account's client, once (if) logged in. A `RwLock`
@@ -54,4 +54,37 @@ impl TypeMapKey for SecretStaffListKey {
 pub struct ModerationTagsKey;
 impl TypeMapKey for ModerationTagsKey {
     type Value = Arc<scarlet_core::moderation_tags::ModerationTags>;
+}
+
+/// Port of `Scarlet.watchedGroups` (`watched_groups.json`).
+pub struct WatchedGroupsKey;
+impl TypeMapKey for WatchedGroupsKey {
+    type Value = Arc<scarlet_core::watched_groups::WatchedGroups>;
+}
+
+/// Every piece of shared app state a command handler might need, bundled so
+/// `connect_and_serve` (and its callers in `scarlet`/`scarlet-ui`) take one
+/// value instead of an ever-growing positional-argument list as more of
+/// `Scarlet`'s fields get ported. Construct with all fields, then
+/// [`SharedState::insert_into`] once before `Client::start`.
+pub struct SharedState {
+    pub vrchat_client: SharedVrChatClient,
+    pub scarlet_data: Arc<scarlet_core::data::ScarletData>,
+    pub settings: Arc<scarlet_core::settings::Settings>,
+    pub staff_list: Arc<scarlet_core::staff_list::StaffList>,
+    pub secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
+    pub moderation_tags: Arc<scarlet_core::moderation_tags::ModerationTags>,
+    pub watched_groups: Arc<scarlet_core::watched_groups::WatchedGroups>,
+}
+
+impl SharedState {
+    pub fn insert_into(self, data: &mut TypeMap) {
+        data.insert::<VrChatClientKey>(self.vrchat_client);
+        data.insert::<ScarletDataKey>(self.scarlet_data);
+        data.insert::<SettingsKey>(self.settings);
+        data.insert::<StaffListKey>(self.staff_list);
+        data.insert::<SecretStaffListKey>(self.secret_staff_list);
+        data.insert::<ModerationTagsKey>(self.moderation_tags);
+        data.insert::<WatchedGroupsKey>(self.watched_groups);
+    }
 }

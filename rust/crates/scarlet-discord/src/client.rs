@@ -5,14 +5,10 @@
 //! `scarlet-dave`'s docs and PORTING.md; this only stands up the gateway
 //! connection and slash-command plumbing.
 
-use std::sync::Arc;
-
 use serenity::client::Client;
 use serenity::model::gateway::GatewayIntents;
 
-use crate::data::{
-    ModerationTagsKey, ScarletDataKey, SecretStaffListKey, SettingsKey, SharedVrChatClient, StaffListKey, VrChatClientKey,
-};
+use crate::data::SharedState;
 use crate::handler::Handler;
 use crate::token::normalize_discord_bot_token;
 
@@ -48,20 +44,12 @@ pub async fn build_client(raw_token: Option<&str>) -> Option<serenity::Result<Cl
 /// finishes entering it, not at process startup) can share one entry point
 /// instead of duplicating the connect-or-log-staff-mode logic.
 ///
-/// `vrchat_client` and `scarlet_data` are inserted into the serenity
-/// client's `TypeMap` before it starts, so every command handler can reach
-/// them via `ctx.data.read()` (see `crate::data`'s module docs) — this is
-/// what lets a slash command actually call the VRChat API or read/write
-/// `ScarletData` instead of only ever answering from Discord-local state.
-pub async fn connect_and_serve(
-    token: Option<String>,
-    vrchat_client: SharedVrChatClient,
-    scarlet_data: Arc<scarlet_core::data::ScarletData>,
-    settings: Arc<scarlet_core::settings::Settings>,
-    staff_list: Arc<scarlet_core::staff_list::StaffList>,
-    secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
-    moderation_tags: Arc<scarlet_core::moderation_tags::ModerationTags>,
-) {
+/// `state` is inserted into the serenity client's `TypeMap` before it
+/// starts, so every command handler can reach it via `ctx.data.read()`
+/// (see `crate::data`'s module docs) — this is what lets a slash command
+/// actually call the VRChat API or read/write `ScarletData` instead of only
+/// ever answering from Discord-local state.
+pub async fn connect_and_serve(token: Option<String>, state: SharedState) {
     match token {
         Some(token) if !token.trim().is_empty() => {
             tracing::info!(
@@ -72,12 +60,7 @@ pub async fn connect_and_serve(
                 Some(Ok(mut client)) => {
                     {
                         let mut data = client.data.write().await;
-                        data.insert::<VrChatClientKey>(vrchat_client);
-                        data.insert::<ScarletDataKey>(scarlet_data);
-                        data.insert::<SettingsKey>(settings);
-                        data.insert::<StaffListKey>(staff_list);
-                        data.insert::<SecretStaffListKey>(secret_staff_list);
-                        data.insert::<ModerationTagsKey>(moderation_tags);
+                        state.insert_into(&mut data);
                     }
                     if let Err(err) = client.start().await {
                         tracing::error!("Discord client error: {}", err);

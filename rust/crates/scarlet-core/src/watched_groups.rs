@@ -1,0 +1,267 @@
+//! Port of `net.sybyline.scarlet.ScarletWatchedGroups`: a JSON-file-backed
+//! map of VRChat group id -> watch metadata (`watched_groups.json`), used to
+//! flag groups as malicious/nuisance/community/affiliated with a priority,
+//! critical/silent flags, a TTS announcement message, and free-form notes
+//! and tags.
+//!
+//! **Not ported in this pass**: `importLegacyCSV`/`importJson`/`exportJson`
+//! (file import/export — the Discord command layer for `/watched-group
+//! import`/`export` isn't ported either, see PORTING.md) and
+//! `translateAdvisories`/`restoreAdvisories` (the same not-ported
+//! LibreTranslate integration as `scarlet_core::moderation_tags`).
+//! `message_original`/`notes_original`/`translated_lang` are kept on
+//! [`WatchedGroup`] purely so a shared data directory round-trips them.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+
+use crate::unique_strings::UniqueStrings;
+
+/// Port of `ScarletWatchedGroups.WatchedGroup.Type`. String values use the
+/// exact Java `Enum.name()` spelling via explicit `serde(rename)`, matching
+/// the convention in `settings::enums`, so a `watched_groups.json` shared
+/// with a Java install round-trips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WatchedGroupType {
+    #[default]
+    #[serde(rename = "UNKNOWN")]
+    Unknown,
+    #[serde(rename = "MALICIOUS")]
+    Malicious,
+    #[serde(rename = "NUISANCE")]
+    Nuisance,
+    #[serde(rename = "COMMUNITY")]
+    Community,
+    #[serde(rename = "AFFILIATED")]
+    Affiliated,
+    #[serde(rename = "OTHER")]
+    Other,
+}
+
+impl WatchedGroupType {
+    pub const ALL: [WatchedGroupType; 6] = [
+        WatchedGroupType::Unknown,
+        WatchedGroupType::Malicious,
+        WatchedGroupType::Nuisance,
+        WatchedGroupType::Community,
+        WatchedGroupType::Affiliated,
+        WatchedGroupType::Other,
+    ];
+
+    /// The exact Java `Enum.name()` string (`DEnumString::value()`/`display()`
+    /// both just return `this.name()`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WatchedGroupType::Unknown => "UNKNOWN",
+            WatchedGroupType::Malicious => "MALICIOUS",
+            WatchedGroupType::Nuisance => "NUISANCE",
+            WatchedGroupType::Community => "COMMUNITY",
+            WatchedGroupType::Affiliated => "AFFILIATED",
+            WatchedGroupType::Other => "OTHER",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<WatchedGroupType> {
+        WatchedGroupType::ALL.into_iter().find(|t| t.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchedGroup {
+    pub id: String,
+    #[serde(default)]
+    pub r#type: WatchedGroupType,
+    #[serde(default)]
+    pub tags: UniqueStrings,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub critical: bool,
+    #[serde(default)]
+    pub silent: bool,
+    pub message: Option<String>,
+    pub notes: Option<String>,
+    #[serde(rename = "messageOriginal", default)]
+    pub message_original: Option<String>,
+    #[serde(rename = "notesOriginal", default)]
+    pub notes_original: Option<String>,
+    #[serde(rename = "translatedLang", default)]
+    pub translated_lang: Option<String>,
+}
+
+impl WatchedGroup {
+    pub fn new(id: impl Into<String>) -> Self {
+        WatchedGroup {
+            id: id.into(),
+            r#type: WatchedGroupType::Unknown,
+            tags: UniqueStrings::new(),
+            priority: 0,
+            critical: false,
+            silent: false,
+            message: None,
+            notes: None,
+            message_original: None,
+            notes_original: None,
+            translated_lang: None,
+        }
+    }
+}
+
+pub struct WatchedGroups {
+    file: PathBuf,
+    groups: Mutex<HashMap<String, WatchedGroup>>,
+}
+
+impl WatchedGroups {
+    /// Port of the constructor + `load()`: only entries whose `id` starts
+    /// with `grp_` are kept, matching Java's filter (defends against a
+    /// hand-edited or legacy-imported file carrying a stray/malformed id).
+    pub fn open(dir: &Path, file_name: &str) -> Self {
+        let file = dir.join(file_name);
+        let groups: HashMap<String, WatchedGroup> = match std::fs::read_to_string(&file) {
+            Ok(contents) => match serde_json::from_str::<Vec<Option<WatchedGroup>>>(&contents) {
+                Ok(loaded) => loaded
+                    .into_iter()
+                    .flatten()
+                    .filter(|g| g.id.starts_with("grp_"))
+                    .map(|g| (g.id.clone(), g))
+                    .collect(),
+                Err(err) => {
+                    tracing::error!("Exception loading watched groups {}: {}", file.display(), err);
+                    HashMap::new()
+                }
+            },
+            Err(_) => HashMap::new(),
+        };
+        let list = WatchedGroups { file, groups: Mutex::new(groups) };
+        if !list.file.is_file() {
+            list.save();
+        }
+        list
+    }
+
+    fn save(&self) {
+        let guard = self.groups.lock().unwrap();
+        let groups: Vec<&WatchedGroup> = guard.values().collect();
+        match serde_json::to_string_pretty(&groups) {
+            Ok(json) => {
+                if let Err(err) = crate::file_backups::write(&self.file, &json) {
+                    tracing::error!("Exception saving watched groups {}: {}", self.file.display(), err);
+                }
+            }
+            Err(err) => tracing::error!("Exception serializing watched groups {}: {}", self.file.display(), err),
+        }
+    }
+
+    pub fn get_watched_group(&self, group_id: &str) -> Option<WatchedGroup> {
+        self.groups.lock().unwrap().get(group_id).cloned()
+    }
+
+    pub fn get_all(&self) -> Vec<WatchedGroup> {
+        self.groups.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Port of `addWatchedGroup`. Java's version returns `boolean` for a
+    /// `null` `watchedGroup` guard that Rust's type system already makes
+    /// impossible (a caller can't pass a "null" `WatchedGroup`), so this
+    /// just adds it -- always what Java's `true` branch does.
+    pub fn add_watched_group(&self, group: WatchedGroup) {
+        self.groups.lock().unwrap().insert(group.id.clone(), group);
+        self.save();
+    }
+
+    pub fn remove_watched_group(&self, group_id: &str) -> bool {
+        let removed = self.groups.lock().unwrap().remove(group_id).is_some();
+        if removed {
+            self.save();
+        }
+        removed
+    }
+
+    /// Mutates the watched group in place via `f`, then saves -- the shape
+    /// every `set-*`/`add-tag`/`remove-tag` subcommand needs (look up,
+    /// check/compare, mutate, save), matching Java's "get the reference,
+    /// mutate its fields, call `.save()`" pattern without needing a lock
+    /// held across the whole call.
+    pub fn update(&self, group_id: &str, f: impl FnOnce(&mut WatchedGroup)) -> Option<WatchedGroup> {
+        let updated = {
+            let mut groups = self.groups.lock().unwrap();
+            let group = groups.get_mut(group_id)?;
+            f(group);
+            group.clone()
+        };
+        self.save();
+        Some(updated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watched_group_type_round_trips_java_names() {
+        for t in WatchedGroupType::ALL {
+            assert_eq!(WatchedGroupType::parse(t.as_str()), Some(t));
+        }
+        assert_eq!(WatchedGroupType::Malicious.as_str(), "MALICIOUS");
+    }
+
+    #[test]
+    fn add_get_remove_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        assert!(groups.get_watched_group("grp_1").is_none());
+        groups.add_watched_group(WatchedGroup::new("grp_1"));
+        assert!(groups.get_watched_group("grp_1").is_some());
+        assert!(groups.remove_watched_group("grp_1"));
+        assert!(groups.get_watched_group("grp_1").is_none());
+        assert!(!groups.remove_watched_group("grp_1"));
+    }
+
+    #[test]
+    fn open_filters_out_non_group_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("watched_groups.json");
+        std::fs::write(&file, r#"[{"id":"grp_1"},{"id":"usr_bad"}]"#).unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        assert_eq!(groups.get_all().len(), 1);
+        assert!(groups.get_watched_group("grp_1").is_some());
+    }
+
+    #[test]
+    fn update_mutates_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        groups.add_watched_group(WatchedGroup::new("grp_1"));
+        let updated = groups.update("grp_1", |g| g.critical = true).unwrap();
+        assert!(updated.critical);
+        assert!(groups.get_watched_group("grp_1").unwrap().critical);
+    }
+
+    #[test]
+    fn update_on_missing_group_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        assert!(groups.update("grp_missing", |g| g.critical = true).is_none());
+    }
+
+    #[test]
+    fn persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+            let mut group = WatchedGroup::new("grp_1");
+            group.priority = 5;
+            group.tags.add("toxic");
+            groups.add_watched_group(group);
+        }
+        let reopened = WatchedGroups::open(dir.path(), "watched_groups.json");
+        let group = reopened.get_watched_group("grp_1").unwrap();
+        assert_eq!(group.priority, 5);
+        assert!(group.tags.contains("toxic"));
+    }
+}
