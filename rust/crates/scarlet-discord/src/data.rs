@@ -6,6 +6,7 @@
 //! this is the idiomatic serenity substitute — insert once before
 //! `Client::start`, read from any command handler via `ctx.data.read()`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serenity::prelude::{TypeMap, TypeMapKey};
@@ -74,6 +75,15 @@ impl TypeMapKey for WatchedAvatarsKey {
     type Value = Arc<scarlet_core::watched_entities::WatchedEntities>;
 }
 
+/// In-progress Discord instance pickers, keyed by the opaque token embedded
+/// in component custom ids. Equivalent to `ScarletDiscordJDA.instanceCreation`.
+pub type InstanceCreations = Arc<RwLock<HashMap<String, crate::interactions::InstanceCreation>>>;
+
+pub struct InstanceCreationsKey;
+impl TypeMapKey for InstanceCreationsKey {
+    type Value = InstanceCreations;
+}
+
 /// Every piece of shared app state a command handler might need, bundled so
 /// `connect_and_serve` (and its callers in `scarlet`/`scarlet-ui`) take one
 /// value instead of an ever-growing positional-argument list as more of
@@ -102,5 +112,6 @@ impl SharedState {
         data.insert::<WatchedGroupsKey>(self.watched_groups);
         data.insert::<WatchedUsersKey>(self.watched_users);
         data.insert::<WatchedAvatarsKey>(self.watched_avatars);
+        data.insert::<InstanceCreationsKey>(Arc::new(RwLock::new(HashMap::new())));
     }
 }

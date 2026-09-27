@@ -21,8 +21,11 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        if let Interaction::Command(command) = interaction {
-            commands::dispatch(&ctx, &command).await;
+        match interaction {
+            Interaction::Command(command) => commands::dispatch(&ctx, &command).await,
+            Interaction::Component(component) => crate::interactions::dispatch_component(&ctx, &component).await,
+            Interaction::Modal(modal) => crate::interactions::dispatch_modal(&ctx, &modal).await,
+            _ => {},
         }
     }
 }

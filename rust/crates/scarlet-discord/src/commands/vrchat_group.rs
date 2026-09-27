@@ -4,16 +4,10 @@
 //! `remove-role`, `search-members`, `list-bans`, `list-invites`,
 //! `list-join-requests`, `view-announcement`, `create-announcement`,
 //! `delete-announcement`, `list-posts`, `create-post`, `delete-post`,
-//! `transfer-check`, `transfer-start`, `transfer-cancel`, `close-instance`.
-//! **Not ported**: `open-instance` -- Java's version builds an interactive
-//! flow (select menus for access type/roles/region/content flags, then
-//! Create/Cancel/"Additional options..." buttons, then a followup modal)
-//! backed by `ScarletDiscordJDA.instanceCreation` state and component/modal
-//! interaction handlers. This crate has no component- or modal-interaction
-//! plumbing at all yet (only slash-command interactions are dispatched) --
-//! that's a separate, larger subsystem to build first, not something to
-//! fake as a single-shot command without losing the real picker UX. Tracked
-//! in PORTING.md rather than silently skipped.
+//! `transfer-check`, `transfer-start`, `transfer-cancel`, `open-instance`,
+//! `close-instance`. `open-instance` includes Java's full stateful picker:
+//! access, roles, region, content flags, avatar gate, create/cancel buttons,
+//! and the additional-options modal.
 //!
 //! **Simplified**: `vrchat-user-id`/`vrchat-role-id`/`post-role-id` are
 //! plain string options rather than Java's autocomplete-resolved
@@ -42,9 +36,10 @@
 //! confirmation before the permission gate) and only then run the real
 //! `group_all`-permission-gated transfer.
 
-use serenity::builder::{CreateCommand, CreateCommandOption, CreateInteractionResponseFollowup};
+use serenity::builder::{CreateActionRow, CreateButton, CreateCommand, CreateCommandOption, CreateInteractionResponseFollowup, CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption};
 use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
+use serenity::model::prelude::ButtonStyle;
 
 use scarlet_vrchat::client::{
     PERMISSION_ALL, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_INSTANCE_MANAGE,
@@ -215,6 +210,14 @@ pub fn register() -> CreateCommand {
     );
 
     command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "open-instance", "Opens a group instance")
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::String, "vrchat-world-id", "The VRChat world id (wrld_...)")
+                    .required(true),
+            ),
+    );
+
+    command = command.add_option(
         CreateCommandOption::new(CommandOptionType::SubCommand, "close-instance", "Closes an instance")
             .add_sub_option(
                 CreateCommandOption::new(CommandOptionType::String, "vrchat-location", "The instance to close (worldId:instanceId)")
@@ -267,6 +270,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         "transfer-check" => transfer_check(ctx, command, sub_options).await,
         "transfer-start" => transfer_start(ctx, command, sub_options).await,
         "transfer-cancel" => transfer_cancel(ctx, command, sub_options).await,
+        "open-instance" => open_instance(ctx, command, sub_options).await,
         "close-instance" => close_instance(ctx, command, sub_options).await,
         other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
     }
@@ -763,6 +767,89 @@ fn split_location(location: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((world, instance))
+}
+
+async fn open_instance(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let Some(world_id) = find_string(sub_options, "vrchat-world-id") else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-world-id` is required.").await;
+    };
+    let scarlet_data = { ctx.data.read().await.get::<crate::data::ScarletDataKey>().cloned() };
+    let Some(actor_id) = scarlet_data.and_then(|data| data.global_get_snowflake_id(&command.user.id.to_string())) else {
+        return super::reply_ephemeral(ctx, command, "You must link your Discord and VRChat accounts before creating an instance.").await;
+    };
+    let context = match super::vrchat_context(ctx).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+    if let Err(err) = context.client.get_user(&actor_id).await {
+        return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {actor_id}: {err}")).await;
+    }
+    let (world, roles) = tokio::join!(context.client.get_world(world_id), context.client.get_group_roles(&context.group_id));
+    let world = match world {
+        Ok(world) => world,
+        Err(err) => return super::reply_ephemeral(ctx, command, &format!("No VRChat world found with id {world_id}: {err}")).await,
+    };
+    let roles = match roles {
+        Ok(roles) => roles,
+        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Could not load the group's roles: {err}")).await,
+    };
+
+    let token = uuid::Uuid::new_v4().to_string();
+    let creations = { ctx.data.read().await.get::<crate::data::InstanceCreationsKey>().cloned() };
+    let Some(creations) = creations else {
+        return super::reply_ephemeral(ctx, command, "Instance creation state is unavailable.").await;
+    };
+    creations.write().await.insert(token.clone(), crate::interactions::InstanceCreation::new(
+        world.id.clone(), context.group_id, command.user.id.to_string(),
+    ));
+
+    let access = CreateSelectMenu::new(format!("new-instance-access-type:{token}"), CreateSelectMenuKind::String { options: vec![
+        CreateSelectMenuOption::new("Group Public", "public").default_selection(true),
+        CreateSelectMenuOption::new("Group Plus", "plus"),
+        CreateSelectMenuOption::new("Group Members", "members"),
+    ]});
+    let role_options: Vec<_> = roles.into_iter().take(25).map(|role| CreateSelectMenuOption::new(role.name, role.id)).collect();
+    let role_count = role_options.len() as u8;
+    let roles = (!role_options.is_empty()).then(|| {
+        CreateSelectMenu::new(format!("new-instance-roles:{token}"), CreateSelectMenuKind::String { options: role_options })
+            .placeholder("Select roles (Group Members)").min_values(1).max_values(role_count)
+    });
+    let region = CreateSelectMenu::new(format!("new-instance-region:{token}"), CreateSelectMenuKind::String { options: vec![
+        CreateSelectMenuOption::new("Region: US", "us").default_selection(true),
+        CreateSelectMenuOption::new("Region: US East", "use"),
+        CreateSelectMenuOption::new("Region: Europe", "eu"),
+        CreateSelectMenuOption::new("Region: Japan", "jp"),
+    ]});
+    let default_flag = |label: &str, value: &str| CreateSelectMenuOption::new(label, value).default_selection(true);
+    let flags = CreateSelectMenu::new(format!("new-instance-flags:{token}"), CreateSelectMenuKind::String { options: vec![
+        default_flag("Join queue (users wait to connect when full)", "queueEnabled"),
+        CreateSelectMenuOption::new("Hard close (kick connected users on close)", "hardClose"),
+        CreateSelectMenuOption::new("Age gate (Age Verified 18+ users only)", "ageGate"),
+        CreateSelectMenuOption::new("Invite Only", "inviteOnly"),
+        CreateSelectMenuOption::new("Invite Requests", "canRequestInvite"),
+        default_flag("Content: drones", "contentSettings.drones"),
+        default_flag("Content: emoji", "contentSettings.emoji"),
+        default_flag("Content: items", "contentSettings.props"),
+        default_flag("Content: pedestals", "contentSettings.pedestals"),
+        default_flag("Content: prints", "contentSettings.prints"),
+        default_flag("Content: stickers", "contentSettings.stickers"),
+        CreateSelectMenuOption::new("Avatar gate: Poor or better", "minimumAvatarPerformance.Poor"),
+        CreateSelectMenuOption::new("Avatar gate: Medium or better", "minimumAvatarPerformance.Medium"),
+        CreateSelectMenuOption::new("Avatar gate: Good or better", "minimumAvatarPerformance.Good"),
+    ]}).placeholder("Options & Content Settings").min_values(0).max_values(14);
+    let buttons = vec![
+        CreateButton::new(format!("new-instance-create:{token}")).label("Create").style(ButtonStyle::Success),
+        CreateButton::new(format!("new-instance-cancel:{token}")).label("Cancel").style(ButtonStyle::Danger),
+        CreateButton::new(format!("new-instance-modal:{token}")).label("Additional options…").style(ButtonStyle::Secondary),
+    ];
+    let mut components = vec![CreateActionRow::SelectMenu(access)];
+    if let Some(roles) = roles { components.push(CreateActionRow::SelectMenu(roles)); }
+    components.extend([
+        CreateActionRow::SelectMenu(region), CreateActionRow::SelectMenu(flags), CreateActionRow::Buttons(buttons),
+    ]);
+    command.create_followup(&ctx.http, CreateInteractionResponseFollowup::new()
+        .content(format!("Create a new [{}](https://vrchat.com/home/world/{}) instance:\nLeave avatar gate unchecked for no limit; select one Poor, Medium, or Good preset to set the minimum avatar performance.", world.name, world.id))
+        .components(components).ephemeral(true)).await.map(|_| ())
 }
 
 async fn close_instance(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {

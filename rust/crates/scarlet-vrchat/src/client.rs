@@ -56,6 +56,11 @@ pub const PERMISSION_GROUP_MEMBERS_VIEWALL: &str = "group-members-viewall";
 pub const PERMISSION_GROUP_INVITES_MANAGE: &str = "group-invites-manage";
 pub const PERMISSION_GROUP_ANNOUNCEMENT_MANAGE: &str = "group-announcement-manage";
 pub const PERMISSION_GROUP_INSTANCE_MANAGE: &str = "group-instance-manage";
+pub const PERMISSION_GROUP_INSTANCE_PUBLIC_CREATE: &str = "group-instance-public-create";
+pub const PERMISSION_GROUP_INSTANCE_PLUS_CREATE: &str = "group-instance-plus-create";
+pub const PERMISSION_GROUP_INSTANCE_OPEN_CREATE: &str = "group-instance-open-create";
+pub const PERMISSION_GROUP_INSTANCE_RESTRICTED_CREATE: &str = "group-instance-restricted-create";
+pub const PERMISSION_GROUP_INSTANCE_AGE_GATED_CREATE: &str = "group-instance-age-gated-create";
 
 #[derive(Debug, thiserror::Error)]
 pub enum VrChatError {
@@ -584,6 +589,13 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// Port of Scarlet's `createInstanceEx`, including fields omitted by the
+    /// older generated Java model such as `minimumAvatarPerformance`.
+    pub async fn create_instance(&self, request: &serde_json::Value) -> Result<crate::models::Instance, VrChatError> {
+        let response = self.http.post(self.url("/instances")).json(request).send().await?;
+        Self::parse_response(response).await
+    }
+
     /// Port of `closeInstance(String worldId, String instanceId, Boolean
     /// hardClose, OffsetDateTime closedAt)`: `DELETE
     /// /instances/{worldId}:{instanceId}` with optional `hardClose`/`closedAt`
@@ -717,7 +729,7 @@ async fn attempt_login_clearing_stored_credentials_on_rejection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -1421,5 +1433,32 @@ mod tests {
         let results = client.search_groups("moderators", 25, 0).await.unwrap();
         assert_eq!(results[0].name, "Moderators Group");
         assert_eq!(results[0].member_count, 5);
+    }
+
+    #[tokio::test]
+    async fn create_instance_posts_the_complete_picker_payload() {
+        let server = MockServer::start().await;
+        let request = serde_json::json!({
+            "worldId": "wrld_1",
+            "ownerId": "grp_1",
+            "type": "group",
+            "region": "us",
+            "groupAccessType": "public",
+            "minimumAvatarPerformance": "Good"
+        });
+        Mock::given(method("POST"))
+            .and(path("/instances"))
+            .and(body_json(&request))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "wrld_1:12345~group(grp_1)",
+                "worldId": "wrld_1",
+                "instanceId": "12345~group(grp_1)"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let instance = client.create_instance(&request).await.unwrap();
+        assert_eq!(instance.instance_id.as_deref(), Some("12345~group(grp_1)"));
     }
 }
