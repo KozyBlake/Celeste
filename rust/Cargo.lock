@@ -3796,7 +3796,9 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "regex",
+ "reqwest",
  "scarlet-core",
+ "scarlet-gif",
  "scarlet-vrchat",
  "serde",
  "serde_json",
@@ -3813,6 +3815,7 @@ name = "scarlet-gif"
 version = "0.4.20"
 dependencies = [
  "base64 0.22.1",
+ "image",
  "thiserror 1.0.69",
 ]
 

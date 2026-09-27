@@ -26,6 +26,7 @@ pub mod server_config;
 pub mod settings;
 pub mod ticket_config;
 pub mod aux_webhooks;
+pub mod animated_emoji;
 pub mod moderation_tags;
 pub mod moderation_history;
 pub mod moderation_reports;
@@ -166,7 +167,7 @@ pub(crate) async fn watched_remove_menu(
 /// swap to per-guild registration during development if faster iteration
 /// is needed (not done here to keep this skeleton simple).
 pub async fn register_global_commands(ctx: &Context) {
-    let commands = vec![
+    let mut commands = vec![
         version::register(),
         config_info::register(),
         config_set::register(),
@@ -213,6 +214,10 @@ pub async fn register_global_commands(ctx: &Context) {
         ticket_config::register_auto_response(),
         ticket_config::register_message(),
     ];
+    if scarlet_core::features::animated_emoji_enabled() {
+        commands.push(animated_emoji::register());
+        commands.push(animated_emoji::register_message());
+    }
     if let Err(err) =
         serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
     {
@@ -268,6 +273,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         settings::NAME => settings::run(ctx, command).await,
         ticket_config::AUTO_RESPONSE_NAME => ticket_config::run_auto_response(ctx, command).await,
         ticket_config::MESSAGE_NAME => ticket_config::run_message(ctx, command).await,
+        animated_emoji::NAME => animated_emoji::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
             Ok(())

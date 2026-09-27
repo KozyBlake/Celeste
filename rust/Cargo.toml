@@ -45,6 +45,7 @@ rand = "0.8"
 base64 = "0.22"
 regex = "1"
 csv = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 scarlet-core = { path = "crates/scarlet-core" }
 scarlet-gif = { path = "crates/scarlet-gif" }
