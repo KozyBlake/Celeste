@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/scarlet",
+    "crates/scarlet-core",
+    "crates/scarlet-gif",
+    "crates/scarlet-discord",
+    "crates/scarlet-vrchat",
+    "crates/scarlet-dave",
+    "crates/scarlet-ui",
+]
+
+[workspace.package]
+version = "0.4.20"
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/KozyBlake/ScarletRust"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "cookies", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+thiserror = "1"
+anyhow = "1"
+serenity = { version = "0.12", default-features = false, features = [
+    "client",
+    "gateway",
+    "rustls_backend",
+    "model",
+    "cache",
+] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+scarlet-core = { path = "crates/scarlet-core" }
+scarlet-gif = { path = "crates/scarlet-gif" }
+scarlet-discord = { path = "crates/scarlet-discord" }
+scarlet-vrchat = { path = "crates/scarlet-vrchat" }
+scarlet-dave = { path = "crates/scarlet-dave" }
+scarlet-ui = { path = "crates/scarlet-ui" }

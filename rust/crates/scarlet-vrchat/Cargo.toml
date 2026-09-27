@@ -1,0 +1,16 @@
+[package]
+name = "scarlet-vrchat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust port of net.sybyline.scarlet's VRChat API client (replaces vrchatapi-java)"
+
+[dependencies]
+scarlet-core.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "scarlet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust port of net.sybyline.scarlet.Main / Scarlet (entry point)"
+
+[[bin]]
+name = "scarlet"
+path = "src/main.rs"
+
+[dependencies]
+scarlet-core.workspace = true
+scarlet-gif.workspace = true
+scarlet-discord.workspace = true
+scarlet-vrchat.workspace = true
+scarlet-dave.workspace = true
+scarlet-ui.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

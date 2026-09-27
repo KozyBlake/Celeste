@@ -1,0 +1,10 @@
+[package]
+name = "scarlet-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust port of net.sybyline.scarlet.ui (Swing/FlatLaf -> TBD native UI toolkit)"
+
+[dependencies]
+scarlet-core.workspace = true
+tracing.workspace = true
