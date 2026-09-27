@@ -154,6 +154,16 @@ impl SetupWizard {
         self.discord_token_reg.get_or_null()
     }
 
+    /// The already-authenticated VRChat client from a successful login
+    /// during this wizard run, if the VRChat stage completed with one
+    /// (rather than being skipped, or never needed because setup already
+    /// ran in an earlier session). The caller should reuse this instead of
+    /// logging in again from scratch, since re-logging in would needlessly
+    /// ask VRChat's API a second time and could re-trigger 2FA.
+    pub fn vrchat_client(&self) -> Option<Arc<VrChatClient>> {
+        self.vrchat_client.clone()
+    }
+
     fn compute_stage_after_vibecoded(&self) -> Stage {
         if !self.discord_setup_prompted.get() {
             Stage::Discord {

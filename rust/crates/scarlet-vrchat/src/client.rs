@@ -28,6 +28,15 @@ use serde_json::Value;
 use crate::basic_auth::basic_auth_header;
 use crate::models::{CurrentUser, PaginatedGroupAuditLogEntryList};
 
+/// Encrypted-registry keys for the primary VRChat account, matching
+/// `ScarletVRChat`'s own domain (`new ScarletVRChat(this, "global", ...)`
+/// in `Scarlet.java`) so a data directory carried over from a Java install
+/// round-trips. Shared here (rather than duplicated as string literals in
+/// `scarlet-ui`'s setup wizard and this module's unattended-login helper)
+/// so the two never drift apart.
+pub const USERNAME_KEY: &str = "global:username";
+pub const PASSWORD_KEY: &str = "global:password";
+
 #[derive(Debug, thiserror::Error)]
 pub enum VrChatError {
     #[error("HTTP request failed: {0}")]
@@ -167,11 +176,66 @@ impl VrChatClient {
     }
 }
 
+/// Port of `ScarletVRChat`'s unattended re-login path: attempts a login
+/// using whatever credentials are already stored under [`USERNAME_KEY`]/
+/// [`PASSWORD_KEY`], for use at app startup when the interactive setup
+/// wizard didn't run this session (it already completed in an earlier one).
+///
+/// Returns `None` (after logging why) if nothing is stored, the login
+/// fails, or VRChat asks for two-factor. **Known gap**: Java's
+/// `ScarletVRChat` also stores a TOTP secret (`RegistryStringEncrypted
+/// totpsecret`) so an unattended login can generate a valid code itself;
+/// this doesn't yet (no TOTP-code-generation dependency pulled in), so an
+/// account requiring 2FA can only log in through the interactive wizard,
+/// which then hands its already-authenticated client onward instead of
+/// calling this at all.
+pub async fn login_with_stored_credentials(settings: &scarlet_core::settings::Settings) -> Option<VrChatClient> {
+    use scarlet_core::settings::registry::registry_string_encrypted;
+
+    let username = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY).get_or_null()?;
+    let password = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY).get_or_null()?;
+
+    let client = match VrChatClient::new() {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::error!("Could not build VRChat client for unattended login: {}", err);
+            return None;
+        }
+    };
+    match client.login_with_credentials(&username, &password).await {
+        Ok(LoginOutcome::LoggedIn(user)) => {
+            tracing::info!("VRChat unattended login succeeded as {}", user.display_name.as_deref().unwrap_or(&user.id));
+            Some(client)
+        }
+        Ok(LoginOutcome::RequiresTwoFactor(methods)) => {
+            tracing::warn!(
+                "VRChat unattended login requires two-factor ({:?}); run the setup wizard interactively to log in",
+                methods
+            );
+            None
+        }
+        Err(err) => {
+            tracing::error!("VRChat unattended login failed: {}", err);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn login_with_stored_credentials_returns_none_when_nothing_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = scarlet_core::settings::Settings::open(dir.path());
+        // No network call should happen at all -- if this test hangs or
+        // times out, that's a regression (it means a real request is being
+        // attempted against the credential-less path).
+        assert!(login_with_stored_credentials(&settings).await.is_none());
+    }
 
     #[tokio::test]
     async fn login_with_credentials_sends_vrchat_style_basic_auth() {

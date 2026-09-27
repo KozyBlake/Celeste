@@ -12,5 +12,6 @@
 
 pub mod client;
 pub mod commands;
+pub mod data;
 pub mod handler;
 pub mod token;

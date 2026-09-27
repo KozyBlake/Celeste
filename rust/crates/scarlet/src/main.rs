@@ -54,11 +54,24 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("No display detected; running headless. Ctrl+C to exit.");
         // Headless can't run the interactive setup wizard (no window to
         // show it in), so — matching a scheduled/unattended Java run —
-        // just connect with whatever token is already on disk, if any.
+        // just connect with whatever token is already on disk, if any, and
+        // attempt an unattended VRChat login (fails if 2FA is required;
+        // see login_with_stored_credentials's docs).
         let discord_token =
             scarlet_core::settings::registry::registry_string_encrypted(settings.encrypted.clone(), "discord.token")
                 .get_or_null();
-        runtime.spawn(scarlet_discord::client::connect_and_serve(discord_token));
+        let scarlet_data = Arc::new(scarlet_core::data::ScarletData::open(&data_dir));
+        let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
+        runtime.spawn({
+            let slot = vrchat_slot.clone();
+            let settings = settings.clone();
+            async move {
+                if let Some(client) = scarlet_vrchat::client::login_with_stored_credentials(&settings).await {
+                    *slot.write().await = Some(Arc::new(client));
+                }
+            }
+        });
+        runtime.spawn(scarlet_discord::client::connect_and_serve(discord_token, vrchat_slot, scarlet_data, settings));
         runtime.block_on(std::future::pending::<()>());
     } else {
         // Blocks this (real OS main) thread until the window closes. The

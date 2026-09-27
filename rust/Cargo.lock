@@ -3743,7 +3743,9 @@ name = "scarlet-discord"
 version = "0.4.20"
 dependencies = [
  "anyhow",
+ "chrono",
  "scarlet-core",
+ "scarlet-vrchat",
  "serde",
  "serde_json",
  "serenity",

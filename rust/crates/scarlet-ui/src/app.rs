@@ -130,6 +130,12 @@ pub struct ScarletApp {
     /// there's no settings store to run it against at all), at which point
     /// `update()` renders the normal toolbar/tabs/table instead.
     wizard: Option<crate::setup::SetupWizard>,
+    /// The authenticated VRChat client, shared with `scarlet-discord`'s
+    /// command handlers via its `TypeMap` (see `scarlet_discord::data`).
+    /// `None` until a login succeeds — from the wizard this session, or an
+    /// unattended background login using already-stored credentials.
+    vrchat_slot: scarlet_discord::data::SharedVrChatClient,
+    scarlet_data: Arc<scarlet_core::data::ScarletData>,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -149,6 +155,9 @@ pub struct ScarletApp {
 
 impl ScarletApp {
     pub fn new(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> Self {
+        let scarlet_data = Arc::new(scarlet_core::data::ScarletData::open(&data_dir));
+        let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
+
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
 
         // If setup already ran in an earlier session, the wizard is
@@ -156,11 +165,25 @@ impl ScarletApp {
         // still needs to connect with whatever token is already stored,
         // which is normally the wizard's own job when it finishes *this*
         // session (see the `JustFinished` handling in `update()`).
-        let staff_mode = match &wizard {
-            Some(wizard) if wizard.is_done() => {
+        let staff_mode = match (&wizard, &settings) {
+            (Some(wizard), Some(settings)) if wizard.is_done() => {
                 let token = wizard.stored_discord_token();
                 let staff_mode = token.as_deref().map(str::trim).unwrap_or("").is_empty();
-                runtime_handle.spawn(scarlet_discord::client::connect_and_serve(token));
+
+                // No interactive login happened this session (the wizard
+                // was already done) -- attempt an unattended login with
+                // whatever VRChat credentials are stored, so Discord
+                // commands still get a working client. Matches Java's own
+                // unattended-re-login behavior, minus stored-TOTP-secret
+                // support (see `login_with_stored_credentials`'s docs).
+                spawn_unattended_vrchat_login(&runtime_handle, vrchat_slot.clone(), settings.clone());
+
+                runtime_handle.spawn(scarlet_discord::client::connect_and_serve(
+                    token,
+                    vrchat_slot.clone(),
+                    scarlet_data.clone(),
+                    settings.clone(),
+                ));
                 staff_mode
             }
             // Unknown until the wizard finishes (or there's no settings
@@ -175,6 +198,8 @@ impl ScarletApp {
             staff_mode,
             runtime_handle,
             wizard,
+            vrchat_slot,
+            scarlet_data,
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -464,11 +489,47 @@ impl eframe::App for ScarletApp {
         // match) keeps the borrow of `self.wizard` scoped to just this
         // call, so the match arms below are free to touch other `self`
         // fields (staff_mode, runtime_handle, wizard itself).
-        let outcome = self.wizard.as_mut().map(|wizard| wizard.render(ctx));
+        let (outcome, wizard_vrchat_client) = match &mut self.wizard {
+            Some(wizard) => {
+                let outcome = wizard.render(ctx);
+                let vrchat_client =
+                    if matches!(outcome, crate::setup::SetupOutcome::JustFinished { .. }) { wizard.vrchat_client() } else { None };
+                (Some(outcome), vrchat_client)
+            }
+            None => (None, None),
+        };
         match outcome {
             Some(crate::setup::SetupOutcome::JustFinished { discord_token }) => {
                 self.staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
-                self.runtime_handle.spawn(scarlet_discord::client::connect_and_serve(discord_token));
+
+                match wizard_vrchat_client {
+                    // The wizard already logged in this session -- reuse
+                    // that client rather than logging in again from
+                    // scratch (which could needlessly re-trigger 2FA).
+                    Some(client) => {
+                        let slot = self.vrchat_slot.clone();
+                        self.runtime_handle.spawn(async move {
+                            *slot.write().await = Some(client);
+                        });
+                    }
+                    // VRChat was skipped in the wizard (or setup was
+                    // already done and there was no wizard step to reuse
+                    // from) -- fall back to an unattended login attempt.
+                    None => {
+                        if let Some(settings) = self.settings.clone() {
+                            spawn_unattended_vrchat_login(&self.runtime_handle, self.vrchat_slot.clone(), settings);
+                        }
+                    }
+                }
+
+                if let Some(settings) = self.settings.clone() {
+                    self.runtime_handle.spawn(scarlet_discord::client::connect_and_serve(
+                        discord_token,
+                        self.vrchat_slot.clone(),
+                        self.scarlet_data.clone(),
+                        settings,
+                    ));
+                }
                 self.wizard = None;
                 // Fall through to render the normal UI below on this same frame.
             }
@@ -534,6 +595,25 @@ pub fn run(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, r
         options,
         Box::new(move |_cc| Ok(Box::new(ScarletApp::new(state, settings, data_dir, runtime_handle)))),
     )
+}
+
+/// Spawns a background, unattended VRChat login using whatever credentials
+/// are already stored, filling `slot` on success. Used whenever there's no
+/// freshly-authenticated client from the setup wizard to reuse (setup
+/// already completed in an earlier session, or the VRChat step was
+/// skipped) — see `scarlet_vrchat::client::login_with_stored_credentials`
+/// for what this can't do (no stored-TOTP-secret support, so an account
+/// requiring 2FA needs the interactive wizard instead).
+fn spawn_unattended_vrchat_login(
+    runtime_handle: &tokio::runtime::Handle,
+    slot: scarlet_discord::data::SharedVrChatClient,
+    settings: Arc<Settings>,
+) {
+    runtime_handle.spawn(async move {
+        if let Some(client) = scarlet_vrchat::client::login_with_stored_credentials(&settings).await {
+            *slot.write().await = Some(Arc::new(client));
+        }
+    });
 }
 
 #[cfg(test)]
