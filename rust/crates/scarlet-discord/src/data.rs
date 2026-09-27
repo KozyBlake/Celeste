@@ -236,6 +236,11 @@ impl DiscordConfigStore {
         self.save()
     }
 
+    pub fn set_json(&self, field: &str, value: serde_json::Value) -> anyhow::Result<()> {
+        self.value.lock().unwrap().insert(field.to_string(), value);
+        self.save()
+    }
+
     fn save(&self) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&*self.value.lock().unwrap())?;
         Ok(scarlet_core::file_backups::write(&self.file, &json)?)
