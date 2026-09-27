@@ -85,9 +85,11 @@ pub struct Group {
     pub discriminator: Option<String>,
     #[serde(rename = "ownerId")]
     pub owner_id: Option<String>,
-    #[serde(rename = "memberCount")]
+    #[serde(rename = "memberCount", default)]
     pub member_count: i64,
-    #[serde(rename = "onlineMemberCount")]
+    /// Absent from `LimitedGroup` (the shape `GET /groups` search results
+    /// use) -- only `getGroup` returns it, hence `default` here too.
+    #[serde(rename = "onlineMemberCount", default)]
     pub online_member_count: i64,
     #[serde(rename = "iconUrl")]
     pub icon_url: Option<String>,
@@ -177,6 +179,22 @@ pub struct World {
     pub popularity: Option<i64>,
     pub heat: Option<i64>,
     pub favorites: Option<i64>,
+}
+
+/// Hand-picked subset of `LimitedUserSearch` (the shape `GET /users`
+/// returns, distinct from [`User`]/[`CurrentUser`]), confirmed against
+/// `components/schemas/LimitedUserSearch.yaml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserSearchResult {
+    pub id: String,
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(rename = "iconUrl")]
+    pub icon_url: Option<String>,
+    #[serde(rename = "statusDescription")]
+    pub status_description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Hand-picked subset of `Avatar`, confirmed against

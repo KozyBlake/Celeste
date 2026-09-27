@@ -20,6 +20,7 @@ pub mod secret_staff_list;
 pub mod staff_list;
 pub mod version;
 pub mod vrchat_group;
+pub mod vrchat_search;
 pub mod vrchat_user_ban;
 pub mod vrchat_user_info;
 pub mod vrchat_user_unban;
@@ -73,6 +74,7 @@ pub async fn register_global_commands(ctx: &Context) {
         vrchat_user_ban::register(),
         vrchat_user_unban::register(),
         vrchat_group::register(),
+        vrchat_search::register(),
         staff_list::register(),
         secret_staff_list::register(),
     ];
@@ -91,6 +93,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         vrchat_user_ban::NAME => vrchat_user_ban::run(ctx, command).await,
         vrchat_user_unban::NAME => vrchat_user_unban::run(ctx, command).await,
         vrchat_group::NAME => vrchat_group::run(ctx, command).await,
+        vrchat_search::NAME => vrchat_search::run(ctx, command).await,
         staff_list::NAME => staff_list::run(ctx, command).await,
         secret_staff_list::NAME => secret_staff_list::run(ctx, command).await,
         other => {

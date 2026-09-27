@@ -504,6 +504,56 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// Port of `VrchatSearch.world` / `WorldsApi.searchWorlds`: `GET
+    /// /worlds?search=...&n=...&offset=...`. Confirmed against the spec --
+    /// the shared `number` parameter's actual wire name is `n`, not
+    /// `number` (unlike `getGroupPosts`'s own locally-defined `number`
+    /// param -- VRChat's API is inconsistent about this between endpoints,
+    /// not a typo here).
+    pub async fn search_worlds(&self, query: &str, n: u32, offset: u32) -> Result<Vec<crate::models::World>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url("/worlds"))
+            .query(&[("search", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `VrchatSearch.user` / `UsersApi.searchUsers`: `GET
+    /// /users?search=...&n=...&offset=...`. Returns `LimitedUserSearch`
+    /// shapes ([`crate::models::UserSearchResult`]), not the fuller
+    /// [`crate::models::User`] `get_user` returns.
+    pub async fn search_users(
+        &self,
+        query: &str,
+        n: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::models::UserSearchResult>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url("/users"))
+            .query(&[("search", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `VrchatSearch.group` / `GroupsApi.searchGroups`: `GET
+    /// /groups?query=...&offset=...&n=...`. Reuses [`crate::models::Group`]
+    /// for the response -- the spec's `LimitedGroup` search-result shape is
+    /// a subset of the same field names (`roles`/`onlineMemberCount` just
+    /// come back `None`/`0`).
+    pub async fn search_groups(&self, query: &str, n: u32, offset: u32) -> Result<Vec<crate::models::Group>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url("/groups"))
+            .query(&[("query", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     /// Port of `getInstance(String worldId, String instanceId)`: `GET
     /// /instances/{worldId}:{instanceId}`.
     pub async fn get_instance(&self, world_id: &str, instance_id: &str) -> Result<crate::models::Instance, VrChatError> {
@@ -1174,5 +1224,60 @@ mod tests {
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         client.initiate_or_accept_group_transfer("grp_1", "usr_1").await.unwrap();
         client.cancel_group_transfer("grp_1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn search_worlds_passes_the_search_query_and_n_param() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/worlds"))
+            .and(query_param("search", "castle"))
+            .and(query_param("n", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "wrld_1", "name": "Castle World"}
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let results = client.search_worlds("castle", 10, 0).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Castle World");
+    }
+
+    #[tokio::test]
+    async fn search_users_parses_limited_user_search_shape() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users"))
+            .and(query_param("search", "alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "usr_1", "displayName": "Alice", "iconUrl": "https://example.com/a.png"}
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let results = client.search_users("alice", 25, 0).await.unwrap();
+        assert_eq!(results[0].display_name.as_deref(), Some("Alice"));
+        assert_eq!(results[0].icon_url.as_deref(), Some("https://example.com/a.png"));
+    }
+
+    #[tokio::test]
+    async fn search_groups_passes_the_query_param() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups"))
+            .and(query_param("query", "moderators"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "grp_1", "name": "Moderators Group", "memberCount": 5}
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let results = client.search_groups("moderators", 25, 0).await.unwrap();
+        assert_eq!(results[0].name, "Moderators Group");
+        assert_eq!(results[0].member_count, 5);
     }
 }
