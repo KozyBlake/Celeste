@@ -15,8 +15,8 @@ Crate layout (`rust/crates/`), each mapped to a Java package/class group:
 
 | Crate | Java equivalent | Status |
 |---|---|---|
-| `scarlet-core` | `net.sybyline.scarlet` root + `log` + `util` | log layer ported; config/data model in progress |
-| `scarlet-gif` | `com.madgag.gif.fmsware` | in progress |
+| `scarlet-core` | `net.sybyline.scarlet` root + `log` + `util` | log layer + app-identity constants ported; config/data model not started |
+| `scarlet-gif` | `com.madgag.gif.fmsware` | encoder side done (NeuQuant, LZWEncoder, AnimatedGifEncoder); GifDecoder not started |
 | `scarlet-discord` | `net.sybyline.scarlet.server.discord`, `ScarletDiscordJDA`, `ScarletDiscordCommands`, `ScarletEventListener` | skeleton only |
 | `scarlet-vrchat` | `ScarletVRChat*`, `net.sybyline.scarlet.ext` (VRC-related) | skeleton only |
 | `scarlet-dave` | `libdave-maven/*`, `net.sybyline.scarlet.server.discord.dave`, `moe.kyokobot.libdave` | data types only; MLS crypto engine + native Opus/codec bindings not started |
@@ -43,9 +43,9 @@ Crate layout (`rust/crates/`), each mapped to a Java package/class group:
 
 ## Next steps (in order)
 
-1. Finish `scarlet-gif` (AnimatedGifEncoder, GifDecoder, LZWEncoder, NeuQuant) — self-contained, no external API deps, good-sized first real port.
+1. `scarlet-gif` **partially done.** `AnimatedGifEncoder`/`LZWEncoder`/`NeuQuant` ported to `crates/scarlet-gif/src/{encoder,lzw,neuquant}.rs`. `GifDecoder.java` (783 lines, GIF *decoding*) was **not yet ported** — it's a real gap, not a no-op: `net.sybyline.scarlet.util.Gifs.java` uses it to download and decode a GIF URL into a `VrcSpriteSheet` (frame-by-frame), so `scarlet-vrchat`/`scarlet-discord` work that touches sprite sheets or GIF avatars will need it. Tracked as follow-up work, not silently dropped. NeuQuant and LZWEncoder are pinned with byte-for-byte golden tests cross-checked against the real Java classes compiled with OpenJDK 21 (see the `matches_java_reference_output_byte_for_byte` tests) — do this same cross-check (`javac` + a small harness in the same package, diff the output) for any other numerically-tricky file before trusting a port of it. `AnimatedGifEncoder`'s `BufferedImage`/`Graphics2D` resize-on-add (`scaleToFit`) was intentionally dropped, not silently approximated — see the doc comment on `encoder.rs` for the replacement API (raw RGB buffers) and the `FrameSizeMismatch` error it returns instead of resampling.
 2. Port `ScarletSettings`'s `FileValued<T>` system and `ScarletData`/`Features`/`ScarletPermission`/`ScarletMeta`/`ScarletJsonCache` into `scarlet-core` — everything else depends on this.
-3. `Scarlet.java`'s app-identity constants (name/version/URLs) and data-dir resolution logic → `scarlet_core::identity` / `scarlet_core::paths` (a scoped slice of the god-class, not the whole file at once).
+3. The rest of `Scarlet.java`'s data-dir resolution/migration logic → `scarlet_core::paths` (the app-identity constants are already ported to `scarlet_core::identity`; this is the remainder of that god-class's static init block, still not started).
 4. `scarlet-discord`: serenity client bootstrap + event listener skeleton, then commands incrementally (there are dozens; port a handful at a time, verifying compile each time).
 5. `scarlet-vrchat`: auth/cookie-jar + a handful of high-traffic endpoints first (group audit log, instance/user lookup), not the whole 3,367-line file at once.
 6. Revisit DAVE and UI once the headless core round-trips (settings load → VRChat poll → Discord post) end to end.
