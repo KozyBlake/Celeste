@@ -23,6 +23,7 @@ pub mod export_log;
 pub mod set_event_channel;
 pub mod set_tts_voice;
 pub mod server_config;
+pub mod settings;
 pub mod ticket_config;
 pub mod aux_webhooks;
 pub mod moderation_tags;
@@ -206,6 +207,7 @@ pub async fn register_global_commands(ctx: &Context) {
         server_config::register_channel(server_config::ChannelSetting::ActionLog),
         server_config::register_account_age(),
         server_config::register_auto_invite(),
+        settings::register(),
         ticket_config::register_auto_response(),
         ticket_config::register_message(),
     ];
@@ -260,6 +262,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         server_config::ACTION_LOG_NAME => server_config::run_channel(ctx, command, server_config::ChannelSetting::ActionLog).await,
         server_config::ACCOUNT_AGE_NAME => server_config::run_account_age(ctx, command).await,
         server_config::AUTO_INVITE_NAME => server_config::run_auto_invite(ctx, command).await,
+        settings::NAME => settings::run(ctx, command).await,
         ticket_config::AUTO_RESPONSE_NAME => ticket_config::run_auto_response(ctx, command).await,
         ticket_config::MESSAGE_NAME => ticket_config::run_message(ctx, command).await,
         other => {
@@ -269,6 +272,23 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
     };
     if let Err(err) = result {
         tracing::error!("Error handling command `{}`: {}", command.data.name, err);
+    }
+}
+
+pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) {
+    let result = match command.data.name.as_str() {
+        settings::NAME => settings::autocomplete(ctx, command).await,
+        _ => command
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Autocomplete(
+                    serenity::builder::CreateAutocompleteResponse::new(),
+                ),
+            )
+            .await,
+    };
+    if let Err(err) = result {
+        tracing::error!(command = %command.data.name, "Error handling autocomplete: {err}");
     }
 }
 

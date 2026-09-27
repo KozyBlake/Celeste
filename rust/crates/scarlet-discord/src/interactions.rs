@@ -708,6 +708,16 @@ async fn create_instance(
 }
 
 pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
+    if interaction
+        .data
+        .custom_id
+        .starts_with(crate::commands::settings::MODAL_PREFIX)
+    {
+        if let Err(err) = handle_setting_modal(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling settings modal: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id == crate::commands::ticket_config::MESSAGE_MODAL_ID {
         if let Err(err) = handle_ticket_message_modal(ctx, interaction).await {
             tracing::error!("Error handling Ticket Tool message modal: {err}");
@@ -747,6 +757,56 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     }
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
+    }
+}
+
+async fn handle_setting_modal(
+    ctx: &Context,
+    interaction: &ModalInteraction,
+) -> serenity::Result<()> {
+    use scarlet_core::settings::file_valued::SettingKind;
+
+    let setting_id = interaction
+        .data
+        .custom_id
+        .strip_prefix(crate::commands::settings::MODAL_PREFIX)
+        .unwrap_or_default();
+    let settings = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::SettingsKey>()
+            .cloned()
+    };
+    let Some(settings) = settings else {
+        return ephemeral_modal(ctx, interaction, "Settings are unavailable.").await;
+    };
+    let Some(setting) = settings.registry.get(setting_id) else {
+        return ephemeral_modal(
+            ctx,
+            interaction,
+            format!("Unknown setting id `{setting_id}`."),
+        )
+        .await;
+    };
+    let mut value = modal_text(interaction, "value");
+    if matches!(setting.kind(), SettingKind::StringArrayPattern { .. }) {
+        value = value.lines().map(str::trim).collect::<Vec<_>>().join(",");
+    }
+    if setting.set_from_string(&value, "discord") {
+        ephemeral_modal(
+            ctx,
+            interaction,
+            format!("Set {} to {}", setting.name(), value),
+        )
+        .await
+    } else {
+        ephemeral_modal(
+            ctx,
+            interaction,
+            format!("Invalid value {} for {}", value, setting.name()),
+        )
+        .await
     }
 }
 

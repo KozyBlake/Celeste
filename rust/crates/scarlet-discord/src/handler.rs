@@ -16,16 +16,25 @@ pub struct Handler;
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
-        tracing::info!("Connected to Discord as {} ({})", ready.user.name, ready.user.id);
+        tracing::info!(
+            "Connected to Discord as {} ({})",
+            ready.user.name,
+            ready.user.id
+        );
         commands::register_global_commands(&ctx).await;
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         match interaction {
             Interaction::Command(command) => commands::dispatch(&ctx, &command).await,
-            Interaction::Component(component) => crate::interactions::dispatch_component(&ctx, &component).await,
+            Interaction::Autocomplete(command) => {
+                commands::dispatch_autocomplete(&ctx, &command).await
+            }
+            Interaction::Component(component) => {
+                crate::interactions::dispatch_component(&ctx, &component).await
+            }
             Interaction::Modal(modal) => crate::interactions::dispatch_modal(&ctx, &modal).await,
-            _ => {},
+            _ => {}
         }
     }
 }
