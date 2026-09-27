@@ -650,12 +650,13 @@ impl Settings {
             ),
 
             // --- ScarletEventListener.java: Notifications (TTS + advisory) ---
-            tts_voice_name: registry.string_choice("tts_voice_name", "TTS: Voice name", SettingCategory::Notifications, "", || {
-                // The real TTS service (net.sybyline.scarlet.util.tts) isn't ported yet
-                // (see PORTING.md), so there are no installed voices to enumerate; any
-                // non-empty value is rejected until that lands.
-                Vec::new()
-            }),
+            tts_voice_name: registry.string_choice(
+                "tts_voice_name",
+                "TTS: Voice name",
+                SettingCategory::Notifications,
+                "",
+                installed_tts_voices,
+            ),
             tts_use_default_audio_device: registry.boolean(
                 "tts_use_default_audio_device",
                 "TTS: Use default system audio device",
@@ -982,6 +983,48 @@ impl Settings {
     pub fn settings_file(&self) -> &Path {
         &self.settings_file
     }
+}
+
+/// Enumerates voices from the platform engine used by the Rust desktop TTS
+/// service. Kept here so `FileValuedStringChoice` validates the same values
+/// the Settings UI offers instead of rejecting every non-empty voice.
+pub fn installed_tts_voices() -> Vec<String> {
+    static VOICES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    VOICES.get_or_init(detect_installed_tts_voices).clone()
+}
+
+fn detect_installed_tts_voices() -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    {
+        for command in ["espeak-ng", "espeak"] {
+            if let Ok(output) = std::process::Command::new(command).arg("--voices").output() {
+                if output.status.success() {
+                    let mut voices: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .skip(1)
+                        // Same column Java's `awk 'NR>1 {print $2}'` uses:
+                        // stable engine voice/language ids such as `en-us`.
+                        .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
+                        .collect();
+                    voices.sort();
+                    voices.dedup();
+                    if !voices.is_empty() {
+                        return voices;
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("say").args(["-v", "?"]).output() {
+            return String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+                .collect();
+        }
+    }
+    Vec::new()
 }
 
 #[cfg(test)]

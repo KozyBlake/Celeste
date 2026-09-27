@@ -23,6 +23,7 @@ pub mod app;
 pub mod platform;
 pub mod setup;
 pub mod state;
+pub mod tts;
 
 pub use app::run;
 pub use state::{ConnectedPlayer, UiState};

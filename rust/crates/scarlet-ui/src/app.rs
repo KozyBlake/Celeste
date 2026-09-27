@@ -6,11 +6,11 @@
 //! as `propstable` in the Java source, and the status bar text format — all
 //! driven by real state ([`crate::state::UiState`] for players/status,
 //! [`scarlet_core::settings`] for the Settings tab), not fixtures. What
-//! isn't ported: most of the toolbar buttons' actual behavior (Create
-//! Instance, Import Groups, Sync Discord are logged as not-yet-wired
+//! isn't ported: several toolbar buttons' actual behavior (Create Instance,
+//! Import Groups, Sync Discord are logged as not-yet-wired
 //! rather than faked), moderation actions (Ban/Unban/Invite are stubs),
-//! and the CLI tab's real command interpreter (currently just echoes and
-//! answers `help`/`clear`).
+//! and most of the CLI command interpreter. TTS pause/resume, skip, and the
+//! CLI `tts <text>` command are backed by the real platform TTS service.
 //!
 //! Toolkit: `egui`/`eframe` (see prior module docs in git history for the
 //! rationale) with `egui_extras::TableBuilder` for the grid.
@@ -142,6 +142,7 @@ pub struct ScarletApp {
     watched_groups: Arc<scarlet_core::watched_groups::WatchedGroups>,
     watched_users: Arc<scarlet_core::watched_entities::WatchedEntities>,
     watched_avatars: Arc<scarlet_core::watched_entities::WatchedEntities>,
+    tts: crate::tts::TtsService,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -234,6 +235,7 @@ impl ScarletApp {
             watched_groups,
             watched_users,
             watched_avatars,
+            tts: crate::tts::TtsService::new(),
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -281,9 +283,10 @@ impl ScarletApp {
             let tts_on = self.state.tts_enabled();
             if ui.button(if tts_on { "TTS: On" } else { "TTS: Off" }).clicked() {
                 self.state.set_tts_enabled(!tts_on);
+                self.tts.set_paused(tts_on);
             }
             if ui.button("Skip TTS").clicked() {
-                self.state.append_cli_output("Skip TTS: not wired up yet (no TTS engine ported).");
+                self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
             }
         });
     }
@@ -462,6 +465,20 @@ impl ScarletApp {
                                     }
                                 });
                             }
+                            SettingKind::StringChoice { valid_values } => {
+                                let mut current = descriptor.get_as_string();
+                                let selected = if current.is_empty() { "System default".to_string() } else { current.clone() };
+                                egui::ComboBox::from_id_salt(descriptor.id()).selected_text(selected).show_ui(ui, |ui| {
+                                    if ui.selectable_value(&mut current, String::new(), "System default").changed() {
+                                        descriptor.set_from_string("", "ui");
+                                    }
+                                    for value in valid_values() {
+                                        if ui.selectable_value(&mut current, value.clone(), &value).changed() {
+                                            descriptor.set_from_string(&value, "ui");
+                                        }
+                                    }
+                                });
+                            }
                             _ => {
                                 let buf = self
                                     .settings_edit_buffers
@@ -499,13 +516,19 @@ impl ScarletApp {
         });
     }
 
-    /// Minimal real command interpreter — not a port of Scarlet's actual CLI
-    /// (which dispatches into the full command set once ported), just
-    /// enough to prove the tab works end to end.
+    /// Incremental port of Scarlet's command interpreter.
     fn run_cli_command(&mut self, command: String) {
         self.state.append_cli_output(format!("> {command}"));
+        if let Some(text) = command.strip_prefix("tts ").map(str::trim).filter(|text| !text.is_empty()) {
+            let voice = self.settings.as_ref().map(|settings| settings.tts_voice_name.get()).unwrap_or_default();
+            match self.tts.submit(text, voice) {
+                Ok(()) => self.state.append_cli_output(format!("Submitting TTS: `{text}`")),
+                Err(err) => self.state.append_cli_output(format!("[warn] TTS service not available: {err}")),
+            }
+            return;
+        }
         match command.as_str() {
-            "help" => self.state.append_cli_output("Commands: help, clear. The full command interpreter isn't ported yet."),
+            "help" => self.state.append_cli_output("Commands: help, clear, tts <text>. More Java CLI commands are still being ported."),
             "clear" => self.state.clear_cli_log(),
             other => self.state.append_cli_output(format!("Unknown command: {other} (type 'help')")),
         }
