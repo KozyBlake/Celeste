@@ -86,6 +86,13 @@ impl TypeMapKey for InstanceCreationsKey {
     type Value = InstanceCreations;
 }
 
+pub type DiscordModerationDrafts =
+    Arc<RwLock<HashMap<String, crate::commands::discord_member_action::DiscordModerationDraft>>>;
+pub struct DiscordModerationDraftsKey;
+impl TypeMapKey for DiscordModerationDraftsKey {
+    type Value = DiscordModerationDrafts;
+}
+
 /// Java-compatible, unknown-field-preserving `discord_bot.json` storage.
 /// Keeping the raw object is important while the port is incremental: saving
 /// one Rust-supported field must not erase settings still owned by Java.
@@ -300,6 +307,7 @@ impl SharedState {
         data.insert::<WatchedUsersKey>(self.watched_users);
         data.insert::<WatchedAvatarsKey>(self.watched_avatars);
         data.insert::<InstanceCreationsKey>(Arc::new(RwLock::new(HashMap::new())));
+        data.insert::<DiscordModerationDraftsKey>(Arc::new(RwLock::new(HashMap::new())));
     }
 }
 

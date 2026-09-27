@@ -183,6 +183,20 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if interaction
         .data
         .custom_id
+        .starts_with("discord-member-confirm:")
+        || interaction
+            .data
+            .custom_id
+            .starts_with("discord-member-cancel:")
+    {
+        if let Err(err) = handle_discord_member_action(ctx, interaction).await {
+            tracing::error!("Error handling Discord moderation confirmation: {err}");
+        }
+        return;
+    }
+    if interaction
+        .data
+        .custom_id
         .starts_with("set-audit-aux-webhooks:")
     {
         if let Err(err) = handle_audit_aux_webhooks(ctx, interaction).await {
@@ -203,6 +217,102 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if let Err(err) = handle_instance_component(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling component interaction: {err}");
     }
+}
+
+async fn handle_discord_member_action(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let Some((action, token)) = split_custom_id(&interaction.data.custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid moderation confirmation.").await;
+    };
+    let drafts = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::DiscordModerationDraftsKey>()
+            .cloned()
+    };
+    let Some(drafts) = drafts else {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            "Discord moderation confirmation state is unavailable.",
+        )
+        .await;
+    };
+    let draft = { drafts.read().await.get(token).cloned() };
+    let Some(draft) = draft else {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            "That moderation confirmation has expired.",
+        )
+        .await;
+    };
+    if draft.owner_id != interaction.user.id {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            "That moderation confirmation belongs to another user.",
+        )
+        .await;
+    }
+    drafts.write().await.remove(token);
+    if action == "discord-member-cancel" {
+        return interaction
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::UpdateMessage(
+                    CreateInteractionResponseMessage::new()
+                        .content(format!("{} cancelled.", draft.action.title()))
+                        .components(Vec::new()),
+                ),
+            )
+            .await;
+    }
+    if !interaction
+        .app_permissions
+        .is_some_and(|permissions| permissions.contains(draft.action.permission()))
+    {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            format!(
+                "The bot does not have the **{} Members** permission in this server.",
+                draft.action.title()
+            ),
+        )
+        .await;
+    }
+    let Some(member) = interaction.member.as_ref() else {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            "Could not determine your server membership.",
+        )
+        .await;
+    };
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(
+                CreateInteractionResponseMessage::new().ephemeral(true),
+            ),
+        )
+        .await?;
+    let message = match crate::commands::discord_member_action::perform(ctx, draft, member).await {
+        Ok(message) | Err(message) => message,
+    };
+    interaction
+        .create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new()
+                .content(message)
+                .ephemeral(true),
+        )
+        .await
+        .map(|_| ())
 }
 
 async fn handle_audit_aux_webhooks(

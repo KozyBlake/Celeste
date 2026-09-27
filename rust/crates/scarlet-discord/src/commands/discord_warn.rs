@@ -3,23 +3,8 @@
 //! at the Discord level via `default_member_permissions(MODERATE_MEMBERS)`
 //! (`@DefaultPerms(Permission.MODERATE_MEMBERS)` in Java).
 //!
-//! **Simplified**: Java re-checks `actorMember.hasPermission(MODERATE_MEMBERS)`
-//! in-code in addition to the Discord-level default -- redundant under normal
-//! server configuration, so this relies on `default_member_permissions`
-//! alone (same as `unlink-vrchat-account-for`). The "cannot warn someone
-//! whose highest role is equal to or above yours" hierarchy check
-//! (`actorMember.canInteract(discordUser)`) is **not ported**: comparing
-//! role hierarchy needs both members' full role lists plus the guild's
-//! role-position ordering, and this crate has no shared helper for that yet
-//! (it'll be needed again for `discord-kick`/`discord-ban`'s confirmation
-//! flow once component-interaction dispatch exists, so it's worth building
-//! once properly rather than half here). The "cannot warn the server
-//! owner" check *is* ported (a single guild-owner-id comparison, cheap and
-//! self-contained). `emitDiscordActionLog` (writing to a configured
-//! Discord action-log channel) is **not ported** either -- that channel
-//! config isn't wired up in this crate (see `set-discord-action-log-channel`
-//! in PORTING.md's gap list), so this command has no side channel to log
-//! to; the DM itself is still the real action.
+//! Includes Java's explicit actor permission and role-hierarchy checks,
+//! owner protection, and configured Discord action-log output.
 
 use serenity::builder::{CreateCommand, CreateCommandOption, CreateMessage};
 use serenity::client::Context;
@@ -34,8 +19,19 @@ pub fn register() -> CreateCommand {
     CreateCommand::new(NAME)
         .description("Warn a Discord server member")
         .default_member_permissions(Permissions::MODERATE_MEMBERS)
-        .add_option(CreateCommandOption::new(CommandOptionType::User, "discord-user", "The member to warn").required(true))
-        .add_option(CreateCommandOption::new(CommandOptionType::String, "reason", "Reason shown to the member"))
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::User,
+                "discord-user",
+                "The member to warn",
+            )
+            .required(true),
+        )
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::String,
+            "reason",
+            "Reason shown to the member",
+        ))
 }
 
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
@@ -54,41 +50,148 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     }
 
     let options = command.data.options();
-    let target_user = options.iter().find(|o| o.name == "discord-user").and_then(|o| match &o.value {
-        ResolvedValue::User(user, _) => Some(*user),
-        _ => None,
-    });
-    let Some(target_user) = target_user else {
+    let target = options
+        .iter()
+        .find(|o| o.name == "discord-user")
+        .and_then(|o| match &o.value {
+            ResolvedValue::User(user, Some(member)) => Some((*user, *member)),
+            _ => None,
+        });
+    let Some((target_user, target_member)) = target else {
         return super::reply_ephemeral(ctx, command, "Please select a valid server member.").await;
     };
-    let reason = options.iter().find(|o| o.name == "reason").and_then(|o| match &o.value {
-        ResolvedValue::String(s) => Some(*s),
-        _ => None,
-    });
+    let reason = options
+        .iter()
+        .find(|o| o.name == "reason")
+        .and_then(|o| match &o.value {
+            ResolvedValue::String(s) => Some(*s),
+            _ => None,
+        });
 
     let Some(guild_id) = command.guild_id else {
-        return super::reply_ephemeral(ctx, command, "Could not find the configured Discord server.").await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "Could not find the configured Discord server.",
+        )
+        .await;
     };
     let guild = match ctx.http.get_guild(guild_id).await {
         Ok(guild) => guild,
-        Err(_) => return super::reply_ephemeral(ctx, command, "Could not find the configured Discord server.").await,
+        Err(_) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                "Could not find the configured Discord server.",
+            )
+            .await
+        }
     };
 
     if guild.owner_id == target_user.id {
-        return super::reply_ephemeral(ctx, command, &format!("Cannot warn **{}** - they are the server owner.", target_user.name))
-            .await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "Cannot warn **{}** - they are the server owner.",
+                target_user.name
+            ),
+        )
+        .await;
     }
 
-    let actor_name = command.member.as_ref().and_then(|m| m.nick.clone()).unwrap_or_else(|| command.user.name.clone());
-    let reason_text = reason.map(str::trim).filter(|r| !r.is_empty()).unwrap_or("No reason provided");
-    let dm_message =
-        format!("You have received a warning in **{}** from {actor_name}.\n**Reason:** {reason_text}", guild.name);
-
-    match target_user.direct_message(ctx, CreateMessage::new().content(dm_message)).await {
-        Ok(_) => super::reply_ephemeral(ctx, command, &format!("Warned **{}**.", target_user.name)).await,
+    let Some(actor_member) = command.member.as_ref() else {
+        return super::reply_ephemeral(ctx, command, "Could not determine your server membership.")
+            .await;
+    };
+    if !actor_member
+        .permissions
+        .is_some_and(|permissions| permissions.contains(Permissions::MODERATE_MEMBERS))
+    {
+        return super::reply_ephemeral(ctx, command, "You do not have permission to warn members.")
+            .await;
+    }
+    let roles = match guild_id.roles(&ctx.http).await {
+        Ok(roles) => roles,
         Err(err) => {
-            super::reply_ephemeral(ctx, command, &format!("Could not DM **{}**; warning was not delivered: {err}", target_user.name))
-                .await
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Could not check Discord role hierarchy: {err}"),
+            )
+            .await
+        }
+    };
+    if !super::discord_member_action::can_interact(
+        &roles,
+        &actor_member.roles,
+        &target_member.roles,
+        guild.owner_id == command.user.id,
+    ) {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "Cannot warn **{}** - their highest role is equal to or above yours.",
+                target_user.name
+            ),
+        )
+        .await;
+    }
+
+    let actor_name = actor_member
+        .nick
+        .clone()
+        .unwrap_or_else(|| command.user.name.clone());
+    let target_name = target_member
+        .nick
+        .clone()
+        .unwrap_or_else(|| target_user.name.clone());
+    let reason_text = reason
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .unwrap_or("No reason provided");
+    let dm_message = format!(
+        "You have received a warning in **{}** from {actor_name}.\n**Reason:** {reason_text}",
+        guild.name
+    );
+
+    match target_user
+        .direct_message(ctx, CreateMessage::new().content(dm_message))
+        .await
+    {
+        Ok(_) => {
+            super::discord_member_action::emit_action_log(
+                ctx,
+                "Discord Warning",
+                &actor_name,
+                &target_name,
+                target_user.id,
+                reason_text,
+                true,
+                "Warning DM delivered.",
+            )
+            .await;
+            super::reply_ephemeral(ctx, command, &format!("Warned **{target_name}**.")).await
+        }
+        Err(err) => {
+            super::discord_member_action::emit_action_log(
+                ctx,
+                "Discord Warning",
+                &actor_name,
+                &target_name,
+                target_user.id,
+                reason_text,
+                false,
+                &format!("Failed to deliver warning DM: {err}"),
+            )
+            .await;
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Could not DM **{target_name}**; warning was not delivered: {err}"),
+            )
+            .await
         }
     }
 }

@@ -17,6 +17,7 @@
 pub mod config_info;
 pub mod discord_user_info;
 pub mod discord_warn;
+pub mod discord_member_action;
 pub mod export_log;
 pub mod set_event_channel;
 pub mod set_tts_voice;
@@ -180,6 +181,8 @@ pub async fn register_global_commands(ctx: &Context) {
         unlink_vrchat_account::register(),
         unlink_vrchat_account_for::register(),
         discord_warn::register(),
+        discord_member_action::register(discord_member_action::MemberAction::Ban),
+        discord_member_action::register(discord_member_action::MemberAction::Kick),
         export_log::register(),
         set_event_channel::register(set_event_channel::RouteKind::Audit),
         set_event_channel::register(set_event_channel::RouteKind::Extended),
@@ -225,6 +228,8 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         unlink_vrchat_account::NAME => unlink_vrchat_account::run(ctx, command).await,
         unlink_vrchat_account_for::NAME => unlink_vrchat_account_for::run(ctx, command).await,
         discord_warn::NAME => discord_warn::run(ctx, command).await,
+        discord_member_action::BAN_NAME => discord_member_action::run(ctx, command, discord_member_action::MemberAction::Ban).await,
+        discord_member_action::KICK_NAME => discord_member_action::run(ctx, command, discord_member_action::MemberAction::Kick).await,
         export_log::NAME => export_log::run(ctx, command).await,
         set_event_channel::AUDIT_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::Audit).await,
         set_event_channel::EXTENDED_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::Extended).await,
