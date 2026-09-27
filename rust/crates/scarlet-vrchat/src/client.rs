@@ -37,6 +37,22 @@ use crate::models::{CurrentUser, PaginatedGroupAuditLogEntryList};
 pub const USERNAME_KEY: &str = "global:username";
 pub const PASSWORD_KEY: &str = "global:password";
 
+/// Port of `ScarletVRChat`'s `vrchat_group_id` settings key (the "which
+/// group does Scarlet moderate" config, asked for via
+/// `getStringOrRequireInput("vrchat_group_id", ...)` in its constructor).
+/// Stored plain (not encrypted) in `settings.json`, matching Java's use of
+/// the plain `getString`/`setString` for this key rather than
+/// `RegistryStringEncrypted` -- a group id isn't a secret.
+pub const GROUP_ID_KEY: &str = "vrchat_group_id";
+
+/// VRChat `GroupPermissions` string values actually used so far, confirmed
+/// against `components/schemas/GroupPermissions.yaml` (kebab-case strings,
+/// not the Java enum's snake_case variant names — `group_all`'s real wire
+/// value is the wildcard `"*"`, not `"group-all"`, which would have been an
+/// easy wrong guess).
+pub const PERMISSION_ALL: &str = "*";
+pub const PERMISSION_GROUP_BANS_MANAGE: &str = "group-bans-manage";
+
 #[derive(Debug, thiserror::Error)]
 pub enum VrChatError {
     #[error("HTTP request failed: {0}")]
@@ -319,6 +335,31 @@ impl VrChatClient {
     pub async fn close_instance(&self, world_id: &str, instance_id: &str) -> Result<crate::models::Instance, VrChatError> {
         let response = self.http.delete(self.url(&format!("/instances/{world_id}:{instance_id}"))).send().await?;
         Self::parse_response(response).await
+    }
+
+    /// Port of `checkUserHasVRChatPermission(GroupMember, GroupPermissions)`
+    /// plus the group-owner fallback from `checkSelfUserHasVRChatPermission`
+    /// (`this.currentUserId.equals(this.groupOwnerId)`). **Not ported**: the
+    /// `allGroupPermissions` live-event permission cache Java checks first —
+    /// that's a separate, not-yet-ported subsystem fed by gateway events;
+    /// this always does a fresh `get_group`/`get_group_member` fetch
+    /// instead, which is correct, just uncached (an extra round trip per
+    /// check rather than a cache hit).
+    pub async fn user_has_group_permission(&self, group_id: &str, user_id: &str, permission: &str) -> Result<bool, VrChatError> {
+        let group = self.get_group(group_id, true).await?;
+        if group.owner_id.as_deref() == Some(user_id) {
+            return Ok(true);
+        }
+        let Some(member) = self.get_group_member(group_id, user_id).await? else {
+            return Ok(false);
+        };
+        let Some(roles) = &group.roles else {
+            return Ok(false);
+        };
+        Ok(roles
+            .iter()
+            .filter(|role| member.role_ids.contains(&role.id))
+            .any(|role| role.permissions.iter().any(|p| p == PERMISSION_ALL || p == permission)))
     }
 
     async fn parse_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T, VrChatError> {
@@ -683,5 +724,75 @@ mod tests {
         assert_eq!(instance.user_count, Some(3));
         let closed = client.close_instance("wrld_1", "12345").await.unwrap();
         assert_eq!(closed.instance_id.as_deref(), Some("12345"));
+    }
+
+    async fn mock_group_with_roles(server: &MockServer, owner_id: &str) {
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "grp_1", "name": "Test Group", "memberCount": 1, "onlineMemberCount": 0,
+                "ownerId": owner_id,
+                "roles": [
+                    {"id": "grol_mod", "name": "Moderator", "permissions": ["group-bans-manage"]},
+                    {"id": "grol_member", "name": "Member", "permissions": []}
+                ]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn group_owner_always_has_permission() {
+        let server = MockServer::start().await;
+        mock_group_with_roles(&server, "usr_owner").await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert!(client.user_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn member_with_the_matching_role_has_permission() {
+        let server = MockServer::start().await;
+        mock_group_with_roles(&server, "usr_owner").await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/members/usr_mod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gmem_1", "groupId": "grp_1", "userId": "usr_mod", "roleIds": ["grol_mod"]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert!(client.user_has_group_permission("grp_1", "usr_mod", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn member_without_the_matching_role_lacks_permission() {
+        let server = MockServer::start().await;
+        mock_group_with_roles(&server, "usr_owner").await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/members/usr_plain"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gmem_2", "groupId": "grp_1", "userId": "usr_plain", "roleIds": ["grol_member"]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert!(!client.user_has_group_permission("grp_1", "usr_plain", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn non_member_lacks_permission() {
+        let server = MockServer::start().await;
+        mock_group_with_roles(&server, "usr_owner").await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/members/usr_stranger"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert!(!client.user_has_group_permission("grp_1", "usr_stranger", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
     }
 }

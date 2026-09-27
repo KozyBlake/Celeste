@@ -59,9 +59,7 @@ use scarlet_core::settings::file_valued::FileValued;
 use scarlet_core::settings::registry::{registry_string_encrypted, RegistryStringValued};
 use scarlet_core::settings::store::SettingsStore;
 use scarlet_core::settings::Settings;
-use scarlet_vrchat::client::{LoginOutcome, VrChatClient};
-
-const VRCHAT_GROUP_ID_KEY: &str = "vrchat_group_id";
+use scarlet_vrchat::client::{LoginOutcome, VrChatClient, GROUP_ID_KEY as VRCHAT_GROUP_ID_KEY};
 
 enum Stage {
     VibecodedNotice,

@@ -17,11 +17,17 @@
 pub mod config_info;
 pub mod discord_user_info;
 pub mod version;
+pub mod vrchat_group;
+pub mod vrchat_user_ban;
 pub mod vrchat_user_info;
+pub mod vrchat_user_unban;
+
+use std::sync::Arc;
 
 use serenity::builder::{CreateInteractionResponse, CreateInteractionResponseFollowup, CreateInteractionResponseMessage};
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
+use serenity::model::mention::Mentionable;
 
 /// Acks the interaction immediately without a visible message yet ("Scarlet
 /// is thinking..."), then lets the handler take as long as it needs (a
@@ -57,8 +63,15 @@ pub(crate) async fn reply_ephemeral(ctx: &Context, command: &CommandInteraction,
 /// swap to per-guild registration during development if faster iteration
 /// is needed (not done here to keep this skeleton simple).
 pub async fn register_global_commands(ctx: &Context) {
-    let commands =
-        vec![version::register(), config_info::register(), discord_user_info::register(), vrchat_user_info::register()];
+    let commands = vec![
+        version::register(),
+        config_info::register(),
+        discord_user_info::register(),
+        vrchat_user_info::register(),
+        vrchat_user_ban::register(),
+        vrchat_user_unban::register(),
+        vrchat_group::register(),
+    ];
     if let Err(err) = serenity::model::application::Command::set_global_commands(&ctx.http, commands).await {
         tracing::error!("Failed to register global slash commands: {}", err);
     }
@@ -71,6 +84,9 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         config_info::NAME => config_info::run(ctx, command).await,
         discord_user_info::NAME => discord_user_info::run(ctx, command).await,
         vrchat_user_info::NAME => vrchat_user_info::run(ctx, command).await,
+        vrchat_user_ban::NAME => vrchat_user_ban::run(ctx, command).await,
+        vrchat_user_unban::NAME => vrchat_user_unban::run(ctx, command).await,
+        vrchat_group::NAME => vrchat_group::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
             Ok(())
@@ -79,6 +95,78 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
     if let Err(err) = result {
         tracing::error!("Error handling command `{}`: {}", command.data.name, err);
     }
+}
+
+/// Everything a VRChat moderation-action command needs, gathered and
+/// permission-checked in one place since every such command in
+/// `ScarletDiscordCommands.java` repeats the same preamble: confirm the
+/// invoking Discord member has a linked VRChat account
+/// (`globalMetadata_getSnowflakeId`), then confirm that account holds the
+/// given VRChat group permission (`checkMemberHasVRChatPermission`).
+///
+/// **Not ported**: Java's `checkMemberHasScarletPermission` fallback (a
+/// per-server override that can grant a Scarlet-specific permission
+/// without needing the matching VRChat group role -- the role-to-Discord
+/// mapping config it depends on isn't ported, see PORTING.md) and
+/// `pendingModActions` (a dedup lock preventing two concurrent actions on
+/// the same target). Returns `Err(message)` with a ready-to-send ephemeral
+/// reply on the first failed precondition.
+pub(crate) struct ModerationContext {
+    pub client: Arc<scarlet_vrchat::client::VrChatClient>,
+    pub group_id: String,
+}
+
+/// Resolves the shared VRChat client and the configured group id, with no
+/// actor/permission check — for commands like `add-role`/`remove-role`
+/// whose Java originals (`VrchatGroups.addRole`/`removeRole`) don't call
+/// `checkMemberHasVRChatPermission` either, relying solely on Discord's own
+/// per-command permission settings (`@DefaultPerms`). Faithfully porting
+/// "no extra in-code gate" means not inventing one here.
+pub(crate) async fn vrchat_context(ctx: &Context) -> Result<ModerationContext, String> {
+    let settings = { ctx.data.read().await.get::<crate::data::SettingsKey>().cloned() }
+        .ok_or_else(|| "Settings are not available.".to_string())?;
+    let vrchat_slot = { ctx.data.read().await.get::<crate::data::VrChatClientKey>().cloned() }
+        .ok_or_else(|| "Scarlet isn't logged in to VRChat right now.".to_string())?;
+    let client = { vrchat_slot.read().await.clone() }.ok_or_else(|| "Scarlet isn't logged in to VRChat right now.".to_string())?;
+
+    let group_id: Option<String> = settings.store.get_object(scarlet_vrchat::client::GROUP_ID_KEY);
+    let group_id = group_id
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| "No VRChat group is configured (run Scarlet's setup wizard, or set `vrchat_group_id`).".to_string())?;
+
+    Ok(ModerationContext { client, group_id })
+}
+
+/// [`vrchat_context`] plus the linked-account and VRChat-group-permission
+/// checks that ban/unban's Java originals actually perform
+/// (`globalMetadata_getSnowflakeId` then `checkMemberHasVRChatPermission`).
+pub(crate) async fn moderation_context(
+    ctx: &Context,
+    command: &CommandInteraction,
+    permission: &str,
+) -> Result<ModerationContext, String> {
+    let scarlet_data = { ctx.data.read().await.get::<crate::data::ScarletDataKey>().cloned() }
+        .ok_or_else(|| "Scarlet data is not available.".to_string())?;
+    let context = vrchat_context(ctx).await?;
+
+    let actor_vrc_id = scarlet_data.global_get_snowflake_id(&command.user.id.to_string()).ok_or_else(|| {
+        format!(
+            "You must have linked ids to perform this action.\n(Use `/staff-list add` `vrchat-user`:*<your VRChat user ID>* `discord-user`:{} to accomplish this)",
+            command.user.mention()
+        )
+    })?;
+
+    let has_permission = context
+        .client
+        .user_has_group_permission(&context.group_id, &actor_vrc_id, permission)
+        .await
+        .map_err(|err| format!("Could not check your VRChat group permissions: {err}"))?;
+    if !has_permission {
+        return Err("You do not have permission to perform this action.\n||(Your admin can grant your linked VRChat account the relevant group permission.)||"
+            .to_string());
+    }
+
+    Ok(context)
 }
 
 /// Port of `MiscUtils.paginateOnLines`: splits `input` into chunks of at

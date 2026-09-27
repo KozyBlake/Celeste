@@ -953,8 +953,15 @@ impl Settings {
         let changed = match self.last_run_time.get_or_null() {
             None => true,
             Some(last_run_time) => {
+                // Java's `File.lastModified()` returns `0` (epoch) when the
+                // file doesn't exist, not "now" -- falling back to
+                // `Utc::now()` here would flip the meaning of "no settings
+                // file yet" from "definitely not modified after last run"
+                // to "just modified this instant", spuriously tripping the
+                // check below on every slow startup (PBKDF2 key derivation
+                // alone can take over a second in an unoptimized build).
                 let settings_modified: DateTime<Utc> =
-                    self.settings_file_last_modified.map(DateTime::<Utc>::from).unwrap_or_else(Utc::now);
+                    self.settings_file_last_modified.map(DateTime::<Utc>::from).unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
                 if settings_modified > last_run_time + chrono::Duration::milliseconds(1_000) {
                     true
                 } else {
