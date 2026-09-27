@@ -23,7 +23,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use scarlet_core::settings::file_valued::SettingKind;
+use scarlet_core::settings::file_valued::{SettingCategory, SettingKind};
 use scarlet_core::settings::Settings;
 
 use crate::state::UiState;
@@ -134,6 +134,11 @@ pub struct ScarletApp {
     /// columns; there's no persisted-order file in the Java version to
     /// match either, so this resets on restart there too).
     column_order: Vec<ColumnId>,
+    /// Which sidebar category the Settings tab currently shows, matching
+    /// the reference screenshots' left-hand category list (General/
+    /// Moderation/Notifications/Discord/Integrations/System) instead of one
+    /// long flat list of ~90 settings.
+    settings_category: SettingCategory,
 }
 
 impl ScarletApp {
@@ -147,6 +152,7 @@ impl ScarletApp {
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
             column_order: ColumnId::ALL.to_vec(),
+            settings_category: SettingCategory::General,
         }
     }
 
@@ -328,39 +334,65 @@ impl ScarletApp {
             ui.label("Settings unavailable (no settings store attached).");
             return;
         };
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for descriptor in settings.registry.all() {
-                ui.horizontal(|ui| {
-                    ui.label(descriptor.name());
-                    match descriptor.kind() {
-                        SettingKind::Boolean { .. } => {
-                            let mut value = descriptor.get_as_string() == "true";
-                            if ui.checkbox(&mut value, "").changed() {
-                                descriptor.set_from_string(&value.to_string(), "ui");
-                            }
-                        }
-                        SettingKind::IntegerRange { min, max, .. } => {
-                            let mut value: i32 = descriptor.get_as_string().parse().unwrap_or(*min);
-                            if ui.add(egui::Slider::new(&mut value, *min..=*max)).changed() {
-                                descriptor.set_from_string(&value.to_string(), "ui");
-                            }
-                        }
-                        _ => {
-                            let buf = self
-                                .settings_edit_buffers
-                                .entry(descriptor.id().to_string())
-                                .or_insert_with(|| descriptor.get_as_string());
-                            ui.text_edit_singleline(buf);
-                            if ui.button("Set").clicked() {
-                                descriptor.set_from_string(buf, "ui");
-                            }
-                        }
-                    }
-                });
+        let all = settings.registry.all();
+
+        egui::SidePanel::left("settings_categories").resizable(false).show_inside(ui, |ui| {
+            ui.add_space(4.0);
+            for category in SettingCategory::ALL {
+                let count = all.iter().filter(|d| d.category() == category).count();
+                let label = format!("{}  ({count})", category.label());
+                ui.selectable_value(&mut self.settings_category, category, label);
             }
-            if settings.registry.all().is_empty() {
-                ui.label("(No settings registered yet — Scarlet.java's ~40 settings fields aren't ported here yet, see PORTING.md.)");
-            }
+        });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            let category = self.settings_category;
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading(category.label());
+                ui.separator();
+                for descriptor in all.iter().filter(|d| d.category() == category) {
+                    ui.horizontal(|ui| {
+                        ui.label(descriptor.name());
+                        match descriptor.kind() {
+                            SettingKind::Boolean { .. } => {
+                                let mut value = descriptor.get_as_string() == "true";
+                                if ui.checkbox(&mut value, "").changed() {
+                                    descriptor.set_from_string(&value.to_string(), "ui");
+                                }
+                            }
+                            SettingKind::IntegerRange { min, max, .. } => {
+                                let mut value: i32 = descriptor.get_as_string().parse().unwrap_or(*min);
+                                if ui.add(egui::Slider::new(&mut value, *min..=*max)).changed() {
+                                    descriptor.set_from_string(&value.to_string(), "ui");
+                                }
+                            }
+                            SettingKind::Enum { variants, .. } => {
+                                let mut current = descriptor.get_as_string();
+                                egui::ComboBox::from_id_salt(descriptor.id()).selected_text(current.clone()).show_ui(ui, |ui| {
+                                    for variant in variants {
+                                        if ui.selectable_value(&mut current, variant.clone(), variant).changed() {
+                                            descriptor.set_from_string(variant, "ui");
+                                        }
+                                    }
+                                });
+                            }
+                            _ => {
+                                let buf = self
+                                    .settings_edit_buffers
+                                    .entry(descriptor.id().to_string())
+                                    .or_insert_with(|| descriptor.get_as_string());
+                                ui.text_edit_singleline(buf);
+                                if ui.button("Set").clicked() {
+                                    descriptor.set_from_string(buf, "ui");
+                                }
+                            }
+                        }
+                    });
+                }
+                if !all.iter().any(|d| d.category() == category) {
+                    ui.label("(No settings in this category.)");
+                }
+            });
         });
     }
 

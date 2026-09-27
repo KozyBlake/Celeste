@@ -29,6 +29,43 @@ use std::sync::{Arc, Mutex};
 use crate::change_listener::ListenerList;
 use crate::settings::store::SettingsStore;
 
+/// Which sidebar section a setting belongs to in the Settings tab. The
+/// Java Swing settings panel groups its ~40+ `FileValued` fields under
+/// tabs/sections informally (declaration order + comments); this makes
+/// that grouping an explicit, queryable property instead of leaving the UI
+/// to guess from id prefixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SettingCategory {
+    General,
+    Moderation,
+    Notifications,
+    Discord,
+    Integrations,
+    System,
+}
+
+impl SettingCategory {
+    pub const ALL: [SettingCategory; 6] = [
+        SettingCategory::General,
+        SettingCategory::Moderation,
+        SettingCategory::Notifications,
+        SettingCategory::Discord,
+        SettingCategory::Integrations,
+        SettingCategory::System,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            SettingCategory::General => "General",
+            SettingCategory::Moderation => "Moderation",
+            SettingCategory::Notifications => "Notifications",
+            SettingCategory::Discord => "Discord",
+            SettingCategory::Integrations => "Integrations",
+            SettingCategory::System => "System",
+        }
+    }
+}
+
 /// Type-erased description of a [`FileValued`]'s shape, replacing Java's
 /// `FileValuedVisitor` double-dispatch (see module docs).
 pub enum SettingKind {
@@ -54,6 +91,7 @@ pub trait SettingDescriptor: Send + Sync {
     fn id(&self) -> &str;
     fn name(&self) -> &str;
     fn kind(&self) -> &SettingKind;
+    fn category(&self) -> SettingCategory;
     /// Renders the current value as a string, for generic display.
     fn get_as_string(&self) -> String;
     /// Parses and applies a string value (e.g. from a Discord option or a
@@ -71,6 +109,7 @@ pub struct FileValued<T> {
     cached: Mutex<Option<T>>,
     listeners: ListenerList<Option<T>>,
     kind: SettingKind,
+    category: SettingCategory,
 }
 
 impl<T> FileValued<T>
@@ -82,6 +121,7 @@ where
         registry: &SettingsRegistry,
         id: impl Into<String>,
         name: impl Into<String>,
+        category: SettingCategory,
         validate: impl Fn(T) -> Option<T> + Send + Sync + 'static,
         if_null: impl Fn() -> T + Send + Sync + 'static,
         kind: SettingKind,
@@ -97,6 +137,7 @@ where
             cached: Mutex::new(None),
             listeners: ListenerList::new(),
             kind,
+            category,
         })
     }
 
@@ -108,6 +149,9 @@ where
     }
     pub fn kind(&self) -> &SettingKind {
         &self.kind
+    }
+    pub fn category(&self) -> SettingCategory {
+        self.category
     }
     pub fn listeners(&self) -> &ListenerList<Option<T>> {
         &self.listeners
@@ -160,6 +204,9 @@ where
     }
     fn kind(&self) -> &SettingKind {
         &self.kind
+    }
+    fn category(&self) -> SettingCategory {
+        self.category
     }
     fn get_as_string(&self) -> String {
         self.get().to_string_value()
@@ -256,17 +303,26 @@ impl SettingsRegistry {
         self.entries.lock().unwrap().clone()
     }
 
-    pub fn boolean(&self, id: &str, name: &str, default: bool) -> Arc<FileValued<bool>> {
-        let fv = FileValued::new(self, id, name, Some, move || default, SettingKind::Boolean { default });
+    pub fn boolean(&self, id: &str, name: &str, category: SettingCategory, default: bool) -> Arc<FileValued<bool>> {
+        let fv = FileValued::new(self, id, name, category, Some, move || default, SettingKind::Boolean { default });
         self.record(fv.clone());
         fv
     }
 
-    pub fn int_range(&self, id: &str, name: &str, default: i32, min: i32, max: i32) -> Arc<FileValued<i32>> {
+    pub fn int_range(
+        &self,
+        id: &str,
+        name: &str,
+        category: SettingCategory,
+        default: i32,
+        min: i32,
+        max: i32,
+    ) -> Arc<FileValued<i32>> {
         let fv = FileValued::new(
             self,
             id,
             name,
+            category,
             move |v| Some(crate::maths::clamp_i32(v, min, max)),
             move || default,
             SettingKind::IntegerRange { default, min, max },
@@ -280,6 +336,7 @@ impl SettingsRegistry {
         &self,
         id: &str,
         name: &str,
+        category: SettingCategory,
         default: &str,
         valid_values: impl Fn() -> Vec<String> + Send + Sync + 'static,
     ) -> Arc<FileValued<String>> {
@@ -290,6 +347,7 @@ impl SettingsRegistry {
             self,
             id,
             name,
+            category,
             move |v| if vv().contains(&v) { Some(v) } else { None },
             move || default_owned.clone(),
             SettingKind::StringChoice { valid_values: valid_values as Arc<dyn Fn() -> Vec<String> + Send + Sync> },
@@ -299,10 +357,12 @@ impl SettingsRegistry {
     }
 
     /// Port of `FileValuedStringPattern`.
+    #[allow(clippy::too_many_arguments)]
     pub fn string_pattern(
         &self,
         id: &str,
         name: &str,
+        category: SettingCategory,
         default: &str,
         pattern: Option<&str>,
         lenient: bool,
@@ -313,6 +373,7 @@ impl SettingsRegistry {
             self,
             id,
             name,
+            category,
             validate,
             move || default_owned.clone(),
             SettingKind::StringPattern { pattern: pattern.map(str::to_string), lenient },
@@ -322,10 +383,12 @@ impl SettingsRegistry {
     }
 
     /// Port of `FileValuedStringArrayPattern`.
+    #[allow(clippy::too_many_arguments)]
     pub fn string_array_pattern(
         &self,
         id: &str,
         name: &str,
+        category: SettingCategory,
         default: Vec<String>,
         pattern: Option<&str>,
         lenient: bool,
@@ -335,9 +398,34 @@ impl SettingsRegistry {
             self,
             id,
             name,
+            category,
             validate,
             move || default.clone(),
             SettingKind::StringArrayPattern { pattern: pattern.map(str::to_string), lenient },
+        );
+        self.record(fv.clone());
+        fv
+    }
+
+    /// Port of `FileValuedEnum`. Java's validate is `UnaryOperator.identity()`
+    /// (any successfully-deserialized enum value is accepted; an invalid
+    /// stored string simply fails JSON deserialization earlier, in
+    /// `FileValued.get()`, and falls back to the default) — preserved as-is
+    /// rather than re-validating against `variants` here.
+    pub fn enum_setting<T>(&self, id: &str, name: &str, category: SettingCategory, default: T, variants: &[T]) -> Arc<FileValued<T>>
+    where
+        T: Clone + PartialEq + Send + Sync + serde::Serialize + serde::de::DeserializeOwned + ToStringValue + FromStringValue + 'static,
+    {
+        let variant_strings: Vec<String> = variants.iter().map(ToStringValue::to_string_value).collect();
+        let default_string = default.to_string_value();
+        let fv = FileValued::new(
+            self,
+            id,
+            name,
+            category,
+            Some,
+            move || default.clone(),
+            SettingKind::Enum { default: default_string, variants: variant_strings },
         );
         self.record(fv.clone());
         fv
@@ -400,7 +488,7 @@ mod tests {
     #[test]
     fn boolean_defaults_and_persists() {
         let (_dir, reg) = registry();
-        let setting = reg.boolean("ui_confirm_group_invite", "Confirm group invite", false);
+        let setting = reg.boolean("ui_confirm_group_invite", "Confirm group invite", SettingCategory::General, false);
         assert!(!setting.get());
         assert!(setting.set(Some(true), "test"));
         assert!(setting.get());
@@ -409,7 +497,7 @@ mod tests {
     #[test]
     fn int_range_clamps_but_matches_javas_cache_quirk() {
         let (_dir, reg) = registry();
-        let setting = reg.int_range("heuristicKickCount", "Heuristic Kick Count", 3, 1, 10);
+        let setting = reg.int_range("heuristicKickCount", "Heuristic Kick Count", SettingCategory::General, 3, 1, 10);
         assert_eq!(setting.get(), 3);
         // The Java FileValuedIntRange.set() caches/persists the *unclamped*
         // value_ even though `validate` (Maths.clamp) never returns null
@@ -423,9 +511,9 @@ mod tests {
     #[test]
     fn duplicate_id_panics() {
         let (_dir, reg) = registry();
-        let _a = reg.boolean("dup", "A", true);
+        let _a = reg.boolean("dup", "A", SettingCategory::General, true);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            reg.boolean("dup", "B", false)
+            reg.boolean("dup", "B", SettingCategory::General, false)
         }));
         assert!(result.is_err());
     }
@@ -433,7 +521,7 @@ mod tests {
     #[test]
     fn string_choice_rejects_invalid_values() {
         let (_dir, reg) = registry();
-        let setting = reg.string_choice("ui_language", "Language", "system", || {
+        let setting = reg.string_choice("ui_language", "Language", SettingCategory::General, "system", || {
             vec!["system".to_string(), "en".to_string(), "ru".to_string()]
         });
         assert!(setting.set(Some("en".to_string()), "test"));
@@ -446,7 +534,7 @@ mod tests {
     #[test]
     fn string_pattern_lenient_extracts_first_match() {
         let (_dir, reg) = registry();
-        let setting = reg.string_pattern("verified_role_snowflake", "Role", "0", Some(r"\d{1,20}"), true);
+        let setting = reg.string_pattern("verified_role_snowflake", "Role", SettingCategory::General, "0", Some(r"\d{1,20}"), true);
         assert!(setting.set(Some("role:123456789".to_string()), "test"));
         // Same cache/persist-the-raw-value quirk as the int-range test above:
         // Java's FileValued.set() caches/persists `value_` (the raw input),
@@ -459,7 +547,7 @@ mod tests {
     #[test]
     fn string_pattern_lenient_extraction_reaches_listeners() {
         let (_dir, reg) = registry();
-        let setting = reg.string_pattern("verified_role_snowflake", "Role", "0", Some(r"\d{1,20}"), true);
+        let setting = reg.string_pattern("verified_role_snowflake", "Role", SettingCategory::General, "0", Some(r"\d{1,20}"), true);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
         let seen2 = seen.clone();
         setting.listeners().register("l", 0, false, move |_prev, next, _valid, _src| {
@@ -472,7 +560,7 @@ mod tests {
     #[test]
     fn string_pattern_strict_rejects_partial_match() {
         let (_dir, reg) = registry();
-        let setting = reg.string_pattern("role", "Role", "0", Some(r"\d{1,20}"), false);
+        let setting = reg.string_pattern("role", "Role", SettingCategory::General, "0", Some(r"\d{1,20}"), false);
         assert!(!setting.set(Some("role:123".to_string()), "test"));
     }
 
@@ -484,7 +572,7 @@ mod tests {
         // exercises FileValuedStringArrayPattern's own validation logic.
         let world_id_pattern = r"^wrld_[0-9a-f-]{36}$";
         let (_dir, reg) = registry();
-        let setting = reg.string_array_pattern("worlds", "Worlds", vec![], Some(world_id_pattern), true);
+        let setting = reg.string_array_pattern("worlds", "Worlds", SettingCategory::General, vec![], Some(world_id_pattern), true);
         assert!(setting.set(
             Some(vec!["wrld_11111111-1111-1111-1111-111111111111".to_string()]),
             "test"
@@ -495,7 +583,7 @@ mod tests {
     #[test]
     fn change_listener_fires_on_valid_change() {
         let (_dir, reg) = registry();
-        let setting = reg.boolean("flag", "Flag", false);
+        let setting = reg.boolean("flag", "Flag", SettingCategory::General, false);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
         let seen2 = seen.clone();
         setting.listeners().register("test-listener", 0, false, move |_prev, next, valid, _src| {
@@ -508,7 +596,7 @@ mod tests {
     #[test]
     fn descriptor_get_set_from_string_round_trips() {
         let (_dir, reg) = registry();
-        let setting = reg.boolean("flag", "Flag", false);
+        let setting = reg.boolean("flag", "Flag", SettingCategory::General, false);
         let descriptor: Arc<dyn SettingDescriptor> = setting.clone();
         assert_eq!(descriptor.get_as_string(), "false");
         assert!(descriptor.set_from_string("true", "cmd"));
