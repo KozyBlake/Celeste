@@ -18,6 +18,8 @@ pub mod config_info;
 pub mod discord_user_info;
 pub mod discord_warn;
 pub mod export_log;
+pub mod set_event_channel;
+pub mod set_tts_voice;
 pub mod moderation_tags;
 pub mod secret_staff_list;
 pub mod staff_list;
@@ -176,6 +178,11 @@ pub async fn register_global_commands(ctx: &Context) {
         unlink_vrchat_account_for::register(),
         discord_warn::register(),
         export_log::register(),
+        set_event_channel::register(set_event_channel::RouteKind::Audit),
+        set_event_channel::register(set_event_channel::RouteKind::Extended),
+        set_event_channel::register(set_event_channel::RouteKind::SecretAudit),
+        set_event_channel::register(set_event_channel::RouteKind::SecretExtended),
+        set_tts_voice::register(),
     ];
     if let Err(err) =
         serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
@@ -207,6 +214,11 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         unlink_vrchat_account_for::NAME => unlink_vrchat_account_for::run(ctx, command).await,
         discord_warn::NAME => discord_warn::run(ctx, command).await,
         export_log::NAME => export_log::run(ctx, command).await,
+        set_event_channel::AUDIT_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::Audit).await,
+        set_event_channel::EXTENDED_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::Extended).await,
+        set_event_channel::SECRET_AUDIT_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::SecretAudit).await,
+        set_event_channel::SECRET_EXTENDED_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::SecretExtended).await,
+        set_tts_voice::NAME => set_tts_voice::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
             Ok(())
