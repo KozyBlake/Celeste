@@ -36,6 +36,13 @@ serenity = { version = "0.12", default-features = false, features = [
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 lru = "0.12"
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+rand = "0.8"
+base64 = "0.22"
+regex = "1"
 
 scarlet-core = { path = "crates/scarlet-core" }
 scarlet-gif = { path = "crates/scarlet-gif" }
