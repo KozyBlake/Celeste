@@ -25,7 +25,10 @@ pub mod vrchat_search;
 pub mod vrchat_user_ban;
 pub mod vrchat_user_info;
 pub mod vrchat_user_unban;
+pub mod watched_avatar;
+pub mod watched_entity;
 pub mod watched_group;
+pub mod watched_user;
 
 use std::sync::Arc;
 
@@ -81,6 +84,8 @@ pub async fn register_global_commands(ctx: &Context) {
         secret_staff_list::register(),
         moderation_tags::register(),
         watched_group::register(),
+        watched_user::register(),
+        watched_avatar::register(),
     ];
     if let Err(err) = serenity::model::application::Command::set_global_commands(&ctx.http, commands).await {
         tracing::error!("Failed to register global slash commands: {}", err);
@@ -102,6 +107,8 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         secret_staff_list::NAME => secret_staff_list::run(ctx, command).await,
         moderation_tags::NAME => moderation_tags::run(ctx, command).await,
         watched_group::NAME => watched_group::run(ctx, command).await,
+        watched_user::NAME => watched_user::run(ctx, command).await,
+        watched_avatar::NAME => watched_avatar::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
             Ok(())

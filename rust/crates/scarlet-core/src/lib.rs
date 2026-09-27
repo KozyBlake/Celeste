@@ -19,4 +19,5 @@ pub mod settings;
 pub mod staff_list;
 pub mod trust_rank;
 pub mod unique_strings;
+pub mod watched_entities;
 pub mod watched_groups;

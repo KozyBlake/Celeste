@@ -140,6 +140,8 @@ pub struct ScarletApp {
     secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
     moderation_tags: Arc<scarlet_core::moderation_tags::ModerationTags>,
     watched_groups: Arc<scarlet_core::watched_groups::WatchedGroups>,
+    watched_users: Arc<scarlet_core::watched_entities::WatchedEntities>,
+    watched_avatars: Arc<scarlet_core::watched_entities::WatchedEntities>,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -164,6 +166,16 @@ impl ScarletApp {
         let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
         let moderation_tags = Arc::new(scarlet_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json"));
         let watched_groups = Arc::new(scarlet_core::watched_groups::WatchedGroups::open(&data_dir, "watched_groups.json"));
+        let watched_users = Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
+            &data_dir,
+            "watched_users.json",
+            scarlet_core::watched_entities::is_valid_user_id,
+        ));
+        let watched_avatars = Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
+            &data_dir,
+            "watched_avatars.json",
+            scarlet_core::watched_entities::is_valid_avatar_id,
+        ));
         let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
@@ -196,6 +208,8 @@ impl ScarletApp {
                         secret_staff_list: secret_staff_list.clone(),
                         moderation_tags: moderation_tags.clone(),
                         watched_groups: watched_groups.clone(),
+                        watched_users: watched_users.clone(),
+                        watched_avatars: watched_avatars.clone(),
                     },
                 ));
                 staff_mode
@@ -218,6 +232,8 @@ impl ScarletApp {
             secret_staff_list,
             moderation_tags,
             watched_groups,
+            watched_users,
+            watched_avatars,
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -551,6 +567,8 @@ impl eframe::App for ScarletApp {
                             secret_staff_list: self.secret_staff_list.clone(),
                             moderation_tags: self.moderation_tags.clone(),
                             watched_groups: self.watched_groups.clone(),
+                            watched_users: self.watched_users.clone(),
+                            watched_avatars: self.watched_avatars.clone(),
                         },
                     ));
                 }

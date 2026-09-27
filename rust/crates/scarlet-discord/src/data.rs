@@ -62,6 +62,18 @@ impl TypeMapKey for WatchedGroupsKey {
     type Value = Arc<scarlet_core::watched_groups::WatchedGroups>;
 }
 
+/// Port of `Scarlet.watchedUsers` (`watched_users.json`).
+pub struct WatchedUsersKey;
+impl TypeMapKey for WatchedUsersKey {
+    type Value = Arc<scarlet_core::watched_entities::WatchedEntities>;
+}
+
+/// Port of `Scarlet.watchedAvatars` (`watched_avatars.json`).
+pub struct WatchedAvatarsKey;
+impl TypeMapKey for WatchedAvatarsKey {
+    type Value = Arc<scarlet_core::watched_entities::WatchedEntities>;
+}
+
 /// Every piece of shared app state a command handler might need, bundled so
 /// `connect_and_serve` (and its callers in `scarlet`/`scarlet-ui`) take one
 /// value instead of an ever-growing positional-argument list as more of
@@ -75,6 +87,8 @@ pub struct SharedState {
     pub secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
     pub moderation_tags: Arc<scarlet_core::moderation_tags::ModerationTags>,
     pub watched_groups: Arc<scarlet_core::watched_groups::WatchedGroups>,
+    pub watched_users: Arc<scarlet_core::watched_entities::WatchedEntities>,
+    pub watched_avatars: Arc<scarlet_core::watched_entities::WatchedEntities>,
 }
 
 impl SharedState {
@@ -86,5 +100,7 @@ impl SharedState {
         data.insert::<SecretStaffListKey>(self.secret_staff_list);
         data.insert::<ModerationTagsKey>(self.moderation_tags);
         data.insert::<WatchedGroupsKey>(self.watched_groups);
+        data.insert::<WatchedUsersKey>(self.watched_users);
+        data.insert::<WatchedAvatarsKey>(self.watched_avatars);
     }
 }
