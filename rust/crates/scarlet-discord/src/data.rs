@@ -241,6 +241,23 @@ impl DiscordConfigStore {
         self.save()
     }
 
+    pub fn json(&self, field: &str) -> Option<serde_json::Value> {
+        self.value.lock().unwrap().get(field).cloned()
+    }
+
+    pub fn update_json(
+        &self,
+        fields: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
+    ) -> anyhow::Result<()> {
+        {
+            let mut root = self.value.lock().unwrap();
+            for (field, value) in fields {
+                root.insert(field.to_string(), value);
+            }
+        }
+        self.save()
+    }
+
     fn save(&self) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&*self.value.lock().unwrap())?;
         Ok(scarlet_core::file_backups::write(&self.file, &json)?)

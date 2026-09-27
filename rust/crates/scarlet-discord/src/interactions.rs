@@ -598,6 +598,12 @@ async fn create_instance(
 }
 
 pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
+    if interaction.data.custom_id == crate::commands::ticket_config::MESSAGE_MODAL_ID {
+        if let Err(err) = handle_ticket_message_modal(ctx, interaction).await {
+            tracing::error!("Error handling Ticket Tool message modal: {err}");
+        }
+        return;
+    }
     if matches!(
         interaction.data.custom_id.as_str(),
         "vrchat-user-ban-multi" | "vrchat-user-unban-multi"
@@ -632,6 +638,38 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
     }
+}
+
+async fn handle_ticket_message_modal(
+    ctx: &Context,
+    interaction: &ModalInteraction,
+) -> serenity::Result<()> {
+    let message =
+        crate::commands::ticket_config::normalized_message(&modal_text(interaction, "message"));
+    let config = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::DiscordConfigKey>()
+            .cloned()
+    };
+    let Some(config) = config else {
+        return ephemeral_modal(ctx, interaction, "Discord configuration is unavailable.").await;
+    };
+    if let Err(err) = config.set_string("ticketToolAgeVerificationMessage", Some(&message)) {
+        return ephemeral_modal(
+            ctx,
+            interaction,
+            format!("Could not save Ticket Tool message: {err}"),
+        )
+        .await;
+    }
+    ephemeral_modal(
+        ctx,
+        interaction,
+        format!("Ticket Tool age-verification auto-response message updated:\n\n{message}"),
+    )
+    .await
 }
 
 fn find_user_ids(input: &str) -> Vec<String> {

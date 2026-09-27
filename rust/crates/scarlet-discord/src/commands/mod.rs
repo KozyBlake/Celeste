@@ -21,6 +21,7 @@ pub mod export_log;
 pub mod set_event_channel;
 pub mod set_tts_voice;
 pub mod server_config;
+pub mod ticket_config;
 pub mod aux_webhooks;
 pub mod moderation_tags;
 pub mod secret_staff_list;
@@ -192,6 +193,8 @@ pub async fn register_global_commands(ctx: &Context) {
         server_config::register_channel(server_config::ChannelSetting::ActionLog),
         server_config::register_account_age(),
         server_config::register_auto_invite(),
+        ticket_config::register_auto_response(),
+        ticket_config::register_message(),
     ];
     if let Err(err) =
         serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
@@ -235,6 +238,8 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         server_config::ACTION_LOG_NAME => server_config::run_channel(ctx, command, server_config::ChannelSetting::ActionLog).await,
         server_config::ACCOUNT_AGE_NAME => server_config::run_account_age(ctx, command).await,
         server_config::AUTO_INVITE_NAME => server_config::run_auto_invite(ctx, command).await,
+        ticket_config::AUTO_RESPONSE_NAME => ticket_config::run_auto_response(ctx, command).await,
+        ticket_config::MESSAGE_NAME => ticket_config::run_message(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
             Ok(())
