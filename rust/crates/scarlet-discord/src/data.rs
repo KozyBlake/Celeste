@@ -49,3 +49,9 @@ pub struct SecretStaffListKey;
 impl TypeMapKey for SecretStaffListKey {
     type Value = Arc<scarlet_core::staff_list::StaffList>;
 }
+
+/// Port of `Scarlet.moderationTags` (`moderation_tags.json`).
+pub struct ModerationTagsKey;
+impl TypeMapKey for ModerationTagsKey {
+    type Value = Arc<scarlet_core::moderation_tags::ModerationTags>;
+}

@@ -138,6 +138,7 @@ pub struct ScarletApp {
     scarlet_data: Arc<scarlet_core::data::ScarletData>,
     staff_list: Arc<scarlet_core::staff_list::StaffList>,
     secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
+    moderation_tags: Arc<scarlet_core::moderation_tags::ModerationTags>,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -160,6 +161,7 @@ impl ScarletApp {
         let scarlet_data = Arc::new(scarlet_core::data::ScarletData::open(&data_dir));
         let staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json"));
         let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
+        let moderation_tags = Arc::new(scarlet_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json"));
         let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
@@ -189,6 +191,7 @@ impl ScarletApp {
                     settings.clone(),
                     staff_list.clone(),
                     secret_staff_list.clone(),
+                    moderation_tags.clone(),
                 ));
                 staff_mode
             }
@@ -208,6 +211,7 @@ impl ScarletApp {
             scarlet_data,
             staff_list,
             secret_staff_list,
+            moderation_tags,
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -538,6 +542,7 @@ impl eframe::App for ScarletApp {
                         settings,
                         self.staff_list.clone(),
                         self.secret_staff_list.clone(),
+                        self.moderation_tags.clone(),
                     ));
                 }
                 self.wizard = None;

@@ -10,7 +10,9 @@ use std::sync::Arc;
 use serenity::client::Client;
 use serenity::model::gateway::GatewayIntents;
 
-use crate::data::{ScarletDataKey, SecretStaffListKey, SettingsKey, SharedVrChatClient, StaffListKey, VrChatClientKey};
+use crate::data::{
+    ModerationTagsKey, ScarletDataKey, SecretStaffListKey, SettingsKey, SharedVrChatClient, StaffListKey, VrChatClientKey,
+};
 use crate::handler::Handler;
 use crate::token::normalize_discord_bot_token;
 
@@ -58,6 +60,7 @@ pub async fn connect_and_serve(
     settings: Arc<scarlet_core::settings::Settings>,
     staff_list: Arc<scarlet_core::staff_list::StaffList>,
     secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
+    moderation_tags: Arc<scarlet_core::moderation_tags::ModerationTags>,
 ) {
     match token {
         Some(token) if !token.trim().is_empty() => {
@@ -74,6 +77,7 @@ pub async fn connect_and_serve(
                         data.insert::<SettingsKey>(settings);
                         data.insert::<StaffListKey>(staff_list);
                         data.insert::<SecretStaffListKey>(secret_staff_list);
+                        data.insert::<ModerationTagsKey>(moderation_tags);
                     }
                     if let Err(err) = client.start().await {
                         tracing::error!("Discord client error: {}", err);

@@ -12,6 +12,7 @@ pub mod json_cache;
 pub mod log;
 pub mod maths;
 pub mod meta;
+pub mod moderation_tags;
 pub mod permission;
 pub mod secure_store;
 pub mod settings;
