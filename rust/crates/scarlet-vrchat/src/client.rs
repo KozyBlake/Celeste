@@ -156,17 +156,172 @@ impl VrChatClient {
             .query(&[("n", n.to_string()), ("offset", offset.to_string())])
             .send()
             .await?;
-        let status = response.status();
-        let body = response.text().await?;
-        if !status.is_success() {
-            return Err(VrChatError::Api { status, body });
-        }
-        serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
+        Self::parse_response(response).await
     }
 
     /// Port of `getUser(String userId)`: `GET /users/{userId}`.
     pub async fn get_user(&self, user_id: &str) -> Result<crate::models::User, VrChatError> {
         let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    // ---- groups (moderation surface) ----
+    //
+    // Every endpoint below has its exact path, method, and request/response
+    // shape confirmed against the community-maintained OpenAPI spec
+    // (github.com/vrchatapi/specification) rather than guessed -- VRChat's
+    // API has no official documentation, and getting these wrong silently
+    // (a mismatched field name deserializing to `None`/default instead of
+    // erroring) would be a much worse failure mode than not having the
+    // endpoint at all.
+
+    /// Port of `getGroup(String groupId, Boolean includeRoles)`: `GET
+    /// /groups/{groupId}[?includeRoles=true]`.
+    pub async fn get_group(&self, group_id: &str, include_roles: bool) -> Result<crate::models::Group, VrChatError> {
+        let mut request = self.http.get(self.url(&format!("/groups/{group_id}")));
+        if include_roles {
+            request = request.query(&[("includeRoles", "true")]);
+        }
+        Self::parse_response(request.send().await?).await
+    }
+
+    /// Port of `getGroupRoles(String groupId)`: `GET /groups/{groupId}/roles`.
+    pub async fn get_group_roles(&self, group_id: &str) -> Result<Vec<crate::models::GroupRole>, VrChatError> {
+        let response = self.http.get(self.url(&format!("/groups/{group_id}/roles"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `getGroupBans(String groupId, int limit)`: `GET
+    /// /groups/{groupId}/bans`.
+    pub async fn get_group_bans(&self, group_id: &str, n: u32, offset: u32) -> Result<Vec<crate::models::GroupMember>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/bans")))
+            .query(&[("n", n.to_string()), ("offset", offset.to_string())])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `banFromGroup(String targetUserId)`: `POST
+    /// /groups/{groupId}/bans` with `{"userId": ...}`.
+    pub async fn ban_from_group(&self, group_id: &str, user_id: &str) -> Result<crate::models::GroupMember, VrChatError> {
+        let response = self
+            .http
+            .post(self.url(&format!("/groups/{group_id}/bans")))
+            .json(&serde_json::json!({ "userId": user_id }))
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `unbanFromGroup(String targetUserId)`: `DELETE
+    /// /groups/{groupId}/bans/{userId}`.
+    pub async fn unban_from_group(&self, group_id: &str, user_id: &str) -> Result<crate::models::GroupMember, VrChatError> {
+        let response = self.http.delete(self.url(&format!("/groups/{group_id}/bans/{user_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `getGroupMembership(String groupId, String targetUserId)`:
+    /// `GET /groups/{groupId}/members/{userId}`. Returns `Ok(None)` (not an
+    /// error) when the response body is JSON `null`, matching the spec's
+    /// documented "returns a GroupMember, or null when not a member".
+    pub async fn get_group_member(&self, group_id: &str, user_id: &str) -> Result<Option<crate::models::GroupMember>, VrChatError> {
+        let response = self.http.get(self.url(&format!("/groups/{group_id}/members/{user_id}"))).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        let value: Value = serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        serde_json::from_value(value).map(Some).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
+    }
+
+    /// Port of `searchGroupMembers(String groupId, String query, int limit)`:
+    /// `GET /groups/{groupId}/members/search?query=...`. VRChat requires
+    /// `query` to be at least 3 characters (a spec-documented constraint,
+    /// not enforced client-side here -- a too-short query is a normal `400`
+    /// from the API, surfaced as [`VrChatError::Api`] like any other).
+    pub async fn search_group_members(
+        &self,
+        group_id: &str,
+        query: &str,
+        n: u32,
+        offset: u32,
+    ) -> Result<crate::models::GroupMemberSearchResult, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/members/search")))
+            .query(&[("query", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of the kick half of group member management: `DELETE
+    /// /groups/{groupId}/members/{userId}`.
+    pub async fn kick_group_member(&self, group_id: &str, user_id: &str) -> Result<(), VrChatError> {
+        let response = self.http.delete(self.url(&format!("/groups/{group_id}/members/{user_id}"))).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        Ok(())
+    }
+
+    /// Port of `addGroupRole(String groupId, String targetUserId, String
+    /// groupRoleId)`: `PUT /groups/{groupId}/members/{userId}/roles/{roleId}`,
+    /// returning the member's full role id list afterward.
+    pub async fn add_group_member_role(&self, group_id: &str, user_id: &str, role_id: &str) -> Result<Vec<String>, VrChatError> {
+        let response =
+            self.http.put(self.url(&format!("/groups/{group_id}/members/{user_id}/roles/{role_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `removeGroupRole(String groupId, String targetUserId, String
+    /// groupRoleId)`: `DELETE /groups/{groupId}/members/{userId}/roles/{roleId}`.
+    pub async fn remove_group_member_role(&self, group_id: &str, user_id: &str, role_id: &str) -> Result<Vec<String>, VrChatError> {
+        let response =
+            self.http.delete(self.url(&format!("/groups/{group_id}/members/{user_id}/roles/{role_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    // ---- worlds / avatars / instances ----
+
+    /// Port of `getWorld(String worldId)`: `GET /worlds/{worldId}`.
+    pub async fn get_world(&self, world_id: &str) -> Result<crate::models::World, VrChatError> {
+        let response = self.http.get(self.url(&format!("/worlds/{world_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `getAvatar(String avatarId)`: `GET /avatars/{avatarId}`.
+    pub async fn get_avatar(&self, avatar_id: &str) -> Result<crate::models::Avatar, VrChatError> {
+        let response = self.http.get(self.url(&format!("/avatars/{avatar_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `getInstance(String worldId, String instanceId)`: `GET
+    /// /instances/{worldId}:{instanceId}`.
+    pub async fn get_instance(&self, world_id: &str, instance_id: &str) -> Result<crate::models::Instance, VrChatError> {
+        let response = self.http.get(self.url(&format!("/instances/{world_id}:{instance_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `closeInstance(String worldId, String instanceId, ...)`:
+    /// `DELETE /instances/{worldId}:{instanceId}`. Java also accepts
+    /// optional `hardClose`/`closedAt` parameters; not ported here (not
+    /// confirmed against the spec yet) -- a plain close is still a real,
+    /// working close, just without those two knobs.
+    pub async fn close_instance(&self, world_id: &str, instance_id: &str) -> Result<crate::models::Instance, VrChatError> {
+        let response = self.http.delete(self.url(&format!("/instances/{world_id}:{instance_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    async fn parse_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T, VrChatError> {
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -340,5 +495,193 @@ mod tests {
             VrChatError::Api { status, .. } => assert_eq!(status, StatusCode::UNAUTHORIZED),
             other => panic!("expected Api error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn get_group_parses_with_and_without_roles() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1"))
+            .and(query_param("includeRoles", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "grp_1",
+                "name": "Test Group",
+                "memberCount": 5,
+                "onlineMemberCount": 2,
+                "roles": [{"id": "grol_1", "name": "Member", "permissions": []}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let group = client.get_group("grp_1", true).await.unwrap();
+        assert_eq!(group.name, "Test Group");
+        assert_eq!(group.member_count, 5);
+        assert_eq!(group.roles.unwrap()[0].name, "Member");
+    }
+
+    #[tokio::test]
+    async fn ban_and_unban_round_trip_through_the_bans_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/groups/grp_1/bans"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gmem_1", "groupId": "grp_1", "userId": "usr_2", "roleIds": []
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/groups/grp_1/bans/usr_2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gmem_1", "groupId": "grp_1", "userId": "usr_2", "roleIds": []
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let banned = client.ban_from_group("grp_1", "usr_2").await.unwrap();
+        assert_eq!(banned.user_id.as_deref(), Some("usr_2"));
+        let unbanned = client.unban_from_group("grp_1", "usr_2").await.unwrap();
+        assert_eq!(unbanned.user_id.as_deref(), Some("usr_2"));
+    }
+
+    #[tokio::test]
+    async fn get_group_member_returns_none_for_a_json_null_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/members/usr_2"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert!(client.get_group_member("grp_1", "usr_2").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_group_member_parses_a_real_member() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/members/usr_2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gmem_1", "groupId": "grp_1", "userId": "usr_2", "roleIds": ["grol_1"]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let member = client.get_group_member("grp_1", "usr_2").await.unwrap().unwrap();
+        assert_eq!(member.role_ids, vec!["grol_1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn search_group_members_parses_results_and_total() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/members/search"))
+            .and(query_param("query", "ali"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{"id": "gmem_1", "userId": "usr_2", "roleIds": []}],
+                "total": 1
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let result = client.search_group_members("grp_1", "ali", 10, 0).await.unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.results[0].user_id.as_deref(), Some("usr_2"));
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_group_member_role_return_the_role_id_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/groups/grp_1/members/usr_2/roles/grol_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(["grol_1", "grol_2"])))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/groups/grp_1/members/usr_2/roles/grol_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(["grol_2"])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let after_add = client.add_group_member_role("grp_1", "usr_2", "grol_1").await.unwrap();
+        assert_eq!(after_add, vec!["grol_1".to_string(), "grol_2".to_string()]);
+        let after_remove = client.remove_group_member_role("grp_1", "usr_2", "grol_1").await.unwrap();
+        assert_eq!(after_remove, vec!["grol_2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn kick_group_member_succeeds_on_a_2xx_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/groups/grp_1/members/usr_2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": {"message": "ok"}})))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        client.kick_group_member("grp_1", "usr_2").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_world_parses_a_real_world() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/worlds/wrld_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "wrld_1", "name": "Test World", "capacity": 16
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let world = client.get_world("wrld_1").await.unwrap();
+        assert_eq!(world.name, "Test World");
+        assert_eq!(world.capacity, Some(16));
+    }
+
+    #[tokio::test]
+    async fn get_avatar_parses_a_real_avatar() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/avatars/avtr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "avtr_1", "name": "Test Avatar"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let avatar = client.get_avatar("avtr_1").await.unwrap();
+        assert_eq!(avatar.name, "Test Avatar");
+    }
+
+    #[tokio::test]
+    async fn get_and_close_instance_hit_the_colon_delimited_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/instances/wrld_1:12345"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "worldId": "wrld_1", "instanceId": "12345", "userCount": 3
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/instances/wrld_1:12345"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "worldId": "wrld_1", "instanceId": "12345", "closed": true
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let instance = client.get_instance("wrld_1", "12345").await.unwrap();
+        assert_eq!(instance.user_count, Some(3));
+        let closed = client.close_instance("wrld_1", "12345").await.unwrap();
+        assert_eq!(closed.instance_id.as_deref(), Some("12345"));
     }
 }

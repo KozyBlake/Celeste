@@ -42,20 +42,33 @@
 //! methods VRChat reported, which works for the common authenticator-app
 //! case but will reject an email code with a generic error until that
 //! endpoint is ported.
+//!
+//! ## VRChat group ID
+//!
+//! Port of `getStringOrRequireInput("vrchat_group_id", ...)` in
+//! `ScarletVRChat`'s constructor — asked unconditionally (it's real
+//! config, not optional the way a Discord bot token is), stored in the
+//! plain (non-encrypted) settings store since a group id isn't a secret,
+//! matching Java's use of `getString`/`setString` rather than
+//! `RegistryStringEncrypted` for this key.
 
 use std::sync::mpsc;
 use std::sync::Arc;
 
 use scarlet_core::settings::file_valued::FileValued;
 use scarlet_core::settings::registry::{registry_string_encrypted, RegistryStringValued};
+use scarlet_core::settings::store::SettingsStore;
 use scarlet_core::settings::Settings;
 use scarlet_vrchat::client::{LoginOutcome, VrChatClient};
+
+const VRCHAT_GROUP_ID_KEY: &str = "vrchat_group_id";
 
 enum Stage {
     VibecodedNotice,
     Discord { token: String, guild_id: String },
     VrChatCredentials { username: String, password: String, error: Option<String>, in_flight: bool },
     VrChatTotp { code: String, error: Option<String>, in_flight: bool },
+    VrChatGroupId { group_id: String, error: Option<String> },
     Done,
 }
 
@@ -72,6 +85,7 @@ enum Action {
     VrChatSkip,
     TotpSubmit { code: String },
     TotpCancel,
+    GroupIdSubmit { group_id: String },
 }
 
 /// What [`SetupWizard::render`] wants the caller ([`crate::app::ScarletApp`])
@@ -96,6 +110,7 @@ pub struct SetupWizard {
     discord_guild_reg: RegistryStringValued<String>,
     vrchat_username_reg: RegistryStringValued<String>,
     vrchat_password_reg: RegistryStringValued<String>,
+    settings_store: Arc<SettingsStore>,
     vrchat_client: Option<Arc<VrChatClient>>,
     login_rx: Option<mpsc::Receiver<Result<LoginOutcome, String>>>,
     totp_rx: Option<mpsc::Receiver<Result<bool, String>>>,
@@ -121,6 +136,7 @@ impl SetupWizard {
             discord_guild_reg,
             vrchat_username_reg,
             vrchat_password_reg,
+            settings_store: settings.store.clone(),
             vrchat_client: None,
             login_rx: None,
             totp_rx: None,
@@ -142,6 +158,7 @@ impl SetupWizard {
             Stage::Discord { .. } => "discord",
             Stage::VrChatCredentials { .. } => "vrchat_credentials",
             Stage::VrChatTotp { .. } => "vrchat_totp",
+            Stage::VrChatGroupId { .. } => "vrchat_group_id",
             Stage::Done => "done",
         }
     }
@@ -179,9 +196,20 @@ impl SetupWizard {
         let vrchat_configured =
             self.vrchat_username_reg.get_or_null().is_some() && self.vrchat_password_reg.get_or_null().is_some();
         if vrchat_configured {
-            Stage::Done
+            self.compute_stage_after_vrchat()
         } else {
             Stage::VrChatCredentials { username: String::new(), password: String::new(), error: None, in_flight: false }
+        }
+    }
+
+    /// What comes after the VRChat login step resolves, whichever way it
+    /// resolves (logged in, TOTP-verified, or skipped) -- the group id
+    /// prompt if none is stored yet, else done.
+    fn compute_stage_after_vrchat(&self) -> Stage {
+        let group_id: Option<String> = self.settings_store.get_object(VRCHAT_GROUP_ID_KEY);
+        match group_id {
+            Some(id) if !id.trim().is_empty() => Stage::Done,
+            _ => Stage::VrChatGroupId { group_id: String::new(), error: None },
         }
     }
 
@@ -236,7 +264,7 @@ impl SetupWizard {
             match rx.try_recv() {
                 Ok(Ok(LoginOutcome::LoggedIn(_user))) => {
                     self.login_rx = None;
-                    self.stage = Stage::Done;
+                    self.stage = self.compute_stage_after_vrchat();
                 }
                 Ok(Ok(LoginOutcome::RequiresTwoFactor(_methods))) => {
                     self.login_rx = None;
@@ -263,7 +291,7 @@ impl SetupWizard {
             match rx.try_recv() {
                 Ok(Ok(true)) => {
                     self.totp_rx = None;
-                    self.stage = Stage::Done;
+                    self.stage = self.compute_stage_after_vrchat();
                 }
                 Ok(Ok(false)) => {
                     self.totp_rx = None;
@@ -320,7 +348,7 @@ impl SetupWizard {
                 }
             }
             Action::VrChatSkip => {
-                self.stage = Stage::Done;
+                self.stage = self.compute_stage_after_vrchat();
             }
             Action::TotpSubmit { code } => {
                 if code.trim().is_empty() {
@@ -334,6 +362,15 @@ impl SetupWizard {
             Action::TotpCancel => {
                 self.stage =
                     Stage::VrChatCredentials { username: String::new(), password: String::new(), error: None, in_flight: false };
+            }
+            Action::GroupIdSubmit { group_id } => {
+                let trimmed = group_id.trim();
+                if trimmed.starts_with("grp_") && trimmed.len() > "grp_".len() {
+                    self.settings_store.set_object(VRCHAT_GROUP_ID_KEY, &trimmed.to_string());
+                    self.stage = Stage::Done;
+                } else if let Stage::VrChatGroupId { error, .. } = &mut self.stage {
+                    *error = Some("Enter a valid VRChat group ID (starts with \"grp_\").".to_string());
+                }
             }
         }
     }
@@ -359,6 +396,7 @@ impl SetupWizard {
                     Stage::VrChatTotp { code, error, in_flight } => {
                         render_vrchat_totp_stage(ui, code, error, *in_flight, &mut action)
                     }
+                    Stage::VrChatGroupId { group_id, error } => render_vrchat_group_id_stage(ui, group_id, error, &mut action),
                     Stage::Done => {}
                 }
             });
@@ -504,6 +542,27 @@ fn render_vrchat_totp_stage(
     });
 }
 
+fn render_vrchat_group_id_stage(ui: &mut egui::Ui, group_id: &mut String, error: &Option<String>, action: &mut Action) {
+    ui.heading("VRChat group");
+    ui.add_space(8.0);
+    ui.label("Which VRChat group should Scarlet moderate? This is required.");
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label("Group ID:");
+        ui.add(egui::TextEdit::singleline(group_id).desired_width(320.0).hint_text("grp_..."));
+    });
+    if ui.link("Open vrchat.com/home/groups to find it").clicked() {
+        ui.ctx().open_url(egui::OpenUrl::same_tab("https://vrchat.com/home/groups".to_string()));
+    }
+    if let Some(error) = error {
+        ui.colored_label(egui::Color32::RED, error);
+    }
+    ui.add_space(12.0);
+    if ui.button("Continue").clicked() {
+        *action = Action::GroupIdSubmit { group_id: group_id.clone() };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,6 +588,7 @@ mod tests {
         settings.discord_setup_prompted.set(Some(true), "test");
         registry_string_encrypted(settings.encrypted.clone(), "global:username").set(Some("someone".to_string()));
         registry_string_encrypted(settings.encrypted.clone(), "global:password").set(Some("hunter2".to_string()));
+        settings.store.set_object(VRCHAT_GROUP_ID_KEY, &"grp_11111111-1111-1111-1111-111111111111".to_string());
 
         let wizard = wizard(&settings);
         assert!(wizard.is_done());
@@ -584,7 +644,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vrchat_skip_finishes_setup_without_storing_credentials() {
+    async fn vrchat_skip_advances_to_group_id_without_storing_credentials() {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         settings.vibecoded_notice_acknowledged.set(Some(true), "test");
@@ -592,12 +652,53 @@ mod tests {
         let mut wizard = wizard(&settings);
         assert_eq!(wizard.stage_name(), "vrchat_credentials");
         wizard.apply_action(Action::VrChatSkip);
-        assert_eq!(wizard.stage_name(), "done");
+        assert_eq!(wizard.stage_name(), "vrchat_group_id");
         assert_eq!(
             registry_string_encrypted(settings.encrypted.clone(), "global:username").get_or_null(),
             None,
             "skipping must not fabricate stored credentials"
         );
+    }
+
+    #[tokio::test]
+    async fn group_id_stage_is_skipped_when_already_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        settings.vibecoded_notice_acknowledged.set(Some(true), "test");
+        settings.discord_setup_prompted.set(Some(true), "test");
+        registry_string_encrypted(settings.encrypted.clone(), "global:username").set(Some("someone".to_string()));
+        registry_string_encrypted(settings.encrypted.clone(), "global:password").set(Some("hunter2".to_string()));
+        settings.store.set_object(VRCHAT_GROUP_ID_KEY, &"grp_11111111-1111-1111-1111-111111111111".to_string());
+
+        let wizard = wizard(&settings);
+        assert!(wizard.is_done());
+        assert_eq!(wizard.stage_name(), "done");
+    }
+
+    #[tokio::test]
+    async fn invalid_group_id_shows_an_error_and_does_not_advance() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        let mut wizard = wizard(&settings);
+        wizard.stage = Stage::VrChatGroupId { group_id: String::new(), error: None };
+        wizard.apply_action(Action::GroupIdSubmit { group_id: "not-a-group-id".to_string() });
+        assert_eq!(wizard.stage_name(), "vrchat_group_id");
+        match &wizard.stage {
+            Stage::VrChatGroupId { error, .. } => assert!(error.is_some()),
+            _ => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn valid_group_id_is_stored_and_finishes_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        let mut wizard = wizard(&settings);
+        wizard.stage = Stage::VrChatGroupId { group_id: String::new(), error: None };
+        wizard.apply_action(Action::GroupIdSubmit { group_id: "grp_11111111-1111-1111-1111-111111111111".to_string() });
+        assert_eq!(wizard.stage_name(), "done");
+        let stored: Option<String> = settings.store.get_object(VRCHAT_GROUP_ID_KEY);
+        assert_eq!(stored.as_deref(), Some("grp_11111111-1111-1111-1111-111111111111"));
     }
 
     #[tokio::test]

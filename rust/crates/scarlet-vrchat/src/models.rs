@@ -70,3 +70,153 @@ pub struct PaginatedGroupAuditLogEntryList {
     #[serde(rename = "hasNext")]
     pub has_next: bool,
 }
+
+/// Hand-picked subset of `io.github.vrchatapi.model.Group`, field names and
+/// shapes confirmed against the community-maintained OpenAPI spec
+/// (github.com/vrchatapi/specification, `components/schemas/Group.yaml`)
+/// rather than guessed, since VRChat's API isn't officially documented.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(rename = "shortCode")]
+    pub short_code: Option<String>,
+    pub discriminator: Option<String>,
+    #[serde(rename = "ownerId")]
+    pub owner_id: Option<String>,
+    #[serde(rename = "memberCount")]
+    pub member_count: i64,
+    #[serde(rename = "onlineMemberCount")]
+    pub online_member_count: i64,
+    #[serde(rename = "iconUrl")]
+    pub icon_url: Option<String>,
+    #[serde(rename = "bannerUrl")]
+    pub banner_url: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Only present when `getGroup` is called with `includeRoles=true`.
+    pub roles: Option<Vec<GroupRole>>,
+}
+
+/// Confirmed against `components/schemas/GroupRole.yaml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupRole {
+    pub id: String,
+    #[serde(rename = "groupId")]
+    pub group_id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    #[serde(rename = "isSelfAssignable", default)]
+    pub is_self_assignable: bool,
+    #[serde(rename = "isManagementRole", default)]
+    pub is_management_role: bool,
+    #[serde(rename = "isAddedOnJoin", default)]
+    pub is_added_on_join: bool,
+    pub order: Option<i64>,
+}
+
+/// Confirmed against `components/schemas/GroupMember.yaml`. VRChat's own
+/// schema notes several fields as "only missing when explicitly fetching
+/// own user" (`Option` throughout handles that, matching the general
+/// lenient-deserialization approach this module already takes).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupMember {
+    pub id: Option<String>,
+    #[serde(rename = "groupId")]
+    pub group_id: Option<String>,
+    #[serde(rename = "userId")]
+    pub user_id: Option<String>,
+    #[serde(rename = "roleIds", default)]
+    pub role_ids: Vec<String>,
+    #[serde(rename = "managerNotes")]
+    pub manager_notes: Option<String>,
+    #[serde(rename = "membershipStatus")]
+    pub membership_status: Option<String>,
+    #[serde(rename = "isRepresenting", default)]
+    pub is_representing: bool,
+    #[serde(rename = "joinedAt")]
+    pub joined_at: Option<String>,
+    #[serde(rename = "bannedAt")]
+    pub banned_at: Option<String>,
+    pub visibility: Option<String>,
+}
+
+/// Confirmed against `components/responses/groups/GroupMemberSearchResponse.yaml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GroupMemberSearchResult {
+    pub results: Vec<GroupMember>,
+    pub total: i64,
+}
+
+/// Hand-picked subset of `World`, confirmed against
+/// `components/schemas/World.yaml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct World {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(rename = "authorId")]
+    pub author_id: Option<String>,
+    #[serde(rename = "authorName")]
+    pub author_name: Option<String>,
+    pub capacity: Option<i64>,
+    #[serde(rename = "recommendedCapacity")]
+    pub recommended_capacity: Option<i64>,
+    #[serde(rename = "imageUrl")]
+    pub image_url: Option<String>,
+    #[serde(rename = "thumbnailImageUrl")]
+    pub thumbnail_image_url: Option<String>,
+    #[serde(rename = "releaseStatus")]
+    pub release_status: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub visits: Option<i64>,
+    pub popularity: Option<i64>,
+    pub heat: Option<i64>,
+    pub favorites: Option<i64>,
+}
+
+/// Hand-picked subset of `Avatar`, confirmed against
+/// `components/schemas/Avatar.yaml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Avatar {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(rename = "authorId")]
+    pub author_id: Option<String>,
+    #[serde(rename = "authorName")]
+    pub author_name: Option<String>,
+    #[serde(rename = "imageUrl")]
+    pub image_url: Option<String>,
+    #[serde(rename = "thumbnailImageUrl")]
+    pub thumbnail_image_url: Option<String>,
+    #[serde(rename = "releaseStatus")]
+    pub release_status: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Hand-picked subset of `Instance`. Not confirmed field-by-field against
+/// the spec (unlike the models above) -- kept intentionally small and
+/// `Option`-heavy since this is the shape `get_instance`/`close_instance`
+/// return, not yet cross-checked the way the group/world/avatar models were.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Instance {
+    pub id: Option<String>,
+    #[serde(rename = "worldId")]
+    pub world_id: Option<String>,
+    #[serde(rename = "instanceId")]
+    pub instance_id: Option<String>,
+    pub name: Option<String>,
+    #[serde(rename = "userCount")]
+    pub user_count: Option<i64>,
+    pub capacity: Option<i64>,
+    #[serde(rename = "ownerId")]
+    pub owner_id: Option<String>,
+    pub closed: Option<serde_json::Value>,
+    pub full: Option<bool>,
+}
