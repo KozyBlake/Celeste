@@ -17,6 +17,7 @@
 pub mod config_info;
 pub mod discord_user_info;
 pub mod discord_warn;
+pub mod export_log;
 pub mod moderation_tags;
 pub mod secret_staff_list;
 pub mod staff_list;
@@ -174,6 +175,7 @@ pub async fn register_global_commands(ctx: &Context) {
         unlink_vrchat_account::register(),
         unlink_vrchat_account_for::register(),
         discord_warn::register(),
+        export_log::register(),
     ];
     if let Err(err) =
         serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
@@ -204,6 +206,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         unlink_vrchat_account::NAME => unlink_vrchat_account::run(ctx, command).await,
         unlink_vrchat_account_for::NAME => unlink_vrchat_account_for::run(ctx, command).await,
         discord_warn::NAME => discord_warn::run(ctx, command).await,
+        export_log::NAME => export_log::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
             Ok(())

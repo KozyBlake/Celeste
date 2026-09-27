@@ -73,6 +73,8 @@ pub fn resolve_global_password(data_dir: &Path) -> String {
 }
 
 pub struct Settings {
+    /// Root Scarlet data directory, used by subsystems such as Discord log export.
+    pub data_dir: std::path::PathBuf,
     pub store: Arc<SettingsStore>,
     pub registry: SettingsRegistry,
     pub registry_store: Arc<RegistryStore>,
@@ -239,6 +241,7 @@ impl Settings {
         let registry = SettingsRegistry::new(store.clone());
 
         Settings {
+            data_dir: data_dir.to_path_buf(),
             last_run_version: registry::registry_string(registry_store.clone(), "lastRunVersion"),
             last_announcement_id: registry::registry_string(registry_store.clone(), "lastAnnouncementId"),
             last_run_time: registry::registry_offset_date_time(registry_store.clone(), "lastRunTime"),
