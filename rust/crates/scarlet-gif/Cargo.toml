@@ -7,3 +7,6 @@ description = "Rust port of com.madgag.gif.fmsware (AnimatedGifEncoder/GifDecode
 
 [dependencies]
 thiserror.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
