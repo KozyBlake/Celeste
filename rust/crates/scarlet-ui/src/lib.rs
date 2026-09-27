@@ -1,14 +1,27 @@
-//! Rust port of `net.sybyline.scarlet.ui` (Swing + FlatLaf desktop UI).
+//! Rust port of `net.sybyline.scarlet.ui` and the top-level `ScarletUI`/
+//! `IScarletUI`/`ScarletDiscordUI` (Swing/FlatLaf desktop UI).
 //!
-//! **Status: not started beyond this stub.** Rust has no drop-in equivalent
-//! of Swing/FlatLaf; before porting the actual UI (splash screen, settings
-//! panels, live player list, tray icon, etc. — `IScarletUI`, `ScarletUI`,
-//! `ScarletDiscordUI`, `IScarletUISplash`) a toolkit needs to be picked
-//! (egui/eframe is the most likely fit for a desktop app with live-updating
-//! panels; iced and native GTK/tauri are the alternatives). See ../../PORTING.md.
+//! **Status: real skeleton (state model + a minimal working window), not a
+//! port of the ~8,500-line Swing UI.** See `app`'s module docs for the
+//! toolkit choice (egui/eframe) and what isn't ported yet.
+//!
+//! [`state::UiState`] is the real, fully-ported, unit-tested part: the data
+//! model behind `IScarletUI`'s player-list contract
+//! (`playerJoin`/`playerUpdate`/`playerLeave`/`clearInstance`/`fireSort`/
+//! `hasActivePlayers`) plus connection-status and announcement display,
+//! usable from any thread. [`platform::is_headless`] ports the
+//! headless-vs-graphical decision from `IScarletUI.create`. [`run`] opens
+//! the (currently minimal) graphical window; on a headless system, skip
+//! calling it — there is no separate `ScarletUIHeadless` type to
+//! instantiate here, since `UiState` alone already behaves correctly with
+//! no window ever opened (every mutator is a plain data operation; nothing
+//! about it depends on a window existing, matching `ScarletUIHeadless`'s
+//! all-no-op methods without needing a parallel implementation to keep in
+//! sync).
 
-/// Placeholder for `IScarletUI`. A real implementation needs a chosen UI
-/// toolkit (see module docs) before this can do anything.
-pub trait ScarletUi {
-    fn set_ui_scale(&mut self, scale: f32);
-}
+pub mod app;
+pub mod platform;
+pub mod state;
+
+pub use app::run;
+pub use state::{ConnectedPlayer, UiState};
