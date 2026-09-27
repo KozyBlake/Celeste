@@ -59,7 +59,7 @@ use scarlet_core::settings::file_valued::FileValued;
 use scarlet_core::settings::registry::{registry_string_encrypted, RegistryStringValued};
 use scarlet_core::settings::store::SettingsStore;
 use scarlet_core::settings::Settings;
-use scarlet_vrchat::client::{LoginOutcome, VrChatClient, GROUP_ID_KEY as VRCHAT_GROUP_ID_KEY};
+use scarlet_vrchat::client::{LoginOutcome, VrChatClient, VrChatError, GROUP_ID_KEY as VRCHAT_GROUP_ID_KEY};
 
 enum Stage {
     VibecodedNotice,
@@ -110,7 +110,7 @@ pub struct SetupWizard {
     vrchat_password_reg: RegistryStringValued<String>,
     settings_store: Arc<SettingsStore>,
     vrchat_client: Option<Arc<VrChatClient>>,
-    login_rx: Option<mpsc::Receiver<Result<LoginOutcome, String>>>,
+    login_rx: Option<mpsc::Receiver<Result<LoginOutcome, VrChatError>>>,
     totp_rx: Option<mpsc::Receiver<Result<bool, String>>>,
 }
 
@@ -235,7 +235,7 @@ impl SetupWizard {
             *error = None;
         }
         self.runtime_handle.spawn(async move {
-            let result = client.login_with_credentials(&username, &password).await.map_err(|e| e.to_string());
+            let result = client.login_with_credentials(&username, &password).await;
             let _ = tx.send(result);
         });
     }
@@ -268,10 +268,30 @@ impl SetupWizard {
                     self.login_rx = None;
                     self.stage = Stage::VrChatTotp { code: String::new(), error: None, in_flight: false };
                 }
-                Ok(Err(message)) => {
+                Ok(Err(err)) => {
                     self.login_rx = None;
+                    // Match `ScarletVRChat.login()`'s `catch (ApiException) {
+                    // this.username.set(null); this.password.set(null); ...
+                    // }` -- a *rejected* login (VRChat itself said the
+                    // credentials are wrong, not a network hiccup) must not
+                    // leave bad credentials sitting in the encrypted store,
+                    // or the next launch's `compute_stage_after_discord`
+                    // (which only checks "is something stored", not "did it
+                    // actually work") will wrongly treat VRChat as
+                    // configured and skip straight past this stage on
+                    // restart. `.set(None)` is a deliberate no-op (see its
+                    // docs) -- `.clear()` is the actual "remove this value"
+                    // method. A transient `Request`/`UnexpectedShape` error
+                    // isn't a credential problem, so those are left stored
+                    // (matching Java, which only reaches this branch for an
+                    // `ApiException` -- a different exception type entirely
+                    // for a network failure).
+                    if matches!(err, VrChatError::Api { .. }) {
+                        self.vrchat_username_reg.clear();
+                        self.vrchat_password_reg.clear();
+                    }
                     if let Stage::VrChatCredentials { error, in_flight, .. } = &mut self.stage {
-                        *error = Some(message);
+                        *error = Some(err.to_string());
                         *in_flight = false;
                     }
                 }
@@ -715,6 +735,63 @@ mod tests {
             }
             _ => unreachable!("just asserted stage_name() == vrchat_credentials"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_rejected_login_clears_stored_credentials_so_the_stage_reappears_next_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        settings.vibecoded_notice_acknowledged.set(Some(true), "test");
+        settings.discord_setup_prompted.set(Some(true), "test");
+        let mut first_wizard = wizard(&settings);
+        assert_eq!(first_wizard.stage_name(), "vrchat_credentials");
+
+        // Simulate what `Action::VrChatCredentialsSubmit` does before the
+        // (real, network-hitting) login attempt resolves: persist the
+        // entered credentials up front, same as `ScarletVRChat.login()`.
+        first_wizard.vrchat_username_reg.set(Some("someone".to_string()));
+        first_wizard.vrchat_password_reg.set(Some("wrong-password".to_string()));
+        first_wizard.stage = Stage::VrChatCredentials {
+            username: "someone".to_string(),
+            password: "wrong-password".to_string(),
+            error: None,
+            in_flight: true,
+        };
+
+        // Simulate the login task resolving with a rejection -- a real
+        // `VrChatError::Api` (VRChat itself rejecting the credentials, e.g.
+        // a 401) rather than actually spawning a network call.
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err(VrChatError::Api { status: reqwest::StatusCode::UNAUTHORIZED, body: "Invalid credentials".to_string() }))
+            .unwrap();
+        first_wizard.login_rx = Some(rx);
+
+        first_wizard.poll_async_results();
+
+        assert_eq!(
+            first_wizard.vrchat_username_reg.get_or_null(),
+            None,
+            "a rejected login must not leave stale credentials stored"
+        );
+        assert_eq!(
+            first_wizard.vrchat_password_reg.get_or_null(),
+            None,
+            "a rejected login must not leave stale credentials stored"
+        );
+        match &first_wizard.stage {
+            Stage::VrChatCredentials { error, in_flight, .. } => {
+                assert!(error.is_some());
+                assert!(!in_flight);
+            }
+            _ => panic!("expected to stay on VrChatCredentials"),
+        }
+
+        // The real bug: a fresh wizard (as if the app were relaunched) must
+        // land back on the credentials stage, not skip straight to the
+        // group-id prompt because leftover credentials made it look
+        // "configured".
+        let relaunched_wizard = wizard(&settings);
+        assert_eq!(relaunched_wizard.stage_name(), "vrchat_credentials");
     }
 
     #[tokio::test]

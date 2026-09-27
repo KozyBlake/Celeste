@@ -634,8 +634,10 @@ impl VrChatClient {
 pub async fn login_with_stored_credentials(settings: &scarlet_core::settings::Settings) -> Option<VrChatClient> {
     use scarlet_core::settings::registry::registry_string_encrypted;
 
-    let username = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY).get_or_null()?;
-    let password = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY).get_or_null()?;
+    let username_reg = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY);
+    let password_reg = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY);
+    let username = username_reg.get_or_null()?;
+    let password = password_reg.get_or_null()?;
 
     let client = match VrChatClient::new() {
         Ok(client) => client,
@@ -644,7 +646,21 @@ pub async fn login_with_stored_credentials(settings: &scarlet_core::settings::Se
             return None;
         }
     };
-    match client.login_with_credentials(&username, &password).await {
+    attempt_login_clearing_stored_credentials_on_rejection(client, &username, &password, &username_reg, &password_reg).await
+}
+
+/// The actual login-then-clear-on-rejection logic, split out from
+/// [`login_with_stored_credentials`] so it can be exercised against a mock
+/// server in tests (the public function always builds a [`VrChatClient`]
+/// pointed at the real VRChat API, with no test seam of its own).
+async fn attempt_login_clearing_stored_credentials_on_rejection(
+    client: VrChatClient,
+    username: &str,
+    password: &str,
+    username_reg: &scarlet_core::settings::registry::RegistryStringValued<String>,
+    password_reg: &scarlet_core::settings::registry::RegistryStringValued<String>,
+) -> Option<VrChatClient> {
+    match client.login_with_credentials(username, password).await {
         Ok(LoginOutcome::LoggedIn(user)) => {
             tracing::info!("VRChat unattended login succeeded as {}", user.display_name.as_deref().unwrap_or(&user.id));
             Some(client)
@@ -658,6 +674,18 @@ pub async fn login_with_stored_credentials(settings: &scarlet_core::settings::Se
         }
         Err(err) => {
             tracing::error!("VRChat unattended login failed: {}", err);
+            // Port of `ScarletVRChat.login()`'s `catch (ApiException) {
+            // this.username.set(null); this.password.set(null); ... }` --
+            // VRChat itself rejecting the stored credentials (not a
+            // transient network/parse error) must clear them, or every
+            // future launch keeps silently retrying the same bad
+            // credentials forever with no way for the setup wizard to
+            // notice and re-prompt (its own gate only checks "is something
+            // stored", not "does it actually work").
+            if matches!(err, VrChatError::Api { .. }) {
+                username_reg.clear();
+                password_reg.clear();
+            }
             None
         }
     }
@@ -677,6 +705,78 @@ mod tests {
         // times out, that's a regression (it means a real request is being
         // attempted against the credential-less path).
         assert!(login_with_stored_credentials(&settings).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_rejected_unattended_login_clears_the_stored_credentials() {
+        use scarlet_core::settings::registry::registry_string_encrypted;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/auth/user"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({"error": {"message": "Invalid credentials"}})))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings = scarlet_core::settings::Settings::open(dir.path());
+        let username_reg = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY);
+        let password_reg = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY);
+        username_reg.set(Some("someone".to_string()));
+        password_reg.set(Some("wrong-password".to_string()));
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let result = attempt_login_clearing_stored_credentials_on_rejection(
+            client,
+            "someone",
+            "wrong-password",
+            &username_reg,
+            &password_reg,
+        )
+        .await;
+
+        assert!(result.is_none());
+        assert_eq!(username_reg.get_or_null(), None, "a rejected login must not leave stale credentials stored");
+        assert_eq!(password_reg.get_or_null(), None, "a rejected login must not leave stale credentials stored");
+    }
+
+    #[tokio::test]
+    async fn a_network_error_during_unattended_login_leaves_stored_credentials_alone() {
+        use scarlet_core::settings::registry::registry_string_encrypted;
+
+        // Port 1 ("tcpmux") is essentially never open on a test/CI host, so
+        // this fails at the transport level (connection refused) -- a
+        // network hiccup, not VRChat actively rejecting the credentials.
+        // (A `MockServer` that's `drop`ped but never mocked isn't a
+        // reliable stand-in: an in-flight request can still race the async
+        // shutdown and land on its default "no matching mock" response,
+        // which is itself a `VrChatError::Api`, not a transport error.)
+        let unreachable_url = "http://127.0.0.1:1".to_string();
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings = scarlet_core::settings::Settings::open(dir.path());
+        let username_reg = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY);
+        let password_reg = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY);
+        username_reg.set(Some("someone".to_string()));
+        password_reg.set(Some("correct-password".to_string()));
+
+        let client = VrChatClient::with_base_url(&unreachable_url).unwrap();
+        let result = attempt_login_clearing_stored_credentials_on_rejection(
+            client,
+            "someone",
+            "correct-password",
+            &username_reg,
+            &password_reg,
+        )
+        .await;
+
+        assert!(result.is_none());
+        assert_eq!(
+            username_reg.get_or_null().as_deref(),
+            Some("someone"),
+            "a transient network error must not clear good credentials"
+        );
+        assert_eq!(password_reg.get_or_null().as_deref(), Some("correct-password"));
     }
 
     #[tokio::test]
