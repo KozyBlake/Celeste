@@ -4,19 +4,20 @@
 //! `scarlet_core::watched_entities::WatchedEntities`. See
 //! [`super::watched_user`]/[`super::watched_avatar`] for the thin
 //! per-entity-kind wrappers, and [`super::watched_group`]'s docs for the
-//! gaps this shares with `/watched-group` (`remove-menu`/`set-notes`/
-//! `export`/`import` not ported) and simplifications (no autocomplete,
+//! gaps this shares with `/watched-group` (`export`/`import` not ported)
+//! and simplifications (no autocomplete,
 //! `entity-priority`'s `-100..=100` range not enforced at the Discord-option
 //! level).
 //!
 //! Ported subcommands: `list`, `add`, `remove`, `view`, `set-critical`,
 //! `set-silent`, `set-type`, `set-priority`, `set-message`, `set-tags`,
-//! `add-tag`, `remove-tag`. Note Java names the deletion subcommand
+//! `add-tag`, `remove-tag`, `set-notes`, and `remove-menu`. Note Java names the deletion subcommand
 //! `remove` here (unlike `watched-group`'s `delete-watched-group`).
 
-use serenity::builder::{CreateCommand, CreateCommandOption};
+use serenity::builder::{CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateModal};
 use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
+use serenity::model::prelude::InputTextStyle;
 
 use scarlet_core::watched_entities::{WatchedEntities, WatchedEntity};
 use scarlet_core::watched_groups::WatchedGroupType;
@@ -91,6 +92,11 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
             "list",
             format!("Lists all watched {}s", kind.singular()),
         ))
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "remove-menu",
+            format!("Remove watched {}s from a dropdown of their names", kind.singular()),
+        ))
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "add", format!("Adds a watched {}", kind.singular()))
                 .add_sub_option(id_option())
@@ -134,6 +140,10 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
                 CreateCommandOption::new(CommandOptionType::Boolean, "entity-critical", "The critical status of the entity")
                     .required(true),
             ),
+        )
+        .add_option(
+            CreateCommandOption::new(CommandOptionType::SubCommand, "set-notes", format!("Sets a {}'s notes", kind.singular()))
+                .add_sub_option(id_option()),
         )
         .add_option(
             CreateCommandOption::new(
@@ -239,18 +249,23 @@ pub(crate) async fn run_generic(
     entities: std::sync::Arc<WatchedEntities>,
     kind: EntityKind,
 ) -> serenity::Result<()> {
-    super::defer(ctx, command).await?;
-
     let options = command.data.options();
     let Some(subcommand) = options.first() else {
         return super::reply_ephemeral(ctx, command, "A subcommand is required.").await;
     };
     let ResolvedValue::SubCommand(sub_options) = &subcommand.value else {
+        super::defer(ctx, command).await?;
         return super::reply_ephemeral(ctx, command, "Expected a subcommand.").await;
     };
 
+    if subcommand.name == "set-notes" {
+        return run_set_notes_modal(ctx, command, sub_options, &entities, kind).await;
+    }
+    super::defer(ctx, command).await?;
+
     match subcommand.name {
         "list" => run_list(ctx, command, &entities, kind).await,
+        "remove-menu" => run_remove_menu(ctx, command, &entities, kind).await,
         "add" => run_add(ctx, command, sub_options, &entities, kind).await,
         "remove" => run_remove(ctx, command, sub_options, &entities, kind).await,
         "view" => run_view(ctx, command, sub_options, &entities, kind).await,
@@ -264,6 +279,52 @@ pub(crate) async fn run_generic(
         "remove-tag" => run_remove_tag(ctx, command, sub_options, &entities, kind).await,
         other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
     }
+}
+
+async fn run_remove_menu(
+    ctx: &Context,
+    command: &CommandInteraction,
+    entities: &WatchedEntities,
+    kind: EntityKind,
+) -> serenity::Result<()> {
+    let context = super::vrchat_context(ctx).await.ok();
+    let mut entries = Vec::new();
+    for entity in entities.get_all() {
+        let name = match &context {
+            Some(context) => kind.fetch_name(&context.client, &entity.id).await,
+            None => None,
+        }.unwrap_or_else(|| entity.id.clone());
+        entries.push((entity.id, name));
+    }
+    entries.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    super::watched_remove_menu(ctx, command, kind.singular(), &format!("{}s", kind.singular()), entries).await
+}
+
+async fn run_set_notes_modal(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+    entities: &WatchedEntities,
+    kind: EntityKind,
+) -> serenity::Result<()> {
+    let Some(id) = find_string(sub_options, kind.id_option_name()) else {
+        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
+            serenity::builder::CreateInteractionResponseMessage::new()
+                .content(format!("`{}` is required.", kind.id_option_name())).ephemeral(true),
+        )).await;
+    };
+    let Some(entity) = entities.get_watched_entity(id) else {
+        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
+            serenity::builder::CreateInteractionResponseMessage::new()
+                .content(format!("That {} is not watched", kind.singular())).ephemeral(true),
+        )).await;
+    };
+    let mut input = CreateInputText::new(InputTextStyle::Paragraph, "Notes", "notes").required(false).max_length(1024);
+    if let Some(notes) = entity.notes.filter(|notes| !notes.is_empty()) { input = input.value(notes); }
+    command.create_response(&ctx.http, CreateInteractionResponse::Modal(
+        CreateModal::new(format!("watched-entity-set-notes:{}:{id}", kind.singular()), "Edit notes")
+            .components(vec![CreateActionRow::InputText(input)]),
+    )).await
 }
 
 async fn run_list(ctx: &Context, command: &CommandInteraction, entities: &WatchedEntities, kind: EntityKind) -> serenity::Result<()> {

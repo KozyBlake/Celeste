@@ -2,12 +2,10 @@
 //! (`@SlashCmd("watched-group")`), backed by
 //! `scarlet_core::watched_groups::WatchedGroups`. Ported: `list`, `add`,
 //! `delete-watched-group`, `view`, `set-critical`, `set-silent`, `set-type`,
-//! `set-priority`, `set-message`, `set-tags`, `add-tag`, `remove-tag`.
+//! `set-priority`, `set-message`, `set-notes`, `set-tags`, `add-tag`,
+//! `remove-tag`, and the component-backed `remove-menu`.
 //!
-//! **Not ported**: `remove-menu` (a select-menu-of-names component this
-//! crate has no component-interaction dispatch for -- same gap as
-//! `open-instance`), `set-notes` (Java opens a `Modal` text box; no
-//! modal-interaction dispatch either), and `export`/`import` (send/receive
+//! **Not ported**: `export`/`import` (send/receive
 //! `watched_groups.json` as a Discord file attachment; a real, doable
 //! feature, just not built this round -- `scarlet_core::watched_groups`
 //! itself has no `import_json`/`export_json` yet either, tracked together).
@@ -28,9 +26,10 @@
 //! just without that client-side range hint. Not gated (matches Java's
 //! `@DefaultPerms`-only `WatchedGroup_`).
 
-use serenity::builder::{CreateCommand, CreateCommandOption};
+use serenity::builder::{CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateModal};
 use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
+use serenity::model::prelude::InputTextStyle;
 
 use scarlet_core::watched_groups::{WatchedGroup, WatchedGroupType};
 
@@ -59,6 +58,7 @@ pub fn register() -> CreateCommand {
     CreateCommand::new(NAME)
         .description("Configures watched groups")
         .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "list", "Lists all watched groups"))
+        .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "remove-menu", "Remove watched groups from a dropdown of their names"))
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "add", "Adds a watched group")
                 .add_sub_option(group_id_option())
@@ -129,6 +129,10 @@ pub fn register() -> CreateCommand {
                 ),
         )
         .add_option(
+            CreateCommandOption::new(CommandOptionType::SubCommand, "set-notes", "Sets a group's notes")
+                .add_sub_option(group_id_option()),
+        )
+        .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "set-tags", "Sets a group's tags")
                 .add_sub_option(group_id_option())
                 .add_sub_option(
@@ -178,8 +182,6 @@ fn split_tags(input: &str) -> Vec<String> {
 }
 
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
-    super::defer(ctx, command).await?;
-
     let options = command.data.options();
     let Some(subcommand) = options.first() else {
         return super::reply_ephemeral(ctx, command, "A subcommand is required.").await;
@@ -189,11 +191,18 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     };
 
     let Some(watched) = ({ ctx.data.read().await.get::<WatchedGroupsKey>().cloned() }) else {
+        super::defer(ctx, command).await?;
         return super::reply_ephemeral(ctx, command, "Watched groups are not available.").await;
     };
 
+    if subcommand.name == "set-notes" {
+        return run_set_notes_modal(ctx, command, sub_options, &watched).await;
+    }
+    super::defer(ctx, command).await?;
+
     match subcommand.name {
         "list" => run_list(ctx, command, &watched).await,
+        "remove-menu" => run_remove_menu(ctx, command, &watched).await,
         "add" => run_add(ctx, command, sub_options, &watched).await,
         "delete-watched-group" => run_delete(ctx, command, sub_options, &watched).await,
         "view" => run_view(ctx, command, sub_options, &watched).await,
@@ -207,6 +216,48 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         "remove-tag" => run_remove_tag(ctx, command, sub_options, &watched).await,
         other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
     }
+}
+
+async fn run_remove_menu(
+    ctx: &Context,
+    command: &CommandInteraction,
+    watched: &scarlet_core::watched_groups::WatchedGroups,
+) -> serenity::Result<()> {
+    let context = super::vrchat_context(ctx).await.ok();
+    let mut entries = Vec::new();
+    for group in watched.get_all() {
+        let name = match &context {
+            Some(context) => context.client.get_group(&group.id, false).await.ok().map(|group| group.name),
+            None => None,
+        }.unwrap_or_else(|| group.id.clone());
+        entries.push((group.id, name));
+    }
+    entries.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    super::watched_remove_menu(ctx, command, "group", "groups", entries).await
+}
+
+async fn run_set_notes_modal(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+    watched: &scarlet_core::watched_groups::WatchedGroups,
+) -> serenity::Result<()> {
+    let Some(group_id) = find_string(sub_options, "vrchat-group") else {
+        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
+            serenity::builder::CreateInteractionResponseMessage::new().content("`vrchat-group` is required.").ephemeral(true),
+        )).await;
+    };
+    let Some(group) = watched.get_watched_group(group_id) else {
+        return command.create_response(&ctx.http, CreateInteractionResponse::Message(
+            serenity::builder::CreateInteractionResponseMessage::new().content("That group is not watched").ephemeral(true),
+        )).await;
+    };
+    let mut input = CreateInputText::new(InputTextStyle::Paragraph, "Notes", "notes").required(false).max_length(1024);
+    if let Some(notes) = group.notes.filter(|notes| !notes.is_empty()) { input = input.value(notes); }
+    command.create_response(&ctx.http, CreateInteractionResponse::Modal(
+        CreateModal::new(format!("watched-group-set-notes:{group_id}"), "Edit notes")
+            .components(vec![CreateActionRow::InputText(input)]),
+    )).await
 }
 
 fn tags_joined(group: &WatchedGroup) -> String {

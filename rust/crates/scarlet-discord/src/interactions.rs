@@ -180,6 +180,12 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction.data.custom_id.starts_with("watched-remove:") {
+        if let Err(err) = handle_watched_remove(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling watched removal: {err}");
+        }
+        return;
+    }
     if !interaction.data.custom_id.starts_with("new-instance-") {
         tracing::warn!(custom_id = %interaction.data.custom_id, "Received unknown component interaction");
         return;
@@ -187,6 +193,68 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if let Err(err) = handle_instance_component(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling component interaction: {err}");
     }
+}
+
+async fn handle_watched_remove(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let parts: Vec<_> = interaction.data.custom_id.split(':').collect();
+    let kind = parts.get(1).copied().unwrap_or_default();
+    let ComponentInteractionDataKind::StringSelect { values } = &interaction.data.kind else {
+        return ephemeral_component(ctx, interaction, "Expected watched entries to remove.").await;
+    };
+    let mut removed = 0usize;
+    match kind {
+        "group" => {
+            let watched = {
+                ctx.data
+                    .read()
+                    .await
+                    .get::<crate::data::WatchedGroupsKey>()
+                    .cloned()
+            };
+            if let Some(watched) = watched {
+                for id in values {
+                    removed += usize::from(watched.remove_watched_group(id));
+                }
+            }
+        }
+        "user" | "avatar" => {
+            let watched = if kind == "user" {
+                ctx.data
+                    .read()
+                    .await
+                    .get::<crate::data::WatchedUsersKey>()
+                    .cloned()
+            } else {
+                ctx.data
+                    .read()
+                    .await
+                    .get::<crate::data::WatchedAvatarsKey>()
+                    .cloned()
+            };
+            if let Some(watched) = watched {
+                for id in values {
+                    removed += usize::from(watched.remove_watched_entity(id));
+                }
+            }
+        }
+        _ => return ephemeral_component(ctx, interaction, "Unknown watched-entry type.").await,
+    }
+    let plural = if kind == "group" {
+        "groups"
+    } else if kind == "user" {
+        "users"
+    } else {
+        "avatars"
+    };
+    ephemeral_component(
+        ctx,
+        interaction,
+        format!("Removed {removed} watched {plural} from the list."),
+    )
+    .await
 }
 
 async fn handle_instance_component(
@@ -462,6 +530,20 @@ async fn create_instance(
 }
 
 pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
+    if interaction
+        .data
+        .custom_id
+        .starts_with("watched-group-set-notes:")
+        || interaction
+            .data
+            .custom_id
+            .starts_with("watched-entity-set-notes:")
+    {
+        if let Err(err) = handle_watched_notes_modal(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling watched-notes modal: {err}");
+        }
+        return;
+    }
     if !interaction
         .data
         .custom_id
@@ -473,6 +555,74 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
     }
+}
+
+fn modal_text(interaction: &ModalInteraction, custom_id: &str) -> String {
+    interaction
+        .data
+        .components
+        .iter()
+        .flat_map(|row| &row.components)
+        .find_map(|component| match component {
+            ActionRowComponent::InputText(input) if input.custom_id == custom_id => {
+                input.value.clone()
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+async fn handle_watched_notes_modal(
+    ctx: &Context,
+    interaction: &ModalInteraction,
+) -> serenity::Result<()> {
+    let parts: Vec<_> = interaction.data.custom_id.split(':').collect();
+    let notes = modal_text(interaction, "notes");
+    let updated = match parts.as_slice() {
+        ["watched-group-set-notes", group_id] => {
+            let watched = {
+                ctx.data
+                    .read()
+                    .await
+                    .get::<crate::data::WatchedGroupsKey>()
+                    .cloned()
+            };
+            watched.is_some_and(|watched| {
+                watched
+                    .update(group_id, |group| group.notes = Some(notes.clone()))
+                    .is_some()
+            })
+        }
+        ["watched-entity-set-notes", kind, entity_id] => {
+            let watched = match *kind {
+                "user" => ctx
+                    .data
+                    .read()
+                    .await
+                    .get::<crate::data::WatchedUsersKey>()
+                    .cloned(),
+                "avatar" => ctx
+                    .data
+                    .read()
+                    .await
+                    .get::<crate::data::WatchedAvatarsKey>()
+                    .cloned(),
+                _ => None,
+            };
+            watched.is_some_and(|watched| {
+                watched
+                    .update(entity_id, |entity| entity.notes = Some(notes.clone()))
+                    .is_some()
+            })
+        }
+        _ => false,
+    };
+    let message = if updated {
+        "Set notes."
+    } else {
+        "That watched entry no longer exists."
+    };
+    ephemeral_modal(ctx, interaction, message).await
 }
 
 async fn handle_instance_modal(

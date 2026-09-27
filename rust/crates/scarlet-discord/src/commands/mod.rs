@@ -35,7 +35,7 @@ pub mod watched_user;
 
 use std::sync::Arc;
 
-use serenity::builder::{CreateInteractionResponse, CreateInteractionResponseFollowup, CreateInteractionResponseMessage};
+use serenity::builder::{CreateActionRow, CreateInteractionResponse, CreateInteractionResponseFollowup, CreateInteractionResponseMessage, CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption};
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
 use serenity::model::mention::Mentionable;
@@ -67,6 +67,38 @@ pub(crate) async fn reply_ephemeral(ctx: &Context, command: &CommandInteraction,
         .create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(message).ephemeral(true))
         .await
         .map(|_| ())
+}
+
+/// Shared Java-style watched-entry removal picker. Discord permits five
+/// action rows with 25 options each, so the first 125 entries are shown.
+pub(crate) async fn watched_remove_menu(
+    ctx: &Context,
+    command: &CommandInteraction,
+    kind: &str,
+    plural: &str,
+    entries: Vec<(String, String)>,
+) -> serenity::Result<()> {
+    let total = entries.len();
+    if total == 0 {
+        return reply_ephemeral(ctx, command, &format!("There are no watched {plural} to remove.")).await;
+    }
+    let mut rows = Vec::new();
+    for (index, chunk) in entries.into_iter().take(125).collect::<Vec<_>>().chunks(25).enumerate() {
+        let options = chunk.iter().map(|(id, name)| {
+            let label: String = name.chars().take(100).collect();
+            CreateSelectMenuOption::new(label, id)
+        }).collect();
+        rows.push(CreateActionRow::SelectMenu(
+            CreateSelectMenu::new(format!("watched-remove:{kind}:{index}"), CreateSelectMenuKind::String { options })
+                .placeholder(format!("Select watched {plural} to remove"))
+                .min_values(1)
+                .max_values(chunk.len() as u8),
+        ));
+    }
+    let note = if total > 125 { format!("\nShowing the first 125 of {total}; remove some and run this again for the rest.") } else { String::new() };
+    command.create_followup(&ctx.http, CreateInteractionResponseFollowup::new()
+        .content(format!("Select watched {plural} to remove — they'll be deleted from the list immediately.{note}"))
+        .components(rows).ephemeral(true)).await.map(|_| ())
 }
 
 /// Registers every ported slash command as a global command. Global
