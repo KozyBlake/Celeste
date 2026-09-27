@@ -35,6 +35,90 @@ enum Tab {
     Cli,
 }
 
+/// One column of the Instance tab's player table, matching `propstable`'s
+/// `addProperty` call order in `ScarletUI.java`. Kept as an enum (rather
+/// than just an index) so [`ScarletApp::column_order`] can be reordered by
+/// dragging headers without the render code needing to track which index
+/// currently means what.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ColumnId {
+    Name,
+    Id,
+    Pronouns,
+    Avatar,
+    Performance,
+    AvatarStats,
+    AccAge,
+    Joined,
+    Left,
+    Advisory,
+    Age18,
+    Rank,
+    Profile,
+    CopyId,
+    Ban,
+}
+
+impl ColumnId {
+    const ALL: [ColumnId; 15] = [
+        ColumnId::Name,
+        ColumnId::Id,
+        ColumnId::Pronouns,
+        ColumnId::Avatar,
+        ColumnId::Performance,
+        ColumnId::AvatarStats,
+        ColumnId::AccAge,
+        ColumnId::Joined,
+        ColumnId::Left,
+        ColumnId::Advisory,
+        ColumnId::Age18,
+        ColumnId::Rank,
+        ColumnId::Profile,
+        ColumnId::CopyId,
+        ColumnId::Ban,
+    ];
+
+    fn label(&self) -> &'static str {
+        match self {
+            ColumnId::Name => "Name",
+            ColumnId::Id => "Id",
+            ColumnId::Pronouns => "Pronouns",
+            ColumnId::Avatar => "Avatar",
+            ColumnId::Performance => "Performance",
+            ColumnId::AvatarStats => "Avatar Stats",
+            ColumnId::AccAge => "Acc-Age",
+            ColumnId::Joined => "Joined",
+            ColumnId::Left => "Left",
+            ColumnId::Advisory => "Advisory",
+            ColumnId::Age18 => "18+",
+            ColumnId::Rank => "Rank",
+            ColumnId::Profile => "Profile",
+            ColumnId::CopyId => "Copy Id",
+            ColumnId::Ban => "Ban",
+        }
+    }
+
+    fn min_width(&self) -> f32 {
+        match self {
+            ColumnId::Name => 80.0,
+            ColumnId::Id => 70.0,
+            ColumnId::Pronouns => 60.0,
+            ColumnId::Avatar => 80.0,
+            ColumnId::Performance => 70.0,
+            ColumnId::AvatarStats => 50.0,
+            ColumnId::AccAge => 70.0,
+            ColumnId::Joined => 90.0,
+            ColumnId::Left => 90.0,
+            ColumnId::Advisory => 80.0,
+            ColumnId::Age18 => 40.0,
+            ColumnId::Rank => 60.0,
+            ColumnId::Profile => 50.0,
+            ColumnId::CopyId => 60.0,
+            ColumnId::Ban => 40.0,
+        }
+    }
+}
+
 pub struct ScarletApp {
     state: UiState,
     settings: Option<Arc<Settings>>,
@@ -43,6 +127,13 @@ pub struct ScarletApp {
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
+    /// Current left-to-right order of the Instance tab's columns. Starts as
+    /// `ColumnId::ALL` (matching `propstable`'s declared order) and can be
+    /// changed by dragging a header, matching the original Swing
+    /// `JTable`'s column-reordering behavior (`JTableHeader` lets you drag
+    /// columns; there's no persisted-order file in the Java version to
+    /// match either, so this resets on restart there too).
+    column_order: Vec<ColumnId>,
 }
 
 impl ScarletApp {
@@ -55,6 +146,7 @@ impl ScarletApp {
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
+            column_order: ColumnId::ALL.to_vec(),
         }
     }
 
@@ -112,127 +204,123 @@ impl ScarletApp {
         });
     }
 
+    /// Renders one player's value for `column` into the current cell.
+    /// Split out from `instance_tab` so the drag-to-reorder header can
+    /// change which column an index maps to without duplicating the
+    /// per-column render logic.
+    fn render_cell(&mut self, ui: &mut egui::Ui, player: &crate::state::ConnectedPlayer, column: ColumnId) {
+        match column {
+            ColumnId::Name => {
+                ui.label(&player.name);
+            }
+            ColumnId::Id => {
+                ui.label(&player.id);
+            }
+            ColumnId::Pronouns => {
+                ui.label(player.pronouns.as_deref().unwrap_or(""));
+            }
+            ColumnId::Avatar => {
+                ui.label(player.avatar_name.as_deref().unwrap_or(""));
+            }
+            ColumnId::Performance => {
+                ui.label(player.performance_rating.as_deref().unwrap_or(""));
+            }
+            ColumnId::AvatarStats => {
+                if ui.button("View").clicked() {
+                    self.state.append_cli_output(format!("Avatar stats for {}: not wired up yet.", player.name));
+                }
+            }
+            ColumnId::AccAge => {
+                let age = player.account_age.map(|(y, m, d)| format!("{y}y {m}m {d}d")).unwrap_or_default();
+                ui.label(age);
+            }
+            ColumnId::Joined => {
+                ui.label(player.joined.format("%Y-%m-%d %H:%M").to_string());
+            }
+            ColumnId::Left => {
+                let left = player.left.map(|l| l.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default();
+                ui.label(left);
+            }
+            ColumnId::Advisory => {
+                ui.label(player.advisory.as_deref().unwrap_or(""));
+            }
+            ColumnId::Age18 => {
+                ui.label(player.age_verification_status.as_deref().unwrap_or(""));
+            }
+            ColumnId::Rank => {
+                let color =
+                    player.trust_rank.color_rgb().map(|(r, g, b)| egui::Color32::from_rgb(r, g, b)).unwrap_or(egui::Color32::GRAY);
+                ui.colored_label(color, player.trust_rank.label());
+            }
+            ColumnId::Profile => {
+                if ui.button("Open").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::same_tab(format!("https://vrchat.com/home/user/{}", player.id)));
+                }
+            }
+            ColumnId::CopyId => {
+                if ui.button("Copy").clicked() {
+                    ui.ctx().copy_text(player.id.clone());
+                }
+            }
+            ColumnId::Ban => {
+                if ui.button("Ban").clicked() {
+                    self.state
+                        .append_cli_output(format!("Ban {}: not wired up yet (needs the VRChat group-ban call).", player.name));
+                }
+            }
+        }
+    }
+
     fn instance_tab(&mut self, ui: &mut egui::Ui) {
         use egui_extras::{Column, TableBuilder};
 
         let players = self.state.ordered_players();
+        let column_order = self.column_order.clone();
+
+        // Header cells are drag sources *and* drop zones at once: dropping
+        // one column's drag payload (its current index) onto another
+        // column's header swaps the two — matching the original Swing
+        // `JTableHeader`'s drag-to-reorder behavior instead of egui_extras'
+        // fixed column order.
+        let mut swap: Option<(usize, usize)> = None;
+
         egui::ScrollArea::horizontal().show(ui, |ui| {
-            TableBuilder::new(ui)
-                .striped(true)
-                .column(Column::auto().at_least(80.0)) // Name
-                .column(Column::auto().at_least(70.0)) // Id
-                .column(Column::auto().at_least(60.0)) // Pronouns
-                .column(Column::auto().at_least(80.0)) // Avatar
-                .column(Column::auto().at_least(70.0)) // Performance
-                .column(Column::auto().at_least(50.0)) // Avatar Stats
-                .column(Column::auto().at_least(70.0)) // Acc-Age
-                .column(Column::auto().at_least(90.0)) // Joined
-                .column(Column::auto().at_least(90.0)) // Left
-                .column(Column::auto().at_least(80.0)) // Advisory
-                .column(Column::auto().at_least(40.0)) // 18+
-                .column(Column::auto().at_least(60.0)) // Rank
-                .column(Column::auto().at_least(50.0)) // Profile
-                .column(Column::auto().at_least(60.0)) // Copy Id
-                .column(Column::auto().at_least(40.0)) // Ban
+            let mut table = TableBuilder::new(ui).striped(true);
+            for column in &column_order {
+                table = table.column(Column::auto().at_least(column.min_width()));
+            }
+
+            table
                 .header(20.0, |mut header| {
-                    for label in [
-                        "Name",
-                        "Id",
-                        "Pronouns",
-                        "Avatar",
-                        "Performance",
-                        "Avatar Stats",
-                        "Acc-Age",
-                        "Joined",
-                        "Left",
-                        "Advisory",
-                        "18+",
-                        "Rank",
-                        "Profile",
-                        "Copy Id",
-                        "Ban",
-                    ] {
+                    for (index, column) in column_order.iter().enumerate() {
                         header.col(|ui| {
-                            ui.strong(label);
+                            let (_, dropped) = ui.dnd_drop_zone::<usize, ()>(egui::Frame::none(), |ui| {
+                                ui.dnd_drag_source(egui::Id::new("instance_column_header").with(index), index, |ui| {
+                                    ui.strong(column.label());
+                                });
+                            });
+                            if let Some(dragged_from) = dropped {
+                                swap = Some((*dragged_from, index));
+                            }
                         });
                     }
                 })
                 .body(|mut body| {
                     for player in &players {
                         body.row(18.0, |mut row| {
-                            row.col(|ui| {
-                                ui.label(&player.name);
-                            });
-                            row.col(|ui| {
-                                ui.label(&player.id);
-                            });
-                            row.col(|ui| {
-                                ui.label(player.pronouns.as_deref().unwrap_or(""));
-                            });
-                            row.col(|ui| {
-                                ui.label(player.avatar_name.as_deref().unwrap_or(""));
-                            });
-                            row.col(|ui| {
-                                ui.label(player.performance_rating.as_deref().unwrap_or(""));
-                            });
-                            row.col(|ui| {
-                                if ui.button("View").clicked() {
-                                    self.state.append_cli_output(format!("Avatar stats for {}: not wired up yet.", player.name));
-                                }
-                            });
-                            row.col(|ui| {
-                                let age = player
-                                    .account_age
-                                    .map(|(y, m, d)| format!("{y}y {m}m {d}d"))
-                                    .unwrap_or_default();
-                                ui.label(age);
-                            });
-                            row.col(|ui| {
-                                ui.label(player.joined.format("%Y-%m-%d %H:%M").to_string());
-                            });
-                            row.col(|ui| {
-                                let left = player.left.map(|l| l.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default();
-                                ui.label(left);
-                            });
-                            row.col(|ui| {
-                                ui.label(player.advisory.as_deref().unwrap_or(""));
-                            });
-                            row.col(|ui| {
-                                ui.label(player.age_verification_status.as_deref().unwrap_or(""));
-                            });
-                            row.col(|ui| {
-                                let color = player
-                                    .trust_rank
-                                    .color_rgb()
-                                    .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b))
-                                    .unwrap_or(egui::Color32::GRAY);
-                                ui.colored_label(color, player.trust_rank.label());
-                            });
-                            row.col(|ui| {
-                                if ui.button("Open").clicked() {
-                                    ui.ctx().open_url(egui::OpenUrl::same_tab(format!(
-                                        "https://vrchat.com/home/user/{}",
-                                        player.id
-                                    )));
-                                }
-                            });
-                            row.col(|ui| {
-                                if ui.button("Copy").clicked() {
-                                    ui.ctx().copy_text(player.id.clone());
-                                }
-                            });
-                            row.col(|ui| {
-                                if ui.button("Ban").clicked() {
-                                    self.state.append_cli_output(format!(
-                                        "Ban {}: not wired up yet (needs the VRChat group-ban call).",
-                                        player.name
-                                    ));
-                                }
-                            });
+                            for column in &column_order {
+                                row.col(|ui| self.render_cell(ui, player, *column));
+                            }
                         });
                     }
                 });
         });
+
+        if let Some((from, to)) = swap {
+            if from != to && from < self.column_order.len() && to < self.column_order.len() {
+                self.column_order.swap(from, to);
+            }
+        }
     }
 
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
@@ -359,4 +447,40 @@ pub fn run(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, s
         options,
         Box::new(move |_cc| Ok(Box::new(ScarletApp::new(state, settings, data_dir, staff_mode)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_order_starts_as_all_columns_with_no_duplicates() {
+        // Guards the drag-to-reorder column list against accidental
+        // duplication/omission: exactly the 15 `propstable` columns,
+        // matching ScarletUI.java's column set, each exactly once.
+        let mut seen = std::collections::HashSet::new();
+        for column in ColumnId::ALL {
+            assert!(seen.insert(column), "duplicate column in ColumnId::ALL: {:?}", column);
+        }
+        assert_eq!(ColumnId::ALL.len(), 15);
+    }
+
+    #[test]
+    fn every_column_has_a_non_empty_label_and_positive_width() {
+        for column in ColumnId::ALL {
+            assert!(!column.label().is_empty());
+            assert!(column.min_width() > 0.0);
+        }
+    }
+
+    #[test]
+    fn dragging_a_header_swaps_the_two_columns() {
+        // Exercises the same swap logic `instance_tab` applies on a
+        // successful header drop, without needing a full egui context.
+        let mut order = ColumnId::ALL.to_vec();
+        let (from, to) = (0usize, 3usize);
+        order.swap(from, to);
+        assert_eq!(order[to], ColumnId::Name);
+        assert_eq!(order[from], ColumnId::Avatar);
+    }
 }
