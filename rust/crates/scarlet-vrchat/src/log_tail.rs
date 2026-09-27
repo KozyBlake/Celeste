@@ -43,35 +43,73 @@ use tokio::sync::mpsc;
 
 pub const VRCHAT_APP_ID: &str = "438100";
 
-/// Port of `VrcAppData.resolve`: locates VRChat's `AppData/LocalLow/VRChat/VRChat`
-/// equivalent directory (where `output_log_*.txt` files live).
-///
-/// - `SCARLET_VRC_APPDATA_DIR` env var, if set, is used directly (matches
-///   the Java override, minus the Android-companion-app path stripping
-///   logic, which isn't relevant to this desktop port).
-/// - Linux: tries each detected Steam library's Proton `compatdata` path
-///   for VRChat's app id, falling back to `~/.steam/steam/...`.
-/// - Everything else (Windows, macOS): `<home>/AppData/LocalLow/VRChat/VRChat`
-///   directly, matching the Java version's non-Linux branch (VRChat has no
-///   native macOS client, but this mirrors the Java fallback rather than
-///   guessing further).
+/// Relative paths ported from `VrcAppData.DIR` / `VrcAppData.TEMP`.
+pub const APP_DATA_DIR_RELATIVE: &str = "AppData/LocalLow/VRChat/VRChat";
+pub const APP_DATA_TEMP_RELATIVE: &str = "AppData/Local/Temp/VRChat/VRChat";
+
+/// Port of `VrcAppData.DIR`: the directory `output_log_*.txt` files live in.
 pub fn resolve_vrc_app_data_dir() -> PathBuf {
+    resolve(APP_DATA_DIR_RELATIVE)
+}
+
+/// Port of `VrcAppData.TEMP`. VRChat writes crash dumps and some transient
+/// state here; resolved the same way as [`resolve_vrc_app_data_dir`] so a
+/// single `SCARLET_VRC_APPDATA_DIR` override serves both, exactly as Java's
+/// prefix-stripping in `VrcAppData.resolve` does.
+pub fn resolve_vrc_app_data_temp_dir() -> PathBuf {
+    resolve(APP_DATA_TEMP_RELATIVE)
+}
+
+/// Port of `VrcAppData.resolve(String relative)`.
+///
+/// - `SCARLET_VRC_APPDATA_DIR`, if set, IS the resolved VRChat directory;
+///   the two known prefixes are stripped off `relative` so one override root
+///   produces the right path for both `DIR` and `TEMP` (Java does the same,
+///   for the Android companion build that points the tailer at a logcat
+///   dump). Java also reads the `scarlet.vrcAppData.dir` system property
+///   first — Rust has no system properties, so the env var is the only
+///   override, which is the same knob Java falls back to.
+/// - Linux: each detected Steam library's Proton `compatdata` prefix, then
+///   `~/.steam/steam` as the hardcoded fallback.
+/// - Everything else (Windows): `<user.home>/<relative>` directly.
+///
+/// Java's Android/Termux branch is deliberately not ported — it exists for
+/// the separate scarlet-android release, which this desktop port is not.
+pub fn resolve(relative: &str) -> PathBuf {
     if let Ok(over) = std::env::var("SCARLET_VRC_APPDATA_DIR") {
         if !over.is_empty() {
-            return PathBuf::from(over);
+            let mut rel = relative;
+            for prefix in [APP_DATA_DIR_RELATIVE, APP_DATA_TEMP_RELATIVE] {
+                if rel == prefix {
+                    rel = "";
+                    break;
+                }
+                if let Some(stripped) = rel.strip_prefix(prefix).and_then(|r| r.strip_prefix('/')) {
+                    rel = stripped;
+                    break;
+                }
+            }
+            let root = PathBuf::from(over);
+            return if rel.is_empty() { root } else { root.join(rel) };
         }
     }
 
     let home = dirs_home();
 
     if cfg!(target_os = "linux") {
-        if let Some(detected) = find_in_steam_libraries(&home) {
+        if let Some(detected) = find_in_steam_libraries(&home, relative) {
+            tracing::info!("Resolved VRChat path via Steam library detection: {}", detected.display());
             return detected;
         }
-        return home.join(".steam/steam").join(proton_prefix()).join("AppData/LocalLow/VRChat/VRChat");
+        let fallback = home.join(".steam/steam").join(proton_prefix()).join(relative);
+        tracing::warn!(
+            "Could not detect Steam library for VRChat, falling back to default path: {}",
+            fallback.display()
+        );
+        return fallback;
     }
 
-    home.join("AppData/LocalLow/VRChat/VRChat")
+    home.join(relative)
 }
 
 fn proton_prefix() -> PathBuf {
@@ -98,9 +136,10 @@ fn dirs_home() -> PathBuf {
 }
 
 /// Port of `VrcAppData.findInSteamLibraries` + `detectSteamLibraryRoots`.
-fn find_in_steam_libraries(home: &Path) -> Option<PathBuf> {
+fn find_in_steam_libraries(home: &Path, relative: &str) -> Option<PathBuf> {
     for root in detect_steam_library_roots(home) {
-        let candidate = root.join(proton_prefix()).join("AppData/LocalLow/VRChat/VRChat");
+        let candidate = root.join(proton_prefix()).join(relative);
+        tracing::debug!("Checking Steam library candidate: {}", candidate.display());
         if candidate.exists() {
             return Some(candidate);
         }
@@ -220,15 +259,35 @@ pub fn parse_log_line(line: &str) -> Option<(NaiveDateTime, &str, &str)> {
 /// module docs on why this uses `strip_prefix`/`find`/`rfind` instead of
 /// Java's hardcoded substring offsets.
 pub fn parse_entry_text(text: &str) -> Option<LogEventKind> {
+    // `User Authenticated: <name> (usr_...)`.
+    //
+    // **Deliberate divergence from Java.** `handleEntry`'s authentication
+    // branch is nested inside `if (text.startsWith("[Behaviour] "))` but
+    // itself tests `text.startsWith("[User Authenticated: ")` — on the same
+    // `text`, from index 0. Both can never be true at once, so the branch is
+    // unreachable and Java never learns its own user id from the log. That
+    // matters: `clientUserId` is what `ScarletEventListener` compares against
+    // to avoid running join checks (and the mixed-character-name alert)
+    // against the local user themselves. A real VRChat log writes this line
+    // with no `[Behaviour] ` prefix and no brackets at all, confirmed against
+    // a live 2026-09 client log:
+    //   `2026.09.26 22:31:07 Debug      -  User Authenticated: Name (usr_...)`
+    // so this matches the real format. The bracketed shape is still accepted
+    // in case an older client wrote it that way.
+    if let Some(rest) = text
+        .strip_prefix("User Authenticated: ")
+        .or_else(|| text.strip_prefix("[Behaviour] User Authenticated: "))
+        .or_else(|| text.strip_prefix("[Behaviour] [User Authenticated: "))
+    {
+        let name_end = rest.rfind(" (")?;
+        let id_end = rest.rfind(')')?;
+        return Some(LogEventKind::UserAuthenticated {
+            display_name: rest[..name_end].to_string(),
+            user_id: rest[name_end + 2..id_end].to_string(),
+        });
+    }
+
     if let Some(after_behaviour) = text.strip_prefix("[Behaviour] ") {
-        if let Some(rest) = after_behaviour.strip_prefix("[User Authenticated: ") {
-            let name_end = rest.rfind(" (")?;
-            let id_end = rest.rfind(')')?;
-            return Some(LogEventKind::UserAuthenticated {
-                display_name: rest[..name_end].to_string(),
-                user_id: rest[name_end + 2..id_end].to_string(),
-            });
-        }
         if let Some(rest) = after_behaviour.strip_prefix("Joining ") {
             if !rest.starts_with("or Creating Room: ") {
                 return Some(LogEventKind::UserJoined { location: rest.to_string() });
@@ -367,13 +426,38 @@ pub fn parse_entry_text(text: &str) -> Option<LogEventKind> {
 /// launch). `Tail.java` polled on a similar order of magnitude.
 const POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
+/// How long Java's tailer thread waits between "has a log file appeared
+/// yet?" checks before the first one exists (`MiscUtils.sleep(10_000L)`).
+const WAIT_FOR_LOG_INTERVAL: Duration = Duration::from_millis(10_000);
+
+/// Everything the tailer reports, ported from `ScarletVRChatLogs.Listener`.
+///
+/// The previous version of this module only ever emitted parsed entries,
+/// dropping `log_init`/`log_catchUp` entirely — which left the consumer with
+/// no way to know a new VRChat session had started or that catch-up had
+/// finished. `ScarletEventListener` keys real behavior off both
+/// (`isTailerLive`, deferred-row flushing, avatar rescan), so they are part
+/// of the contract, not bookkeeping.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TailerEvent {
+    /// `log_init`: this file just became the tail target (new VRChat session).
+    Init { file: PathBuf },
+    /// `log_catchUp`: everything already in the file has been replayed and
+    /// what follows is live. `file: None` is Java's `catchUp(null)` — there
+    /// is no log file to read at all (VRChat not installed, or none written
+    /// yet).
+    CatchUp { file: Option<PathBuf> },
+    /// One recognized log line (`handleEntry`).
+    Entry(LogEvent),
+}
+
 /// Spawns the tailer as a background task on `handle` and returns a channel
-/// of parsed log events. Resolves the VRChat app-data directory via
+/// of [`TailerEvent`]s. Resolves the VRChat app-data directory via
 /// [`resolve_vrc_app_data_dir`]. Takes an explicit runtime `Handle` (rather
 /// than relying on the ambient `tokio::spawn` context) so it can be called
 /// from `main`'s bootstrap code before the GUI event loop takes over the
 /// main thread.
-pub fn spawn_tailer(handle: &tokio::runtime::Handle) -> mpsc::UnboundedReceiver<LogEvent> {
+pub fn spawn_tailer(handle: &tokio::runtime::Handle) -> mpsc::UnboundedReceiver<TailerEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
     let app_data_dir = resolve_vrc_app_data_dir();
     tracing::info!("VRChat log tailer watching {}", app_data_dir.display());
@@ -381,52 +465,107 @@ pub fn spawn_tailer(handle: &tokio::runtime::Handle) -> mpsc::UnboundedReceiver<
     rx
 }
 
-/// Runs forever, tailing whichever `output_log_*.txt` in `app_data_dir` is
-/// currently newest, sending a [`LogEvent`] for every recognized line.
-/// Content that already existed the first time a given log file is opened
-/// is sent with `preamble: true` (silent catch-up, matching
-/// `ScarletVRChatLogs`'s own preamble/live distinction); everything
-/// appended afterwards is `preamble: false`. Returns once `sender`'s
-/// receiver is dropped.
-pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<LogEvent>) {
-    let mut current_path: Option<PathBuf> = None;
-    let mut position: u64 = 0;
-    let mut preamble = true;
+/// Port of `ScarletVRChatLogs.thread()` plus `Tail`'s preamble/live
+/// distinction.
+///
+/// Sequence, matching Java exactly:
+/// 1. No VRChat app-data directory at all → one `CatchUp { file: None }`, the
+///    "does not seem to be installed" warning, and the tailer **stops**
+///    (Java returns from its thread). Nothing retries, because on a machine
+///    with no VRChat client there is nothing to wait for.
+/// 2. Directory exists but holds no `output_log_*.txt` yet → `CatchUp
+///    { file: None }` every 10s with "Waiting for log file to appear...",
+///    until one shows up.
+/// 3. For each target file: `Init`, then the already-present content as
+///    `preamble: true` entries, then `CatchUp { file: Some(..) }` once EOF is
+///    reached, then live entries as `preamble: false`.
+/// 4. When a newer `output_log_*.txt` appears (VRChat restarted), switch to
+///    it and start again from step 3 — Java's outer `while` loop.
+///
+/// One deliberate difference from `Tail.java`: Java buffers each entry and
+/// only dispatches it when the *next* header line (or EOF) arrives, because
+/// it collects a multi-line entry's continuation lines into a `List<String>`
+/// it passes to `handleEntry`. `handleEntry` never reads that list — every
+/// branch parses the header line's `txt` group alone — so dispatching each
+/// recognized line as soon as it is complete produces exactly the same
+/// events, just without the one-line delay. Continuation lines match no
+/// branch in either implementation.
+pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<TailerEvent>) {
+    if !app_data_dir.is_dir() {
+        let _ = sender.send(TailerEvent::CatchUp { file: None });
+        tracing::warn!(
+            "The VRChat Client does not seem to be installed on this machine, disabling log tailer-parser! \
+             (looked in {})",
+            app_data_dir.display()
+        );
+        return;
+    }
+
+    let mut current_path = loop {
+        if let Some(path) = locate_latest_log(&app_data_dir) {
+            break path;
+        }
+        if sender.send(TailerEvent::CatchUp { file: None }).is_err() {
+            return;
+        }
+        tokio::time::sleep(WAIT_FOR_LOG_INTERVAL).await;
+        tracing::info!("Waiting for log file to appear...");
+    };
 
     loop {
-        match locate_latest_log(&app_data_dir) {
-            None => {
-                tokio::time::sleep(POLL_INTERVAL).await;
-                continue;
-            }
-            Some(path) if current_path.as_ref() != Some(&path) => {
-                current_path = Some(path);
-                position = 0;
-                preamble = true;
-            }
-            Some(_) => {}
+        tracing::info!("Tailing {}", file_name_of(&current_path));
+        if sender.send(TailerEvent::Init { file: current_path.clone() }).is_err() {
+            return;
         }
 
-        let path = current_path.clone().expect("just resolved above");
-        if let Ok(lines) = read_new_lines(&path, &mut position) {
-            let this_batch_is_preamble = preamble;
-            for line in lines {
-                if let Some((timestamp, _level, text)) = parse_log_line(&line) {
-                    if let Some(kind) = parse_entry_text(text) {
-                        let event = LogEvent { preamble: this_batch_is_preamble, timestamp, kind };
-                        if sender.send(event).is_err() {
-                            return;
+        let mut position: u64 = 0;
+        let mut preamble = true;
+
+        loop {
+            match read_new_lines(&current_path, &mut position) {
+                Ok(lines) => {
+                    for line in lines {
+                        if let Some((timestamp, _level, text)) = parse_log_line(&line) {
+                            if let Some(kind) = parse_entry_text(text) {
+                                let event = LogEvent { preamble, timestamp, kind };
+                                if sender.send(TailerEvent::Entry(event)).is_err() {
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
+                Err(err) => {
+                    tracing::error!("Exception whilst tailing {}: {}", file_name_of(&current_path), err);
+                }
             }
-            // The first read (whatever it contained) caught up to the
-            // then-current end of file; everything from here on is live.
-            preamble = false;
-        }
 
-        tokio::time::sleep(POLL_INTERVAL).await;
+            // Reaching the end of what was already on disk is the catch-up
+            // point: from here on, anything read is live.
+            if preamble {
+                preamble = false;
+                tracing::info!("Caught up with {}", file_name_of(&current_path));
+                if sender.send(TailerEvent::CatchUp { file: Some(current_path.clone()) }).is_err() {
+                    return;
+                }
+            }
+
+            tokio::time::sleep(POLL_INTERVAL).await;
+
+            // VRChat writes a brand-new log file per launch; switching to it
+            // restarts the Init/preamble/CatchUp cycle for the new session.
+            if let Some(newest) = locate_latest_log(&app_data_dir) {
+                if newest != current_path {
+                    current_path = newest;
+                    break;
+                }
+            }
+        }
     }
+}
+
+fn file_name_of(path: &Path) -> std::borrow::Cow<'_, str> {
+    path.file_name().map(|n| n.to_string_lossy()).unwrap_or_else(|| path.to_string_lossy())
 }
 
 /// Reads any bytes appended to `path` since `*position`, advances
@@ -472,6 +611,61 @@ fn read_new_lines(path: &Path, position: &mut u64) -> std::io::Result<Vec<String
 mod tests {
     use super::*;
 
+    /// Real lines copied verbatim out of an `output_log_2026-09-26_22-31-01.txt`
+    /// written by a live VRChat client (the repo owner's, PC build). The
+    /// parsing half of this module had only ever been tested against
+    /// reconstructed lines, so this pins the actual on-disk format —
+    /// including the `Debug` level (not `Log`) that every line in a real
+    /// client log carries, and CRLF line endings.
+    #[test]
+    fn parses_real_client_log_lines() {
+        let real = [
+            "2026.09.26 22:31:07 Debug      -  User Authenticated: BlakeBelladonna (usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1)\r",
+            "2026.09.26 22:31:13 Debug      -  [Behaviour] Joining wrld_0ebc959b-d11e-44fc-aff0-b17d8e71d37d:09580~private(usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1)~region(us)\r",
+            "2026.09.26 22:31:13 Debug      -  [Behaviour] Joining or Creating Room: Studio Apartment J31\r",
+            "2026.09.26 22:32:10 Debug      -  [Behaviour] OnPlayerJoined Church (usr_849ac025-7f46-4645-b23a-ac52fd13dfac)\r",
+            "2026.09.26 22:31:59 Debug      -  [Behaviour] OnPlayerLeft BlakeBelladonna (usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1)\r",
+            "2026.09.26 22:31:59 Debug      -  [Behaviour] OnLeftRoom\r",
+            "2026.09.26 22:32:10 Debug      -  [Behaviour] Switching twisted_masks to avatar Thicc Catocat\r",
+        ];
+        let parsed: Vec<LogEventKind> = real
+            .iter()
+            .filter_map(|line| {
+                let line = line.trim_end_matches(['\r', '\n']);
+                let (_, level, text) = parse_log_line(line)?;
+                assert_eq!(level, "Debug", "real client logs use the Debug level, not Log");
+                parse_entry_text(text)
+            })
+            .collect();
+
+        assert_eq!(
+            parsed,
+            vec![
+                LogEventKind::UserAuthenticated {
+                    display_name: "BlakeBelladonna".to_string(),
+                    user_id: "usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1".to_string(),
+                },
+                LogEventKind::UserJoined {
+                    location: "wrld_0ebc959b-d11e-44fc-aff0-b17d8e71d37d:09580~private(usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1)~region(us)".to_string(),
+                },
+                // "Joining or Creating Room: ..." is deliberately not an event.
+                LogEventKind::PlayerJoined {
+                    display_name: "Church".to_string(),
+                    user_id: "usr_849ac025-7f46-4645-b23a-ac52fd13dfac".to_string(),
+                },
+                LogEventKind::PlayerLeft {
+                    display_name: "BlakeBelladonna".to_string(),
+                    user_id: "usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1".to_string(),
+                },
+                LogEventKind::UserLeft,
+                LogEventKind::PlayerSwitchAvatar {
+                    display_name: "twisted_masks".to_string(),
+                    avatar_display_name: "Thicc Catocat".to_string(),
+                },
+            ]
+        );
+    }
+
     #[test]
     fn parses_a_full_log_line() {
         let line = "2026.09.27 14:32:10 Debug      -  [Behaviour] OnPlayerJoined SomePlayer (usr_11111111-1111-1111-1111-111111111111)";
@@ -483,7 +677,8 @@ mod tests {
 
     #[test]
     fn user_authenticated() {
-        let text = "[Behaviour] [User Authenticated: SomePlayer (usr_11111111-1111-1111-1111-111111111111)]";
+        // The real format, taken verbatim from a live 2026-09 VRChat log.
+        let text = "User Authenticated: SomePlayer (usr_11111111-1111-1111-1111-111111111111)";
         assert_eq!(
             parse_entry_text(text),
             Some(LogEventKind::UserAuthenticated {
@@ -491,6 +686,10 @@ mod tests {
                 user_id: "usr_11111111-1111-1111-1111-111111111111".to_string(),
             })
         );
+        // The bracketed shape Java's (unreachable) branch expected is still
+        // accepted, so an older client log keeps working.
+        let bracketed = "[Behaviour] [User Authenticated: SomePlayer (usr_11111111-1111-1111-1111-111111111111)]";
+        assert!(matches!(parse_entry_text(bracketed), Some(LogEventKind::UserAuthenticated { .. })));
     }
 
     #[test]
@@ -656,6 +855,17 @@ mod tests {
         assert!(locate_latest_log(dir.path()).is_none());
     }
 
+    /// Helper: pulls the next [`TailerEvent::Entry`] off the channel,
+    /// asserting nothing takes longer than the timeout.
+    async fn next_entry(rx: &mut mpsc::UnboundedReceiver<TailerEvent>) -> LogEvent {
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+            if let TailerEvent::Entry(entry) = event {
+                return entry;
+            }
+        }
+    }
+
     #[tokio::test]
     async fn tails_growing_log_file_preamble_then_live() {
         let dir = tempfile::tempdir().unwrap();
@@ -669,19 +879,27 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let handle = tokio::spawn(tail_forever(dir.path().to_path_buf(), tx));
 
-        let first = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+        // `log_init` fires before anything is read from the new target.
+        let init = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+        assert_eq!(init, TailerEvent::Init { file: log_path.clone() });
+
+        let first = next_entry(&mut rx).await;
         assert!(first.preamble, "pre-existing content should be marked preamble");
         assert_eq!(
             first.kind,
             LogEventKind::PlayerJoined { display_name: "Preexisting".to_string(), user_id: "usr_9".to_string() }
         );
 
+        // ...then `log_catchUp` once that pre-existing content is exhausted.
+        let caught_up = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+        assert_eq!(caught_up, TailerEvent::CatchUp { file: Some(log_path.clone()) });
+
         use std::io::Write as _;
         let mut f = std::fs::OpenOptions::new().append(true).open(&log_path).unwrap();
         writeln!(f, "2026.01.01 00:00:02 Debug      -  [Behaviour] OnPlayerJoined LiveJoiner (usr_10)").unwrap();
         drop(f);
 
-        let second = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+        let second = next_entry(&mut rx).await;
         assert!(!second.preamble, "content appended after startup should not be preamble");
         assert_eq!(
             second.kind,
@@ -690,6 +908,53 @@ mod tests {
 
         drop(rx);
         let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+    }
+
+    /// Java's tailer thread reports `catchUp(null)` and stops with the
+    /// "does not seem to be installed" warning when VRChat's app-data
+    /// directory doesn't exist at all. Consumers rely on that single
+    /// catch-up to stop waiting for an instance that will never open.
+    #[tokio::test]
+    async fn no_vrchat_directory_reports_catch_up_then_stops() {
+        let missing = std::path::PathBuf::from("/definitely/not/a/vrchat/install");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = tokio::spawn(tail_forever(missing, tx));
+
+        let event = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+        assert_eq!(event, TailerEvent::CatchUp { file: None });
+
+        // The task returns rather than polling forever.
+        tokio::time::timeout(Duration::from_secs(5), handle).await.unwrap().unwrap();
+        assert!(rx.recv().await.is_none(), "tailer should have stopped, closing the channel");
+    }
+
+    /// A machine with VRChat installed but no log written yet: Java keeps
+    /// reporting `catchUp(null)` every 10s rather than stopping.
+    #[tokio::test]
+    async fn empty_log_directory_reports_catch_up_and_keeps_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = tokio::spawn(tail_forever(dir.path().to_path_buf(), tx));
+
+        let event = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+        assert_eq!(event, TailerEvent::CatchUp { file: None });
+        // Unlike the no-directory case, the task stays alive waiting for a
+        // log file to appear (Java's 10s retry loop) rather than returning.
+        assert!(!handle.is_finished());
+
+        handle.abort();
+    }
+
+    #[test]
+    fn app_data_override_serves_both_dir_and_temp() {
+        // `SCARLET_VRC_APPDATA_DIR` IS the resolved directory: the known
+        // prefixes are stripped so one root works for DIR and TEMP alike.
+        let root = std::path::Path::new("/tmp/some-override");
+        std::env::set_var("SCARLET_VRC_APPDATA_DIR", root);
+        assert_eq!(resolve(APP_DATA_DIR_RELATIVE), root);
+        assert_eq!(resolve(APP_DATA_TEMP_RELATIVE), root);
+        assert_eq!(resolve("AppData/LocalLow/VRChat/VRChat/crash"), root.join("crash"));
+        std::env::remove_var("SCARLET_VRC_APPDATA_DIR");
     }
 
     #[test]
