@@ -52,6 +52,7 @@ pub const GROUP_ID_KEY: &str = "vrchat_group_id";
 /// easy wrong guess).
 pub const PERMISSION_ALL: &str = "*";
 pub const PERMISSION_GROUP_BANS_MANAGE: &str = "group-bans-manage";
+pub const PERMISSION_GROUP_AUDIT_VIEW: &str = "group-audit-view";
 pub const PERMISSION_GROUP_MEMBERS_VIEWALL: &str = "group-members-viewall";
 pub const PERMISSION_GROUP_INVITES_MANAGE: &str = "group-invites-manage";
 pub const PERMISSION_GROUP_ANNOUNCEMENT_MANAGE: &str = "group-announcement-manage";
@@ -93,7 +94,9 @@ impl VrChatClient {
     /// the Basic Auth header reaches `/auth/user` intact. This also matches the
     /// Java client's use of `Scarlet.API_BASE_2`.
     pub fn new() -> Result<Self, VrChatError> {
-        Self::with_base_url(&scarlet_core::identity::api_base(scarlet_core::identity::API_HOST_2))
+        Self::with_base_url(&scarlet_core::identity::api_base(
+            scarlet_core::identity::API_HOST_2,
+        ))
     }
 
     /// Builds a client against an arbitrary base URL — used to point at a
@@ -103,7 +106,10 @@ impl VrChatClient {
             .cookie_store(true)
             .user_agent(scarlet_core::identity::user_agent())
             .build()?;
-        Ok(VrChatClient { http, base_url: base_url.trim_end_matches('/').to_string() })
+        Ok(VrChatClient {
+            http,
+            base_url: base_url.trim_end_matches('/').to_string(),
+        })
     }
 
     fn url(&self, path: &str) -> String {
@@ -116,7 +122,11 @@ impl VrChatClient {
     /// by inspecting the response shape (a `requiresTwoFactorAuth` array vs
     /// a full user object), same as the Java version's `data.has("id")`
     /// check.
-    pub async fn login_with_credentials(&self, username: &str, password: &str) -> Result<LoginOutcome, VrChatError> {
+    pub async fn login_with_credentials(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<LoginOutcome, VrChatError> {
         let response = self
             .http
             .get(self.url("/auth/user"))
@@ -138,19 +148,29 @@ impl VrChatClient {
         serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
     }
 
-    async fn parse_login_response(&self, response: reqwest::Response) -> Result<LoginOutcome, VrChatError> {
+    async fn parse_login_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<LoginOutcome, VrChatError> {
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
             return Err(VrChatError::Api { status, body });
         }
-        let value: Value = serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
-        if let Some(methods) = value.get("requiresTwoFactorAuth").and_then(|v| v.as_array()) {
-            let methods = methods.iter().filter_map(|m| m.as_str().map(str::to_string)).collect();
+        let value: Value =
+            serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
+        if let Some(methods) = value
+            .get("requiresTwoFactorAuth")
+            .and_then(|v| v.as_array())
+        {
+            let methods = methods
+                .iter()
+                .filter_map(|m| m.as_str().map(str::to_string))
+                .collect();
             return Ok(LoginOutcome::RequiresTwoFactor(methods));
         }
-        let user: CurrentUser =
-            serde_json::from_value(value).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
+        let user: CurrentUser = serde_json::from_value(value)
+            .map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
         Ok(LoginOutcome::LoggedIn(user))
     }
 
@@ -186,8 +206,12 @@ impl VrChatClient {
         if !status.is_success() {
             return Err(VrChatError::Api { status, body });
         }
-        let value: Value = serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
-        Ok(value.get("verified").and_then(|v| v.as_bool()).unwrap_or(false))
+        let value: Value =
+            serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
+        Ok(value
+            .get("verified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
     }
 
     /// Port of `getGroupAuditLogsRaw`/one page of `auditQuery`: `GET
@@ -207,9 +231,27 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// `GET /groups/{groupId}/auditLogTypes`, the list of audit event
+    /// identifiers currently present in the group.
+    pub async fn get_group_audit_log_entry_types(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<String>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/auditLogTypes")))
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     /// Port of `getUser(String userId)`: `GET /users/{userId}`.
     pub async fn get_user(&self, user_id: &str) -> Result<crate::models::User, VrChatError> {
-        let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/users/{user_id}")))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -225,7 +267,11 @@ impl VrChatClient {
 
     /// Port of `getGroup(String groupId, Boolean includeRoles)`: `GET
     /// /groups/{groupId}[?includeRoles=true]`.
-    pub async fn get_group(&self, group_id: &str, include_roles: bool) -> Result<crate::models::Group, VrChatError> {
+    pub async fn get_group(
+        &self,
+        group_id: &str,
+        include_roles: bool,
+    ) -> Result<crate::models::Group, VrChatError> {
         let mut request = self.http.get(self.url(&format!("/groups/{group_id}")));
         if include_roles {
             request = request.query(&[("includeRoles", "true")]);
@@ -234,14 +280,26 @@ impl VrChatClient {
     }
 
     /// Port of `getGroupRoles(String groupId)`: `GET /groups/{groupId}/roles`.
-    pub async fn get_group_roles(&self, group_id: &str) -> Result<Vec<crate::models::GroupRole>, VrChatError> {
-        let response = self.http.get(self.url(&format!("/groups/{group_id}/roles"))).send().await?;
+    pub async fn get_group_roles(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<crate::models::GroupRole>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/roles")))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Port of `getGroupBans(String groupId, int limit)`: `GET
     /// /groups/{groupId}/bans`.
-    pub async fn get_group_bans(&self, group_id: &str, n: u32, offset: u32) -> Result<Vec<crate::models::GroupMember>, VrChatError> {
+    pub async fn get_group_bans(
+        &self,
+        group_id: &str,
+        n: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::models::GroupMember>, VrChatError> {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/bans")))
@@ -256,7 +314,12 @@ impl VrChatClient {
     /// a 250ms sleep between pages up to some overall `limit` -- matching
     /// the same one-page-per-call shape already used for
     /// `get_group_bans`/`search_group_members` elsewhere in this client.
-    pub async fn get_group_invites(&self, group_id: &str, n: u32, offset: u32) -> Result<Vec<crate::models::GroupMember>, VrChatError> {
+    pub async fn get_group_invites(
+        &self,
+        group_id: &str,
+        n: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::models::GroupMember>, VrChatError> {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/invites")))
@@ -277,7 +340,11 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/requests")))
-            .query(&[("n", n.to_string()), ("offset", offset.to_string()), ("blocked", blocked.to_string())])
+            .query(&[
+                ("n", n.to_string()),
+                ("offset", offset.to_string()),
+                ("blocked", blocked.to_string()),
+            ])
             .send()
             .await?;
         Self::parse_response(response).await
@@ -285,7 +352,11 @@ impl VrChatClient {
 
     /// Port of `banFromGroup(String targetUserId)`: `POST
     /// /groups/{groupId}/bans` with `{"userId": ...}`.
-    pub async fn ban_from_group(&self, group_id: &str, user_id: &str) -> Result<crate::models::GroupMember, VrChatError> {
+    pub async fn ban_from_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<crate::models::GroupMember, VrChatError> {
         let response = self
             .http
             .post(self.url(&format!("/groups/{group_id}/bans")))
@@ -297,8 +368,16 @@ impl VrChatClient {
 
     /// Port of `unbanFromGroup(String targetUserId)`: `DELETE
     /// /groups/{groupId}/bans/{userId}`.
-    pub async fn unban_from_group(&self, group_id: &str, user_id: &str) -> Result<crate::models::GroupMember, VrChatError> {
-        let response = self.http.delete(self.url(&format!("/groups/{group_id}/bans/{user_id}"))).send().await?;
+    pub async fn unban_from_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<crate::models::GroupMember, VrChatError> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/groups/{group_id}/bans/{user_id}")))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -306,18 +385,29 @@ impl VrChatClient {
     /// `GET /groups/{groupId}/members/{userId}`. Returns `Ok(None)` (not an
     /// error) when the response body is JSON `null`, matching the spec's
     /// documented "returns a GroupMember, or null when not a member".
-    pub async fn get_group_member(&self, group_id: &str, user_id: &str) -> Result<Option<crate::models::GroupMember>, VrChatError> {
-        let response = self.http.get(self.url(&format!("/groups/{group_id}/members/{user_id}"))).send().await?;
+    pub async fn get_group_member(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Option<crate::models::GroupMember>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/members/{user_id}")))
+            .send()
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
             return Err(VrChatError::Api { status, body });
         }
-        let value: Value = serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
+        let value: Value =
+            serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
         if value.is_null() {
             return Ok(None);
         }
-        serde_json::from_value(value).map(Some).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
     }
 
     /// Port of `searchGroupMembers(String groupId, String query, int limit)`:
@@ -335,7 +425,11 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/members/search")))
-            .query(&[("query", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .query(&[
+                ("query", query),
+                ("n", &n.to_string()),
+                ("offset", &offset.to_string()),
+            ])
             .send()
             .await?;
         Self::parse_response(response).await
@@ -343,8 +437,16 @@ impl VrChatClient {
 
     /// Port of the kick half of group member management: `DELETE
     /// /groups/{groupId}/members/{userId}`.
-    pub async fn kick_group_member(&self, group_id: &str, user_id: &str) -> Result<(), VrChatError> {
-        let response = self.http.delete(self.url(&format!("/groups/{group_id}/members/{user_id}"))).send().await?;
+    pub async fn kick_group_member(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<(), VrChatError> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/groups/{group_id}/members/{user_id}")))
+            .send()
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -356,17 +458,37 @@ impl VrChatClient {
     /// Port of `addGroupRole(String groupId, String targetUserId, String
     /// groupRoleId)`: `PUT /groups/{groupId}/members/{userId}/roles/{roleId}`,
     /// returning the member's full role id list afterward.
-    pub async fn add_group_member_role(&self, group_id: &str, user_id: &str, role_id: &str) -> Result<Vec<String>, VrChatError> {
-        let response =
-            self.http.put(self.url(&format!("/groups/{group_id}/members/{user_id}/roles/{role_id}"))).send().await?;
+    pub async fn add_group_member_role(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        role_id: &str,
+    ) -> Result<Vec<String>, VrChatError> {
+        let response = self
+            .http
+            .put(self.url(&format!(
+                "/groups/{group_id}/members/{user_id}/roles/{role_id}"
+            )))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Port of `removeGroupRole(String groupId, String targetUserId, String
     /// groupRoleId)`: `DELETE /groups/{groupId}/members/{userId}/roles/{roleId}`.
-    pub async fn remove_group_member_role(&self, group_id: &str, user_id: &str, role_id: &str) -> Result<Vec<String>, VrChatError> {
-        let response =
-            self.http.delete(self.url(&format!("/groups/{group_id}/members/{user_id}/roles/{role_id}"))).send().await?;
+    pub async fn remove_group_member_role(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        role_id: &str,
+    ) -> Result<Vec<String>, VrChatError> {
+        let response = self
+            .http
+            .delete(self.url(&format!(
+                "/groups/{group_id}/members/{user_id}/roles/{role_id}"
+            )))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -374,8 +496,15 @@ impl VrChatClient {
     /// Returns an "empty" `GroupAnnouncement` (see its `is_empty`) rather
     /// than an error when the group has no current announcement, matching
     /// the API's own documented behavior.
-    pub async fn get_group_announcement(&self, group_id: &str) -> Result<crate::models::GroupAnnouncement, VrChatError> {
-        let response = self.http.get(self.url(&format!("/groups/{group_id}/announcement"))).send().await?;
+    pub async fn get_group_announcement(
+        &self,
+        group_id: &str,
+    ) -> Result<crate::models::GroupAnnouncement, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/announcement")))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -400,7 +529,11 @@ impl VrChatClient {
 
     /// Port of `deleteGroupAnnouncement`: `DELETE /groups/{groupId}/announcement`.
     pub async fn delete_group_announcement(&self, group_id: &str) -> Result<(), VrChatError> {
-        let response = self.http.delete(self.url(&format!("/groups/{group_id}/announcement"))).send().await?;
+        let response = self
+            .http
+            .delete(self.url(&format!("/groups/{group_id}/announcement")))
+            .send()
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -427,7 +560,11 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/posts")))
-            .query(&[("number", n.to_string()), ("offset", offset.to_string()), ("publicOnly", public_only.to_string())])
+            .query(&[
+                ("number", n.to_string()),
+                ("offset", offset.to_string()),
+                ("publicOnly", public_only.to_string()),
+            ])
             .send()
             .await?;
         let wrapper: crate::models::GroupPostsResponse = Self::parse_response(response).await?;
@@ -454,13 +591,26 @@ impl VrChatClient {
         if let Some(role_id) = role_id {
             body["roleIds"] = serde_json::json!([role_id]);
         }
-        let response = self.http.post(self.url(&format!("/groups/{group_id}/posts"))).json(&body).send().await?;
+        let response = self
+            .http
+            .post(self.url(&format!("/groups/{group_id}/posts")))
+            .json(&body)
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Port of `deleteGroupPost`: `DELETE /groups/{groupId}/posts/{postId}`.
-    pub async fn delete_group_post(&self, group_id: &str, post_id: &str) -> Result<(), VrChatError> {
-        let response = self.http.delete(self.url(&format!("/groups/{group_id}/posts/{post_id}"))).send().await?;
+    pub async fn delete_group_post(
+        &self,
+        group_id: &str,
+        post_id: &str,
+    ) -> Result<(), VrChatError> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/groups/{group_id}/posts/{post_id}")))
+            .send()
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -492,7 +642,11 @@ impl VrChatClient {
     /// logged in as current owner to initiate; must be logged in as transfer
     /// target to accept" per the spec -- this client doesn't distinguish the
     /// two cases, matching Java's own `initiateOrAcceptGroupTransfer`.
-    pub async fn initiate_or_accept_group_transfer(&self, group_id: &str, target_user_id: &str) -> Result<(), VrChatError> {
+    pub async fn initiate_or_accept_group_transfer(
+        &self,
+        group_id: &str,
+        target_user_id: &str,
+    ) -> Result<(), VrChatError> {
         let response = self
             .http
             .post(self.url(&format!("/groups/{group_id}/transfer")))
@@ -509,7 +663,11 @@ impl VrChatClient {
 
     /// Port of `cancelGroupTransfer`: `DELETE /groups/{groupId}/transfer`.
     pub async fn cancel_group_transfer(&self, group_id: &str) -> Result<(), VrChatError> {
-        let response = self.http.delete(self.url(&format!("/groups/{group_id}/transfer"))).send().await?;
+        let response = self
+            .http
+            .delete(self.url(&format!("/groups/{group_id}/transfer")))
+            .send()
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -522,13 +680,21 @@ impl VrChatClient {
 
     /// Port of `getWorld(String worldId)`: `GET /worlds/{worldId}`.
     pub async fn get_world(&self, world_id: &str) -> Result<crate::models::World, VrChatError> {
-        let response = self.http.get(self.url(&format!("/worlds/{world_id}"))).send().await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/worlds/{world_id}")))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Port of `getAvatar(String avatarId)`: `GET /avatars/{avatarId}`.
     pub async fn get_avatar(&self, avatar_id: &str) -> Result<crate::models::Avatar, VrChatError> {
-        let response = self.http.get(self.url(&format!("/avatars/{avatar_id}"))).send().await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/avatars/{avatar_id}")))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -538,11 +704,20 @@ impl VrChatClient {
     /// `number` (unlike `getGroupPosts`'s own locally-defined `number`
     /// param -- VRChat's API is inconsistent about this between endpoints,
     /// not a typo here).
-    pub async fn search_worlds(&self, query: &str, n: u32, offset: u32) -> Result<Vec<crate::models::World>, VrChatError> {
+    pub async fn search_worlds(
+        &self,
+        query: &str,
+        n: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::models::World>, VrChatError> {
         let response = self
             .http
             .get(self.url("/worlds"))
-            .query(&[("search", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .query(&[
+                ("search", query),
+                ("n", &n.to_string()),
+                ("offset", &offset.to_string()),
+            ])
             .send()
             .await?;
         Self::parse_response(response).await
@@ -561,7 +736,11 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url("/users"))
-            .query(&[("search", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .query(&[
+                ("search", query),
+                ("n", &n.to_string()),
+                ("offset", &offset.to_string()),
+            ])
             .send()
             .await?;
         Self::parse_response(response).await
@@ -572,11 +751,20 @@ impl VrChatClient {
     /// for the response -- the spec's `LimitedGroup` search-result shape is
     /// a subset of the same field names (`roles`/`onlineMemberCount` just
     /// come back `None`/`0`).
-    pub async fn search_groups(&self, query: &str, n: u32, offset: u32) -> Result<Vec<crate::models::Group>, VrChatError> {
+    pub async fn search_groups(
+        &self,
+        query: &str,
+        n: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::models::Group>, VrChatError> {
         let response = self
             .http
             .get(self.url("/groups"))
-            .query(&[("query", query), ("n", &n.to_string()), ("offset", &offset.to_string())])
+            .query(&[
+                ("query", query),
+                ("n", &n.to_string()),
+                ("offset", &offset.to_string()),
+            ])
             .send()
             .await?;
         Self::parse_response(response).await
@@ -584,15 +772,31 @@ impl VrChatClient {
 
     /// Port of `getInstance(String worldId, String instanceId)`: `GET
     /// /instances/{worldId}:{instanceId}`.
-    pub async fn get_instance(&self, world_id: &str, instance_id: &str) -> Result<crate::models::Instance, VrChatError> {
-        let response = self.http.get(self.url(&format!("/instances/{world_id}:{instance_id}"))).send().await?;
+    pub async fn get_instance(
+        &self,
+        world_id: &str,
+        instance_id: &str,
+    ) -> Result<crate::models::Instance, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/instances/{world_id}:{instance_id}")))
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Port of Scarlet's `createInstanceEx`, including fields omitted by the
     /// older generated Java model such as `minimumAvatarPerformance`.
-    pub async fn create_instance(&self, request: &serde_json::Value) -> Result<crate::models::Instance, VrChatError> {
-        let response = self.http.post(self.url("/instances")).json(request).send().await?;
+    pub async fn create_instance(
+        &self,
+        request: &serde_json::Value,
+    ) -> Result<crate::models::Instance, VrChatError> {
+        let response = self
+            .http
+            .post(self.url("/instances"))
+            .json(request)
+            .send()
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -608,7 +812,9 @@ impl VrChatClient {
         hard_close: Option<bool>,
         closed_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<crate::models::Instance, VrChatError> {
-        let mut request = self.http.delete(self.url(&format!("/instances/{world_id}:{instance_id}")));
+        let mut request = self
+            .http
+            .delete(self.url(&format!("/instances/{world_id}:{instance_id}")));
         if let Some(hard_close) = hard_close {
             request = request.query(&[("hardClose", hard_close.to_string())]);
         }
@@ -626,7 +832,12 @@ impl VrChatClient {
     /// this always does a fresh `get_group`/`get_group_member` fetch
     /// instead, which is correct, just uncached (an extra round trip per
     /// check rather than a cache hit).
-    pub async fn user_has_group_permission(&self, group_id: &str, user_id: &str, permission: &str) -> Result<bool, VrChatError> {
+    pub async fn user_has_group_permission(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        permission: &str,
+    ) -> Result<bool, VrChatError> {
         let group = self.get_group(group_id, true).await?;
         if group.owner_id.as_deref() == Some(user_id) {
             return Ok(true);
@@ -640,10 +851,16 @@ impl VrChatClient {
         Ok(roles
             .iter()
             .filter(|role| member.role_ids.contains(&role.id))
-            .any(|role| role.permissions.iter().any(|p| p == PERMISSION_ALL || p == permission)))
+            .any(|role| {
+                role.permissions
+                    .iter()
+                    .any(|p| p == PERMISSION_ALL || p == permission)
+            }))
     }
 
-    async fn parse_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T, VrChatError> {
+    async fn parse_response<T: serde::de::DeserializeOwned>(
+        response: reqwest::Response,
+    ) -> Result<T, VrChatError> {
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -666,7 +883,9 @@ impl VrChatClient {
 /// account requiring 2FA can only log in through the interactive wizard,
 /// which then hands its already-authenticated client onward instead of
 /// calling this at all.
-pub async fn login_with_stored_credentials(settings: &scarlet_core::settings::Settings) -> Option<VrChatClient> {
+pub async fn login_with_stored_credentials(
+    settings: &scarlet_core::settings::Settings,
+) -> Option<VrChatClient> {
     use scarlet_core::settings::registry::registry_string_encrypted;
 
     let username_reg = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY);
@@ -677,11 +896,21 @@ pub async fn login_with_stored_credentials(settings: &scarlet_core::settings::Se
     let client = match VrChatClient::new() {
         Ok(client) => client,
         Err(err) => {
-            tracing::error!("Could not build VRChat client for unattended login: {}", err);
+            tracing::error!(
+                "Could not build VRChat client for unattended login: {}",
+                err
+            );
             return None;
         }
     };
-    attempt_login_clearing_stored_credentials_on_rejection(client, &username, &password, &username_reg, &password_reg).await
+    attempt_login_clearing_stored_credentials_on_rejection(
+        client,
+        &username,
+        &password,
+        &username_reg,
+        &password_reg,
+    )
+    .await
 }
 
 /// The actual login-then-clear-on-rejection logic, split out from
@@ -697,7 +926,10 @@ async fn attempt_login_clearing_stored_credentials_on_rejection(
 ) -> Option<VrChatClient> {
     match client.login_with_credentials(username, password).await {
         Ok(LoginOutcome::LoggedIn(user)) => {
-            tracing::info!("VRChat unattended login succeeded as {}", user.display_name.as_deref().unwrap_or(&user.id));
+            tracing::info!(
+                "VRChat unattended login succeeded as {}",
+                user.display_name.as_deref().unwrap_or(&user.id)
+            );
             Some(client)
         }
         Ok(LoginOutcome::RequiresTwoFactor(methods)) => {
@@ -755,7 +987,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/auth/user"))
-            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({"error": {"message": "Invalid credentials"}})))
+            .respond_with(
+                ResponseTemplate::new(401).set_body_json(
+                    serde_json::json!({"error": {"message": "Invalid credentials"}}),
+                ),
+            )
             .mount(&server)
             .await;
 
@@ -777,8 +1013,16 @@ mod tests {
         .await;
 
         assert!(result.is_none());
-        assert_eq!(username_reg.get_or_null(), None, "a rejected login must not leave stale credentials stored");
-        assert_eq!(password_reg.get_or_null(), None, "a rejected login must not leave stale credentials stored");
+        assert_eq!(
+            username_reg.get_or_null(),
+            None,
+            "a rejected login must not leave stale credentials stored"
+        );
+        assert_eq!(
+            password_reg.get_or_null(),
+            None,
+            "a rejected login must not leave stale credentials stored"
+        );
     }
 
     #[tokio::test]
@@ -817,7 +1061,10 @@ mod tests {
             Some("someone"),
             "a transient network error must not clear good credentials"
         );
-        assert_eq!(password_reg.get_or_null().as_deref(), Some("correct-password"));
+        assert_eq!(
+            password_reg.get_or_null().as_deref(),
+            Some("correct-password")
+        );
     }
 
     #[tokio::test]
@@ -836,7 +1083,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let outcome = client.login_with_credentials("someone", "p&ss").await.unwrap();
+        let outcome = client
+            .login_with_credentials("someone", "p&ss")
+            .await
+            .unwrap();
         match outcome {
             LoginOutcome::LoggedIn(user) => assert_eq!(user.id, "usr_123"),
             other => panic!("expected LoggedIn, got {other:?}"),
@@ -855,7 +1105,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let outcome = client.login_with_credentials("someone", "pass").await.unwrap();
+        let outcome = client
+            .login_with_credentials("someone", "pass")
+            .await
+            .unwrap();
         match outcome {
             LoginOutcome::RequiresTwoFactor(methods) => {
                 assert_eq!(methods, vec!["totp".to_string(), "otp".to_string()]);
@@ -869,7 +1122,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/auth/twofactorauth/totp/verify"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "verified": true })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "verified": true })),
+            )
             .mount(&server)
             .await;
 
@@ -882,7 +1137,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/auth/twofactorauth/emailotp/verify"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "verified": true })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "verified": true })),
+            )
             .mount(&server)
             .await;
 
@@ -922,6 +1179,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_group_audit_log_entry_types_uses_types_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/auditLogTypes"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!(["group.user.ban", "group.instance.kick"])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let types = client
+            .get_group_audit_log_entry_types("grp_1")
+            .await
+            .unwrap();
+        assert_eq!(types, ["group.user.ban", "group.instance.kick"]);
+    }
+
+    #[tokio::test]
     async fn api_error_status_is_surfaced() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -931,7 +1208,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let err = client.login_with_credentials("someone", "wrong").await.unwrap_err();
+        let err = client
+            .login_with_credentials("someone", "wrong")
+            .await
+            .unwrap_err();
         match err {
             VrChatError::Api { status, .. } => assert_eq!(status, StatusCode::UNAUTHORIZED),
             other => panic!("expected Api error, got {other:?}"),
@@ -996,7 +1276,11 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        assert!(client.get_group_member("grp_1", "usr_2").await.unwrap().is_none());
+        assert!(client
+            .get_group_member("grp_1", "usr_2")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -1011,7 +1295,11 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let member = client.get_group_member("grp_1", "usr_2").await.unwrap().unwrap();
+        let member = client
+            .get_group_member("grp_1", "usr_2")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(member.role_ids, vec!["grol_1".to_string()]);
     }
 
@@ -1029,7 +1317,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let result = client.search_group_members("grp_1", "ali", 10, 0).await.unwrap();
+        let result = client
+            .search_group_members("grp_1", "ali", 10, 0)
+            .await
+            .unwrap();
         assert_eq!(result.total, 1);
         assert_eq!(result.results[0].user_id.as_deref(), Some("usr_2"));
     }
@@ -1039,7 +1330,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/groups/grp_1/members/usr_2/roles/grol_1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(["grol_1", "grol_2"])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!(["grol_1", "grol_2"])),
+            )
             .mount(&server)
             .await;
         Mock::given(method("DELETE"))
@@ -1049,9 +1342,15 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let after_add = client.add_group_member_role("grp_1", "usr_2", "grol_1").await.unwrap();
+        let after_add = client
+            .add_group_member_role("grp_1", "usr_2", "grol_1")
+            .await
+            .unwrap();
         assert_eq!(after_add, vec!["grol_1".to_string(), "grol_2".to_string()]);
-        let after_remove = client.remove_group_member_role("grp_1", "usr_2", "grol_1").await.unwrap();
+        let after_remove = client
+            .remove_group_member_role("grp_1", "usr_2", "grol_1")
+            .await
+            .unwrap();
         assert_eq!(after_remove, vec!["grol_2".to_string()]);
     }
 
@@ -1060,7 +1359,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("DELETE"))
             .and(path("/groups/grp_1/members/usr_2"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": {"message": "ok"}})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"success": {"message": "ok"}})),
+            )
             .mount(&server)
             .await;
 
@@ -1122,7 +1424,10 @@ mod tests {
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let instance = client.get_instance("wrld_1", "12345").await.unwrap();
         assert_eq!(instance.user_count, Some(3));
-        let closed = client.close_instance("wrld_1", "12345", None, None).await.unwrap();
+        let closed = client
+            .close_instance("wrld_1", "12345", None, None)
+            .await
+            .unwrap();
         assert_eq!(closed.instance_id.as_deref(), Some("12345"));
     }
 
@@ -1140,7 +1445,10 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let closed_at = chrono::Utc::now();
-        let closed = client.close_instance("wrld_1", "12345", Some(true), Some(closed_at)).await.unwrap();
+        let closed = client
+            .close_instance("wrld_1", "12345", Some(true), Some(closed_at))
+            .await
+            .unwrap();
         assert_eq!(closed.instance_id.as_deref(), Some("12345"));
     }
 
@@ -1165,7 +1473,10 @@ mod tests {
         mock_group_with_roles(&server, "usr_owner").await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        assert!(client.user_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+        assert!(client
+            .user_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1181,7 +1492,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        assert!(client.user_has_group_permission("grp_1", "usr_mod", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+        assert!(client
+            .user_has_group_permission("grp_1", "usr_mod", PERMISSION_GROUP_BANS_MANAGE)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1197,7 +1511,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        assert!(!client.user_has_group_permission("grp_1", "usr_plain", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+        assert!(!client
+            .user_has_group_permission("grp_1", "usr_plain", PERMISSION_GROUP_BANS_MANAGE)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1211,7 +1528,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        assert!(!client.user_has_group_permission("grp_1", "usr_stranger", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+        assert!(!client
+            .user_has_group_permission("grp_1", "usr_stranger", PERMISSION_GROUP_BANS_MANAGE)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1247,7 +1567,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let created = client.create_group_announcement("grp_1", "Hello", "World", false).await.unwrap();
+        let created = client
+            .create_group_announcement("grp_1", "Hello", "World", false)
+            .await
+            .unwrap();
         assert!(!created.is_empty());
         assert_eq!(created.title.as_deref(), Some("Hello"));
         client.delete_group_announcement("grp_1").await.unwrap();
@@ -1284,7 +1607,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let requests = client.get_group_join_requests("grp_1", true, 10, 0).await.unwrap();
+        let requests = client
+            .get_group_join_requests("grp_1", true, 10, 0)
+            .await
+            .unwrap();
         assert_eq!(requests[0].user_id.as_deref(), Some("usr_2"));
     }
 
@@ -1319,7 +1645,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let post = client.create_group_post("grp_1", "Hello", "World", "group", false, None).await.unwrap();
+        let post = client
+            .create_group_post("grp_1", "Hello", "World", "group", false, None)
+            .await
+            .unwrap();
         assert_eq!(post.id.as_deref(), Some("not_1"));
     }
 
@@ -1328,7 +1657,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("DELETE"))
             .and(path("/groups/grp_1/posts/not_1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})),
+            )
             .mount(&server)
             .await;
 
@@ -1355,7 +1686,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let transferable = client.get_group_transferability("grp_1", "usr_1").await.unwrap();
+        let transferable = client
+            .get_group_transferability("grp_1", "usr_1")
+            .await
+            .unwrap();
         let req = transferable.requirements.unwrap();
         assert!(req.group_not_monetized);
         assert!(!req.has_vrc_plus);
@@ -1366,17 +1700,24 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/groups/grp_1/transfer"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})),
+            )
             .mount(&server)
             .await;
         Mock::given(method("DELETE"))
             .and(path("/groups/grp_1/transfer"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})),
+            )
             .mount(&server)
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        client.initiate_or_accept_group_transfer("grp_1", "usr_1").await.unwrap();
+        client
+            .initiate_or_accept_group_transfer("grp_1", "usr_1")
+            .await
+            .unwrap();
         client.cancel_group_transfer("grp_1").await.unwrap();
     }
 
@@ -1414,7 +1755,10 @@ mod tests {
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let results = client.search_users("alice", 25, 0).await.unwrap();
         assert_eq!(results[0].display_name.as_deref(), Some("Alice"));
-        assert_eq!(results[0].icon_url.as_deref(), Some("https://example.com/a.png"));
+        assert_eq!(
+            results[0].icon_url.as_deref(),
+            Some("https://example.com/a.png")
+        );
     }
 
     #[tokio::test]

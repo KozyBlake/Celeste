@@ -1,7 +1,7 @@
 //! Port of (part of) `ScarletDiscordCommands.VrchatGroups`
 //! (`@SlashCmd("vrchat-group")` — a subcommand-group command). Java's
 //! `VrchatGroups` has ~15 subcommands; ported so far: `add-role`,
-//! `remove-role`, `search-members`, `list-bans`, `list-invites`,
+//! `remove-role`, `audit-types`, `search-members`, `list-bans`, `list-invites`,
 //! `list-join-requests`, `view-announcement`, `create-announcement`,
 //! `delete-announcement`, `list-posts`, `create-post`, `delete-post`,
 //! `transfer-check`, `transfer-start`, `transfer-cancel`, `open-instance`,
@@ -36,13 +36,20 @@
 //! confirmation before the permission gate) and only then run the real
 //! `group_all`-permission-gated transfer.
 
-use serenity::builder::{CreateActionRow, CreateButton, CreateCommand, CreateCommandOption, CreateInteractionResponseFollowup, CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption};
+use serenity::builder::{
+    CreateActionRow, CreateButton, CreateCommand, CreateCommandOption,
+    CreateInteractionResponseFollowup, CreateSelectMenu, CreateSelectMenuKind,
+    CreateSelectMenuOption,
+};
 use serenity::client::Context;
-use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
+use serenity::model::application::{
+    CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue,
+};
 use serenity::model::prelude::ButtonStyle;
 
 use scarlet_vrchat::client::{
-    PERMISSION_ALL, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_INSTANCE_MANAGE,
+    PERMISSION_ALL, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_AUDIT_VIEW,
+    PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_INSTANCE_MANAGE,
     PERMISSION_GROUP_INVITES_MANAGE, PERMISSION_GROUP_MEMBERS_VIEWALL,
 };
 
@@ -50,13 +57,30 @@ pub const NAME: &str = "vrchat-group";
 
 pub fn register() -> CreateCommand {
     let user_and_role_options = [
-        CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)").required(true),
-        CreateCommandOption::new(CommandOptionType::String, "vrchat-role-id", "The VRChat group role id (grol_...)")
-            .required(true),
+        CreateCommandOption::new(
+            CommandOptionType::String,
+            "vrchat-user-id",
+            "The VRChat user id (usr_...)",
+        )
+        .required(true),
+        CreateCommandOption::new(
+            CommandOptionType::String,
+            "vrchat-role-id",
+            "The VRChat group role id (grol_...)",
+        )
+        .required(true),
     ];
 
     let mut command = CreateCommand::new(NAME).description("Manages the configured VRChat group");
-    for (name, desc) in [("add-role", "Adds a VRChat Group Role"), ("remove-role", "Removes a VRChat Group Role")] {
+    command = command.add_option(CreateCommandOption::new(
+        CommandOptionType::SubCommand,
+        "audit-types",
+        "Lists audit event types currently present in this group",
+    ));
+    for (name, desc) in [
+        ("add-role", "Adds a VRChat Group Role"),
+        ("remove-role", "Removes a VRChat Group Role"),
+    ] {
         let mut option = CreateCommandOption::new(CommandOptionType::SubCommand, name, desc);
         for sub_option in user_and_role_options.clone() {
             option = option.add_sub_option(sub_option);
@@ -65,33 +89,61 @@ pub fn register() -> CreateCommand {
     }
 
     command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "search-members", "Searches this group's members")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "member-search", "Name or user id to search within this group")
-                    .required(true),
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "search-members",
+            "Searches this group's members",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "member-search",
+                "Name or user id to search within this group",
             )
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
-                    .min_int_value(1)
-                    .max_int_value(100),
-            ),
+            .required(true),
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::Integer,
+                "result-limit",
+                "Maximum results to fetch (1-100)",
+            )
+            .min_int_value(1)
+            .max_int_value(100),
+        ),
     );
     command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "list-bans", "Lists banned users in this group")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
-                    .min_int_value(1)
-                    .max_int_value(100),
-            ),
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "list-bans",
+            "Lists banned users in this group",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::Integer,
+                "result-limit",
+                "Maximum results to fetch (1-100)",
+            )
+            .min_int_value(1)
+            .max_int_value(100),
+        ),
     );
 
     command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "list-invites", "Lists pending invites sent by this group")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
-                    .min_int_value(1)
-                    .max_int_value(100),
-            ),
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "list-invites",
+            "Lists pending invites sent by this group",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::Integer,
+                "result-limit",
+                "Maximum results to fetch (1-100)",
+            )
+            .min_int_value(1)
+            .max_int_value(100),
+        ),
     );
     command = command.add_option(
         CreateCommandOption::new(
@@ -105,9 +157,13 @@ pub fn register() -> CreateCommand {
             "Show blocked requests instead of pending requests",
         ))
         .add_sub_option(
-            CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
-                .min_int_value(1)
-                .max_int_value(100),
+            CreateCommandOption::new(
+                CommandOptionType::Integer,
+                "result-limit",
+                "Maximum results to fetch (1-100)",
+            )
+            .min_int_value(1)
+            .max_int_value(100),
         ),
     );
 
@@ -117,126 +173,225 @@ pub fn register() -> CreateCommand {
         "Shows the current group announcement",
     ));
     command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "create-announcement", "Creates or replaces the group announcement")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "announcement-title", "Announcement title").required(true),
-            )
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "announcement-text", "Announcement text").required(true),
-            )
-            .add_sub_option(CreateCommandOption::new(
-                CommandOptionType::Boolean,
-                "send-notification",
-                "Send a notification to group members",
-            )),
-    );
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "delete-announcement", "Deletes the current group announcement")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "confirm-delete", "Type DELETE exactly to confirm")
-                    .required(true),
-            ),
-    );
-
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "list-posts", "Lists recent group posts")
-            .add_sub_option(CreateCommandOption::new(CommandOptionType::Boolean, "public-only", "Only show public posts"))
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
-                    .min_int_value(1)
-                    .max_int_value(100),
-            ),
-    );
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "create-post", "Creates a group post")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "post-title", "Post title").required(true).max_length(100),
-            )
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "post-text", "Post body").required(true).max_length(2000),
-            )
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "post-visibility", "Who can see the post")
-                    .required(true)
-                    .add_string_choice("Group Members", "group")
-                    .add_string_choice("Public", "public"),
-            )
-            .add_sub_option(CreateCommandOption::new(CommandOptionType::Boolean, "send-notification", "Notify group members"))
-            .add_sub_option(CreateCommandOption::new(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "create-announcement",
+            "Creates or replaces the group announcement",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
                 CommandOptionType::String,
-                "post-role-id",
-                "Optional VRChat group role id (grol_...) that can see a group-only post",
-            )),
-    );
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "delete-post", "Deletes a group post")
-            .add_sub_option(CreateCommandOption::new(CommandOptionType::String, "post-id", "The group post id").required(true))
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "confirm-delete", "Type DELETE exactly to confirm")
-                    .required(true),
-            ),
-    );
-
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "transfer-check", "Checks whether a user can receive group ownership")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)").required(true),
-            ),
-    );
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "transfer-start", "Starts or accepts group ownership transfer")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)").required(true),
+                "announcement-title",
+                "Announcement title",
             )
-            .add_sub_option(
-                CreateCommandOption::new(
-                    CommandOptionType::String,
-                    "confirm-group-id",
-                    "Type this group's id exactly to confirm",
-                )
-                .required(true),
-            ),
-    );
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "transfer-cancel", "Cancels an active group ownership transfer")
-            .add_sub_option(
-                CreateCommandOption::new(
-                    CommandOptionType::String,
-                    "confirm-group-id",
-                    "Type this group's id exactly to confirm",
-                )
-                .required(true),
-            ),
-    );
-
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "open-instance", "Opens a group instance")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "vrchat-world-id", "The VRChat world id (wrld_...)")
-                    .required(true),
-            ),
-    );
-
-    command = command.add_option(
-        CreateCommandOption::new(CommandOptionType::SubCommand, "close-instance", "Closes an instance")
-            .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "vrchat-location", "The instance to close (worldId:instanceId)")
-                    .required(true),
+            .required(true),
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "announcement-text",
+                "Announcement text",
             )
-            .add_sub_option(CreateCommandOption::new(
-                CommandOptionType::Boolean,
-                "close-hard",
-                "Whether to kick users currently in the instance",
-            ))
-            .add_sub_option(
-                CreateCommandOption::new(
-                    CommandOptionType::Integer,
-                    "close-in-minutes",
-                    "The number of minutes to wait before closing the instance (1-600)",
-                )
-                .min_int_value(1)
-                .max_int_value(600),
-            ),
+            .required(true),
+        )
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::Boolean,
+            "send-notification",
+            "Send a notification to group members",
+        )),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "delete-announcement",
+            "Deletes the current group announcement",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "confirm-delete",
+                "Type DELETE exactly to confirm",
+            )
+            .required(true),
+        ),
+    );
+
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "list-posts",
+            "Lists recent group posts",
+        )
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::Boolean,
+            "public-only",
+            "Only show public posts",
+        ))
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::Integer,
+                "result-limit",
+                "Maximum results to fetch (1-100)",
+            )
+            .min_int_value(1)
+            .max_int_value(100),
+        ),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "create-post",
+            "Creates a group post",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(CommandOptionType::String, "post-title", "Post title")
+                .required(true)
+                .max_length(100),
+        )
+        .add_sub_option(
+            CreateCommandOption::new(CommandOptionType::String, "post-text", "Post body")
+                .required(true)
+                .max_length(2000),
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "post-visibility",
+                "Who can see the post",
+            )
+            .required(true)
+            .add_string_choice("Group Members", "group")
+            .add_string_choice("Public", "public"),
+        )
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::Boolean,
+            "send-notification",
+            "Notify group members",
+        ))
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::String,
+            "post-role-id",
+            "Optional VRChat group role id (grol_...) that can see a group-only post",
+        )),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "delete-post",
+            "Deletes a group post",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(CommandOptionType::String, "post-id", "The group post id")
+                .required(true),
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "confirm-delete",
+                "Type DELETE exactly to confirm",
+            )
+            .required(true),
+        ),
+    );
+
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "transfer-check",
+            "Checks whether a user can receive group ownership",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "vrchat-user-id",
+                "The VRChat user id (usr_...)",
+            )
+            .required(true),
+        ),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "transfer-start",
+            "Starts or accepts group ownership transfer",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "vrchat-user-id",
+                "The VRChat user id (usr_...)",
+            )
+            .required(true),
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "confirm-group-id",
+                "Type this group's id exactly to confirm",
+            )
+            .required(true),
+        ),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "transfer-cancel",
+            "Cancels an active group ownership transfer",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "confirm-group-id",
+                "Type this group's id exactly to confirm",
+            )
+            .required(true),
+        ),
+    );
+
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "open-instance",
+            "Opens a group instance",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "vrchat-world-id",
+                "The VRChat world id (wrld_...)",
+            )
+            .required(true),
+        ),
+    );
+
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "close-instance",
+            "Closes an instance",
+        )
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "vrchat-location",
+                "The instance to close (worldId:instanceId)",
+            )
+            .required(true),
+        )
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::Boolean,
+            "close-hard",
+            "Whether to kick users currently in the instance",
+        ))
+        .add_sub_option(
+            CreateCommandOption::new(
+                CommandOptionType::Integer,
+                "close-in-minutes",
+                "The number of minutes to wait before closing the instance (1-600)",
+            )
+            .min_int_value(1)
+            .max_int_value(600),
+        ),
     );
 
     command
@@ -255,6 +410,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     };
 
     match subcommand.name {
+        "audit-types" => audit_types(ctx, command).await,
         "add-role" => role_change(ctx, command, sub_options, true).await,
         "remove-role" => role_change(ctx, command, sub_options, false).await,
         "search-members" => search_members(ctx, command, sub_options).await,
@@ -272,29 +428,140 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         "transfer-cancel" => transfer_cancel(ctx, command, sub_options).await,
         "open-instance" => open_instance(ctx, command, sub_options).await,
         "close-instance" => close_instance(ctx, command, sub_options).await,
-        other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
+        other => {
+            super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await
+        }
     }
 }
 
+async fn audit_types(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_AUDIT_VIEW).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+    let mut types = match context
+        .client
+        .get_group_audit_log_entry_types(&context.group_id)
+        .await
+    {
+        Ok(types) => types,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to fetch audit event types from VRChat: {err}"),
+            )
+            .await
+        }
+    };
+    if types.is_empty() {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "No audit event types were returned for this group.",
+        )
+        .await;
+    }
+    types.sort();
+    let mut output = vec!["### Group audit event types".to_string()];
+    output.extend(
+        types
+            .iter()
+            .map(|event_type| format!("- `{event_type}` - {}", audit_type_title(event_type))),
+    );
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&output.join("\n"), 2000),
+    )
+    .await
+}
+
+fn audit_type_title(event_type: &str) -> String {
+    match event_type {
+        "group.instance.close" => "Instance Close",
+        "group.instance.create" => "Instance Create",
+        "group.instance.kick" => "Instance Kick",
+        "group.instance.warn" => "Instance Warn",
+        "group.invite.create" => "Invite Create",
+        "group.invite.cancel" => "Invite Cancel",
+        "group.member.join" => "Member Join",
+        "group.member.leave" => "Member Leave",
+        "group.member.remove" => "Member Remove",
+        "group.member.role.assign" => "Member Role Assign",
+        "group.member.role.unassign" => "Member Role Unassign",
+        "group.member.user.update" => "Member User Update",
+        "group.instance.announcement" => "Announcement",
+        "group.post.create" => "Post Create",
+        "group.post.delete" => "Post Delete",
+        "group.post.update" => "Post Update",
+        "group.calendarEvent.create" => "Event Create",
+        "group.calendarEvent.delete" => "Event Delete",
+        "group.request.block" => "Request Block",
+        "group.request.create" => "Request Create",
+        "group.request.reject" => "Request Reject",
+        "group.role.create" => "Role Create",
+        "group.role.delete" => "Role Delete",
+        "group.role.update" => "Role Update",
+        "group.gallery.create" => "Gallery Create",
+        "group.gallery.delete" => "Gallery Delete",
+        "group.gallery.update" => "Gallery Update",
+        "group.transfer.accept" => "Transfer Accept",
+        "group.transfer.cancel" => "Transfer Cancel",
+        "group.transfer.start" => "Transfer Start",
+        "group.create" => "Create",
+        "group.update" => "Update",
+        "group.user.ban" => "User Ban",
+        "group.user.unban" => "User Unban",
+        other => {
+            return other
+                .strip_prefix("group.")
+                .unwrap_or(other)
+                .split('.')
+                .map(title_word)
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    }
+    .to_string()
+}
+
+fn title_word(word: &str) -> String {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
+}
+
 fn find_string<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a str> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::String(s) => Some(*s),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::String(s) => Some(*s),
+            _ => None,
+        })
 }
 
 fn find_int(options: &[ResolvedOption<'_>], name: &str) -> Option<i64> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::Integer(n) => Some(*n),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Integer(n) => Some(*n),
+            _ => None,
+        })
 }
 
 fn find_bool(options: &[ResolvedOption<'_>], name: &str) -> Option<bool> {
-    options.iter().find(|o| o.name == name).and_then(|o| match &o.value {
-        ResolvedValue::Boolean(b) => Some(*b),
-        _ => None,
-    })
+    options
+        .iter()
+        .find(|o| o.name == name)
+        .and_then(|o| match &o.value {
+            ResolvedValue::Boolean(b) => Some(*b),
+            _ => None,
+        })
 }
 
 fn announcement_text(announcement: &scarlet_vrchat::models::GroupAnnouncement) -> String {
@@ -312,9 +579,16 @@ async fn role_change(
     sub_options: &[ResolvedOption<'_>],
     add: bool,
 ) -> serenity::Result<()> {
-    let (Some(user_id), Some(role_id)) = (find_string(sub_options, "vrchat-user-id"), find_string(sub_options, "vrchat-role-id"))
-    else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-user-id` and `vrchat-role-id` are both required.").await;
+    let (Some(user_id), Some(role_id)) = (
+        find_string(sub_options, "vrchat-user-id"),
+        find_string(sub_options, "vrchat-role-id"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`vrchat-user-id` and `vrchat-role-id` are both required.",
+        )
+        .await;
     };
 
     let context = match super::vrchat_context(ctx).await {
@@ -325,24 +599,49 @@ async fn role_change(
     let display_name = match context.client.get_user(user_id).await {
         Ok(user) => user.display_name.unwrap_or_else(|| user_id.to_string()),
         Err(err) => {
-            return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {user_id} ({err})")).await;
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("No VRChat user found with id {user_id} ({err})"),
+            )
+            .await;
         }
     };
 
-    if let Ok(Some(member)) = context.client.get_group_member(&context.group_id, user_id).await {
+    if let Ok(Some(member)) = context
+        .client
+        .get_group_member(&context.group_id, user_id)
+        .await
+    {
         let has_role = member.role_ids.contains(&role_id.to_string());
         if add && has_role {
-            return super::reply_ephemeral(ctx, command, &format!("{display_name} already has that role.")).await;
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("{display_name} already has that role."),
+            )
+            .await;
         }
         if !add && !has_role {
-            return super::reply_ephemeral(ctx, command, &format!("{display_name} already lacks that role.")).await;
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("{display_name} already lacks that role."),
+            )
+            .await;
         }
     }
 
     let result = if add {
-        context.client.add_group_member_role(&context.group_id, user_id, role_id).await
+        context
+            .client
+            .add_group_member_role(&context.group_id, user_id, role_id)
+            .await
     } else {
-        context.client.remove_group_member_role(&context.group_id, user_id, role_id).await
+        context
+            .client
+            .remove_group_member_role(&context.group_id, user_id, role_id)
+            .await
     };
 
     match result {
@@ -381,29 +680,62 @@ pub(crate) async fn role_names(
     }
 }
 
-fn member_line(member: &scarlet_vrchat::models::GroupMember, roles_by_id: &std::collections::HashMap<String, String>) -> String {
+fn member_line(
+    member: &scarlet_vrchat::models::GroupMember,
+    roles_by_id: &std::collections::HashMap<String, String>,
+) -> String {
     let user_id = member.user_id.as_deref().unwrap_or("unknown");
-    let role_names: Vec<&str> =
-        member.role_ids.iter().map(|id| roles_by_id.get(id).map(String::as_str).unwrap_or(id.as_str())).collect();
-    let roles = if role_names.is_empty() { "(none)".to_string() } else { role_names.join(", ") };
+    let role_names: Vec<&str> = member
+        .role_ids
+        .iter()
+        .map(|id| {
+            roles_by_id
+                .get(id)
+                .map(String::as_str)
+                .unwrap_or(id.as_str())
+        })
+        .collect();
+    let roles = if role_names.is_empty() {
+        "(none)".to_string()
+    } else {
+        role_names.join(", ")
+    };
     let status = member.membership_status.as_deref().unwrap_or("unknown");
     format!("[`{user_id}`](<https://vrchat.com/home/user/{user_id}>) — status: {status}, roles: {roles}")
 }
 
-async fn search_members(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn search_members(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let Some(query) = find_string(sub_options, "member-search") else {
         return super::reply_ephemeral(ctx, command, "`member-search` is required.").await;
     };
-    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+    let limit = find_int(sub_options, "result-limit")
+        .unwrap_or(25)
+        .clamp(1, 100) as u32;
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_MEMBERS_VIEWALL).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_MEMBERS_VIEWALL).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    let result = match context.client.search_group_members(&context.group_id, query, limit, 0).await {
+    let result = match context
+        .client
+        .search_group_members(&context.group_id, query, limit, 0)
+        .await
+    {
         Ok(result) => result,
-        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to search group members: {err}")).await,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to search group members: {err}"),
+            )
+            .await
+        }
     };
     if result.results.is_empty() {
         return super::reply_ephemeral(ctx, command, "No group members matched that search.").await;
@@ -413,20 +745,43 @@ async fn search_members(ctx: &Context, command: &CommandInteraction, sub_options
     let mut lines = vec!["### Group Member search results".to_string()];
     lines.extend(result.results.iter().map(|m| member_line(m, &roles_by_id)));
 
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&lines.join("\n"), 2000),
+    )
+    .await
 }
 
-async fn list_bans(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
-    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+async fn list_bans(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
+    let limit = find_int(sub_options, "result-limit")
+        .unwrap_or(25)
+        .clamp(1, 100) as u32;
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_BANS_MANAGE).await {
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_BANS_MANAGE).await
+    {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
 
-    let bans = match context.client.get_group_bans(&context.group_id, limit, 0).await {
+    let bans = match context
+        .client
+        .get_group_bans(&context.group_id, limit, 0)
+        .await
+    {
         Ok(bans) => bans,
-        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to fetch group bans: {err}")).await,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to fetch group bans: {err}"),
+            )
+            .await
+        }
     };
     if bans.is_empty() {
         return super::reply_ephemeral(ctx, command, "No banned users were returned.").await;
@@ -436,100 +791,201 @@ async fn list_bans(ctx: &Context, command: &CommandInteraction, sub_options: &[R
     let mut lines = vec!["### Group Ban list".to_string()];
     lines.extend(bans.iter().map(|m| member_line(m, &roles_by_id)));
 
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&lines.join("\n"), 2000),
+    )
+    .await
 }
 
-async fn list_invites(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
-    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+async fn list_invites(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
+    let limit = find_int(sub_options, "result-limit")
+        .unwrap_or(25)
+        .clamp(1, 100) as u32;
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    let invites = match context.client.get_group_invites(&context.group_id, limit, 0).await {
+    let invites = match context
+        .client
+        .get_group_invites(&context.group_id, limit, 0)
+        .await
+    {
         Ok(invites) => invites,
-        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to fetch group invites: {err}")).await,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to fetch group invites: {err}"),
+            )
+            .await
+        }
     };
     if invites.is_empty() {
-        return super::reply_ephemeral(ctx, command, "No pending group invites were returned.").await;
+        return super::reply_ephemeral(ctx, command, "No pending group invites were returned.")
+            .await;
     }
 
     let roles_by_id = role_names(&context.client, &context.group_id).await;
     let mut lines = vec!["### Group Invite list".to_string()];
     lines.extend(invites.iter().map(|m| member_line(m, &roles_by_id)));
 
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&lines.join("\n"), 2000),
+    )
+    .await
 }
 
-async fn list_join_requests(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn list_join_requests(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let blocked = find_bool(sub_options, "blocked-requests").unwrap_or(false);
-    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+    let limit = find_int(sub_options, "result-limit")
+        .unwrap_or(25)
+        .clamp(1, 100) as u32;
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    let requests = match context.client.get_group_join_requests(&context.group_id, blocked, limit, 0).await {
+    let requests = match context
+        .client
+        .get_group_join_requests(&context.group_id, blocked, limit, 0)
+        .await
+    {
         Ok(requests) => requests,
-        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to fetch join requests: {err}")).await,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to fetch join requests: {err}"),
+            )
+            .await
+        }
     };
     if requests.is_empty() {
-        let message = if blocked { "No blocked join requests were returned." } else { "No pending join requests were returned." };
+        let message = if blocked {
+            "No blocked join requests were returned."
+        } else {
+            "No pending join requests were returned."
+        };
         return super::reply_ephemeral(ctx, command, message).await;
     }
 
     let roles_by_id = role_names(&context.client, &context.group_id).await;
-    let heading = if blocked { "### Blocked Join Request list" } else { "### Join Request list" };
+    let heading = if blocked {
+        "### Blocked Join Request list"
+    } else {
+        "### Join Request list"
+    };
     let mut lines = vec![heading.to_string()];
     lines.extend(requests.iter().map(|m| member_line(m, &roles_by_id)));
 
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&lines.join("\n"), 2000),
+    )
+    .await
 }
 
 async fn view_announcement(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    match context.client.get_group_announcement(&context.group_id).await {
-        Ok(announcement) => super::reply_ephemeral(ctx, command, &announcement_text(&announcement)).await,
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to fetch the group announcement: {err}")).await,
+    match context
+        .client
+        .get_group_announcement(&context.group_id)
+        .await
+    {
+        Ok(announcement) => {
+            super::reply_ephemeral(ctx, command, &announcement_text(&announcement)).await
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to fetch the group announcement: {err}"),
+            )
+            .await
+        }
     }
 }
 
-async fn create_announcement(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
-    let (Some(title), Some(text)) =
-        (find_string(sub_options, "announcement-title"), find_string(sub_options, "announcement-text"))
-    else {
-        return super::reply_ephemeral(ctx, command, "`announcement-title` and `announcement-text` are both required.").await;
+async fn create_announcement(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
+    let (Some(title), Some(text)) = (
+        find_string(sub_options, "announcement-title"),
+        find_string(sub_options, "announcement-text"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`announcement-title` and `announcement-text` are both required.",
+        )
+        .await;
     };
     let send_notification = find_bool(sub_options, "send-notification").unwrap_or(false);
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    match context.client.create_group_announcement(&context.group_id, title, text, send_notification).await {
-        Ok(announcement) => {
-            command
-                .create_followup(
-                    &ctx.http,
-                    CreateInteractionResponseFollowup::new()
-                        .content(format!("Created group announcement.\n{}", announcement_text(&announcement)))
-                        .ephemeral(true),
-                )
-                .await
-                .map(|_| ())
+    match context
+        .client
+        .create_group_announcement(&context.group_id, title, text, send_notification)
+        .await
+    {
+        Ok(announcement) => command
+            .create_followup(
+                &ctx.http,
+                CreateInteractionResponseFollowup::new()
+                    .content(format!(
+                        "Created group announcement.\n{}",
+                        announcement_text(&announcement)
+                    ))
+                    .ephemeral(true),
+            )
+            .await
+            .map(|_| ()),
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to create the group announcement: {err}"),
+            )
+            .await
         }
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to create the group announcement: {err}")).await,
     }
 }
 
-async fn delete_announcement(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn delete_announcement(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let Some(confirm) = find_string(sub_options, "confirm-delete") else {
         return super::reply_ephemeral(ctx, command, "`confirm-delete` is required.").await;
     };
@@ -542,78 +998,150 @@ async fn delete_announcement(ctx: &Context, command: &CommandInteraction, sub_op
         .await;
     }
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    match context.client.delete_group_announcement(&context.group_id).await {
+    match context
+        .client
+        .delete_group_announcement(&context.group_id)
+        .await
+    {
         Ok(()) => super::reply_ephemeral(ctx, command, "Deleted the group announcement.").await,
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to delete the group announcement: {err}")).await,
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to delete the group announcement: {err}"),
+            )
+            .await
+        }
     }
 }
 
 fn post_line(post: &scarlet_vrchat::models::GroupPost) -> String {
     let id = post.id.as_deref().unwrap_or("unknown");
-    let title = post.title.as_deref().filter(|t| !t.is_empty()).unwrap_or(id);
+    let title = post
+        .title
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .unwrap_or(id);
     let visibility = post.visibility.as_deref().unwrap_or("unknown");
-    format!("### {title}\n`{id}` — visibility: {visibility}\n{}", post.text.as_deref().unwrap_or(""))
+    format!(
+        "### {title}\n`{id}` — visibility: {visibility}\n{}",
+        post.text.as_deref().unwrap_or("")
+    )
 }
 
-async fn list_posts(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn list_posts(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let public_only = find_bool(sub_options, "public-only").unwrap_or(false);
-    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+    let limit = find_int(sub_options, "result-limit")
+        .unwrap_or(25)
+        .clamp(1, 100) as u32;
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    let posts = match context.client.get_group_posts(&context.group_id, public_only, limit, 0).await {
+    let posts = match context
+        .client
+        .get_group_posts(&context.group_id, public_only, limit, 0)
+        .await
+    {
         Ok(posts) => posts,
-        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to fetch group posts: {err}")).await,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to fetch group posts: {err}"),
+            )
+            .await
+        }
     };
     if posts.is_empty() {
         return super::reply_ephemeral(ctx, command, "No group posts were returned.").await;
     }
 
     let lines: Vec<String> = posts.iter().map(post_line).collect();
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_on_lines(&lines.join("\n\n"), 2000),
+    )
+    .await
 }
 
-async fn create_post(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn create_post(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let (Some(title), Some(text), Some(visibility)) = (
         find_string(sub_options, "post-title"),
         find_string(sub_options, "post-text"),
         find_string(sub_options, "post-visibility"),
     ) else {
-        return super::reply_ephemeral(ctx, command, "`post-title`, `post-text`, and `post-visibility` are all required.").await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`post-title`, `post-text`, and `post-visibility` are all required.",
+        )
+        .await;
     };
     let send_notification = find_bool(sub_options, "send-notification").unwrap_or(false);
     let role_id = find_string(sub_options, "post-role-id");
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    match context.client.create_group_post(&context.group_id, title, text, visibility, send_notification, role_id).await {
-        Ok(post) => {
-            command
-                .create_followup(
-                    &ctx.http,
-                    CreateInteractionResponseFollowup::new()
-                        .content(format!("Created group post.\n{}", post_line(&post)))
-                        .ephemeral(true),
-                )
-                .await
-                .map(|_| ())
+    match context
+        .client
+        .create_group_post(
+            &context.group_id,
+            title,
+            text,
+            visibility,
+            send_notification,
+            role_id,
+        )
+        .await
+    {
+        Ok(post) => command
+            .create_followup(
+                &ctx.http,
+                CreateInteractionResponseFollowup::new()
+                    .content(format!("Created group post.\n{}", post_line(&post)))
+                    .ephemeral(true),
+            )
+            .await
+            .map(|_| ()),
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to create the group post: {err}"),
+            )
+            .await
         }
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to create the group post: {err}")).await,
     }
 }
 
-async fn delete_post(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn delete_post(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let Some(post_id) = find_string(sub_options, "post-id") else {
         return super::reply_ephemeral(ctx, command, "`post-id` is required.").await;
     };
@@ -629,22 +1157,44 @@ async fn delete_post(ctx: &Context, command: &CommandInteraction, sub_options: &
         .await;
     }
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    match context.client.delete_group_post(&context.group_id, post_id).await {
-        Ok(()) => super::reply_ephemeral(ctx, command, &format!("Deleted group post `{post_id}`.")).await,
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to delete group post `{post_id}`: {err}")).await,
+    match context
+        .client
+        .delete_group_post(&context.group_id, post_id)
+        .await
+    {
+        Ok(()) => {
+            super::reply_ephemeral(ctx, command, &format!("Deleted group post `{post_id}`.")).await
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to delete group post `{post_id}`: {err}"),
+            )
+            .await
+        }
     }
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value { "Yes" } else { "No" }
+    if value {
+        "Yes"
+    } else {
+        "No"
+    }
 }
 
-async fn transfer_check(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn transfer_check(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let Some(user_id) = find_string(sub_options, "vrchat-user-id") else {
         return super::reply_ephemeral(ctx, command, "`vrchat-user-id` is required.").await;
     };
@@ -657,18 +1207,37 @@ async fn transfer_check(ctx: &Context, command: &CommandInteraction, sub_options
     let display_name = match context.client.get_user(user_id).await {
         Ok(user) => user.display_name.unwrap_or_else(|| user_id.to_string()),
         Err(err) => {
-            return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {user_id} ({err})")).await;
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("No VRChat user found with id {user_id} ({err})"),
+            )
+            .await;
         }
     };
 
-    let transferable = match context.client.get_group_transferability(&context.group_id, user_id).await {
+    let transferable = match context
+        .client
+        .get_group_transferability(&context.group_id, user_id)
+        .await
+    {
         Ok(transferable) => transferable,
         Err(err) => {
-            return super::reply_ephemeral(ctx, command, &format!("Failed to check group transfer eligibility: {err}")).await;
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to check group transfer eligibility: {err}"),
+            )
+            .await;
         }
     };
     let Some(req) = transferable.requirements else {
-        return super::reply_ephemeral(ctx, command, "VRChat did not return transfer eligibility details.").await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "VRChat did not return transfer eligibility details.",
+        )
+        .await;
     };
 
     let message = format!(
@@ -687,11 +1256,21 @@ async fn transfer_check(ctx: &Context, command: &CommandInteraction, sub_options
     super::reply_ephemeral(ctx, command, &message).await
 }
 
-async fn transfer_start(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
-    let (Some(user_id), Some(confirm_group_id)) =
-        (find_string(sub_options, "vrchat-user-id"), find_string(sub_options, "confirm-group-id"))
-    else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-user-id` and `confirm-group-id` are both required.").await;
+async fn transfer_start(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
+    let (Some(user_id), Some(confirm_group_id)) = (
+        find_string(sub_options, "vrchat-user-id"),
+        find_string(sub_options, "confirm-group-id"),
+    ) else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "`vrchat-user-id` and `confirm-group-id` are both required.",
+        )
+        .await;
     };
 
     let context = match super::vrchat_context(ctx).await {
@@ -702,7 +1281,10 @@ async fn transfer_start(ctx: &Context, command: &CommandInteraction, sub_options
         return super::reply_ephemeral(
             ctx,
             command,
-            &format!("Transfer cancelled. The confirmation must exactly match this group id: `{}`", context.group_id),
+            &format!(
+                "Transfer cancelled. The confirmation must exactly match this group id: `{}`",
+                context.group_id
+            ),
         )
         .await;
     }
@@ -715,17 +1297,44 @@ async fn transfer_start(ctx: &Context, command: &CommandInteraction, sub_options
     let display_name = match context.client.get_user(user_id).await {
         Ok(user) => user.display_name.unwrap_or_else(|| user_id.to_string()),
         Err(err) => {
-            return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {user_id} ({err})")).await;
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("No VRChat user found with id {user_id} ({err})"),
+            )
+            .await;
         }
     };
 
-    match context.client.initiate_or_accept_group_transfer(&context.group_id, user_id).await {
-        Ok(()) => super::reply_ephemeral(ctx, command, &format!("Submitted the group transfer request for {display_name}.")).await,
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to submit the group transfer request: {err}")).await,
+    match context
+        .client
+        .initiate_or_accept_group_transfer(&context.group_id, user_id)
+        .await
+    {
+        Ok(()) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Submitted the group transfer request for {display_name}."),
+            )
+            .await
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to submit the group transfer request: {err}"),
+            )
+            .await
+        }
     }
 }
 
-async fn transfer_cancel(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn transfer_cancel(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let Some(confirm_group_id) = find_string(sub_options, "confirm-group-id") else {
         return super::reply_ephemeral(ctx, command, "`confirm-group-id` is required.").await;
     };
@@ -748,9 +1357,22 @@ async fn transfer_cancel(ctx: &Context, command: &CommandInteraction, sub_option
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
 
-    match context.client.cancel_group_transfer(&context.group_id).await {
-        Ok(()) => super::reply_ephemeral(ctx, command, "Cancelled the active group transfer.").await,
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to cancel the group transfer: {err}")).await,
+    match context
+        .client
+        .cancel_group_transfer(&context.group_id)
+        .await
+    {
+        Ok(()) => {
+            super::reply_ephemeral(ctx, command, "Cancelled the active group transfer.").await
+        }
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to cancel the group transfer: {err}"),
+            )
+            .await
+        }
     }
 }
 
@@ -769,111 +1391,240 @@ fn split_location(location: &str) -> Option<(&str, &str)> {
     Some((world, instance))
 }
 
-async fn open_instance(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn open_instance(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let Some(world_id) = find_string(sub_options, "vrchat-world-id") else {
         return super::reply_ephemeral(ctx, command, "`vrchat-world-id` is required.").await;
     };
-    let scarlet_data = { ctx.data.read().await.get::<crate::data::ScarletDataKey>().cloned() };
-    let Some(actor_id) = scarlet_data.and_then(|data| data.global_get_snowflake_id(&command.user.id.to_string())) else {
-        return super::reply_ephemeral(ctx, command, "You must link your Discord and VRChat accounts before creating an instance.").await;
+    let scarlet_data = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::ScarletDataKey>()
+            .cloned()
+    };
+    let Some(actor_id) =
+        scarlet_data.and_then(|data| data.global_get_snowflake_id(&command.user.id.to_string()))
+    else {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "You must link your Discord and VRChat accounts before creating an instance.",
+        )
+        .await;
     };
     let context = match super::vrchat_context(ctx).await {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
     if let Err(err) = context.client.get_user(&actor_id).await {
-        return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {actor_id}: {err}")).await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!("No VRChat user found with id {actor_id}: {err}"),
+        )
+        .await;
     }
-    let (world, roles) = tokio::join!(context.client.get_world(world_id), context.client.get_group_roles(&context.group_id));
+    let (world, roles) = tokio::join!(
+        context.client.get_world(world_id),
+        context.client.get_group_roles(&context.group_id)
+    );
     let world = match world {
         Ok(world) => world,
-        Err(err) => return super::reply_ephemeral(ctx, command, &format!("No VRChat world found with id {world_id}: {err}")).await,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("No VRChat world found with id {world_id}: {err}"),
+            )
+            .await
+        }
     };
     let roles = match roles {
         Ok(roles) => roles,
-        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Could not load the group's roles: {err}")).await,
+        Err(err) => {
+            return super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Could not load the group's roles: {err}"),
+            )
+            .await
+        }
     };
 
     let token = uuid::Uuid::new_v4().to_string();
-    let creations = { ctx.data.read().await.get::<crate::data::InstanceCreationsKey>().cloned() };
-    let Some(creations) = creations else {
-        return super::reply_ephemeral(ctx, command, "Instance creation state is unavailable.").await;
+    let creations = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::InstanceCreationsKey>()
+            .cloned()
     };
-    creations.write().await.insert(token.clone(), crate::interactions::InstanceCreation::new(
-        world.id.clone(), context.group_id, command.user.id.to_string(),
-    ));
+    let Some(creations) = creations else {
+        return super::reply_ephemeral(ctx, command, "Instance creation state is unavailable.")
+            .await;
+    };
+    creations.write().await.insert(
+        token.clone(),
+        crate::interactions::InstanceCreation::new(
+            world.id.clone(),
+            context.group_id,
+            command.user.id.to_string(),
+        ),
+    );
 
-    let access = CreateSelectMenu::new(format!("new-instance-access-type:{token}"), CreateSelectMenuKind::String { options: vec![
-        CreateSelectMenuOption::new("Group Public", "public").default_selection(true),
-        CreateSelectMenuOption::new("Group Plus", "plus"),
-        CreateSelectMenuOption::new("Group Members", "members"),
-    ]});
-    let role_options: Vec<_> = roles.into_iter().take(25).map(|role| CreateSelectMenuOption::new(role.name, role.id)).collect();
+    let access = CreateSelectMenu::new(
+        format!("new-instance-access-type:{token}"),
+        CreateSelectMenuKind::String {
+            options: vec![
+                CreateSelectMenuOption::new("Group Public", "public").default_selection(true),
+                CreateSelectMenuOption::new("Group Plus", "plus"),
+                CreateSelectMenuOption::new("Group Members", "members"),
+            ],
+        },
+    );
+    let role_options: Vec<_> = roles
+        .into_iter()
+        .take(25)
+        .map(|role| CreateSelectMenuOption::new(role.name, role.id))
+        .collect();
     let role_count = role_options.len() as u8;
     let roles = (!role_options.is_empty()).then(|| {
-        CreateSelectMenu::new(format!("new-instance-roles:{token}"), CreateSelectMenuKind::String { options: role_options })
-            .placeholder("Select roles (Group Members)").min_values(1).max_values(role_count)
+        CreateSelectMenu::new(
+            format!("new-instance-roles:{token}"),
+            CreateSelectMenuKind::String {
+                options: role_options,
+            },
+        )
+        .placeholder("Select roles (Group Members)")
+        .min_values(1)
+        .max_values(role_count)
     });
-    let region = CreateSelectMenu::new(format!("new-instance-region:{token}"), CreateSelectMenuKind::String { options: vec![
-        CreateSelectMenuOption::new("Region: US", "us").default_selection(true),
-        CreateSelectMenuOption::new("Region: US East", "use"),
-        CreateSelectMenuOption::new("Region: Europe", "eu"),
-        CreateSelectMenuOption::new("Region: Japan", "jp"),
-    ]});
-    let default_flag = |label: &str, value: &str| CreateSelectMenuOption::new(label, value).default_selection(true);
-    let flags = CreateSelectMenu::new(format!("new-instance-flags:{token}"), CreateSelectMenuKind::String { options: vec![
-        default_flag("Join queue (users wait to connect when full)", "queueEnabled"),
-        CreateSelectMenuOption::new("Hard close (kick connected users on close)", "hardClose"),
-        CreateSelectMenuOption::new("Age gate (Age Verified 18+ users only)", "ageGate"),
-        CreateSelectMenuOption::new("Invite Only", "inviteOnly"),
-        CreateSelectMenuOption::new("Invite Requests", "canRequestInvite"),
-        default_flag("Content: drones", "contentSettings.drones"),
-        default_flag("Content: emoji", "contentSettings.emoji"),
-        default_flag("Content: items", "contentSettings.props"),
-        default_flag("Content: pedestals", "contentSettings.pedestals"),
-        default_flag("Content: prints", "contentSettings.prints"),
-        default_flag("Content: stickers", "contentSettings.stickers"),
-        CreateSelectMenuOption::new("Avatar gate: Poor or better", "minimumAvatarPerformance.Poor"),
-        CreateSelectMenuOption::new("Avatar gate: Medium or better", "minimumAvatarPerformance.Medium"),
-        CreateSelectMenuOption::new("Avatar gate: Good or better", "minimumAvatarPerformance.Good"),
-    ]}).placeholder("Options & Content Settings").min_values(0).max_values(14);
+    let region = CreateSelectMenu::new(
+        format!("new-instance-region:{token}"),
+        CreateSelectMenuKind::String {
+            options: vec![
+                CreateSelectMenuOption::new("Region: US", "us").default_selection(true),
+                CreateSelectMenuOption::new("Region: US East", "use"),
+                CreateSelectMenuOption::new("Region: Europe", "eu"),
+                CreateSelectMenuOption::new("Region: Japan", "jp"),
+            ],
+        },
+    );
+    let default_flag = |label: &str, value: &str| {
+        CreateSelectMenuOption::new(label, value).default_selection(true)
+    };
+    let flags = CreateSelectMenu::new(
+        format!("new-instance-flags:{token}"),
+        CreateSelectMenuKind::String {
+            options: vec![
+                default_flag(
+                    "Join queue (users wait to connect when full)",
+                    "queueEnabled",
+                ),
+                CreateSelectMenuOption::new(
+                    "Hard close (kick connected users on close)",
+                    "hardClose",
+                ),
+                CreateSelectMenuOption::new("Age gate (Age Verified 18+ users only)", "ageGate"),
+                CreateSelectMenuOption::new("Invite Only", "inviteOnly"),
+                CreateSelectMenuOption::new("Invite Requests", "canRequestInvite"),
+                default_flag("Content: drones", "contentSettings.drones"),
+                default_flag("Content: emoji", "contentSettings.emoji"),
+                default_flag("Content: items", "contentSettings.props"),
+                default_flag("Content: pedestals", "contentSettings.pedestals"),
+                default_flag("Content: prints", "contentSettings.prints"),
+                default_flag("Content: stickers", "contentSettings.stickers"),
+                CreateSelectMenuOption::new(
+                    "Avatar gate: Poor or better",
+                    "minimumAvatarPerformance.Poor",
+                ),
+                CreateSelectMenuOption::new(
+                    "Avatar gate: Medium or better",
+                    "minimumAvatarPerformance.Medium",
+                ),
+                CreateSelectMenuOption::new(
+                    "Avatar gate: Good or better",
+                    "minimumAvatarPerformance.Good",
+                ),
+            ],
+        },
+    )
+    .placeholder("Options & Content Settings")
+    .min_values(0)
+    .max_values(14);
     let buttons = vec![
-        CreateButton::new(format!("new-instance-create:{token}")).label("Create").style(ButtonStyle::Success),
-        CreateButton::new(format!("new-instance-cancel:{token}")).label("Cancel").style(ButtonStyle::Danger),
-        CreateButton::new(format!("new-instance-modal:{token}")).label("Additional options…").style(ButtonStyle::Secondary),
+        CreateButton::new(format!("new-instance-create:{token}"))
+            .label("Create")
+            .style(ButtonStyle::Success),
+        CreateButton::new(format!("new-instance-cancel:{token}"))
+            .label("Cancel")
+            .style(ButtonStyle::Danger),
+        CreateButton::new(format!("new-instance-modal:{token}"))
+            .label("Additional options…")
+            .style(ButtonStyle::Secondary),
     ];
     let mut components = vec![CreateActionRow::SelectMenu(access)];
-    if let Some(roles) = roles { components.push(CreateActionRow::SelectMenu(roles)); }
+    if let Some(roles) = roles {
+        components.push(CreateActionRow::SelectMenu(roles));
+    }
     components.extend([
-        CreateActionRow::SelectMenu(region), CreateActionRow::SelectMenu(flags), CreateActionRow::Buttons(buttons),
+        CreateActionRow::SelectMenu(region),
+        CreateActionRow::SelectMenu(flags),
+        CreateActionRow::Buttons(buttons),
     ]);
     command.create_followup(&ctx.http, CreateInteractionResponseFollowup::new()
         .content(format!("Create a new [{}](https://vrchat.com/home/world/{}) instance:\nLeave avatar gate unchecked for no limit; select one Poor, Medium, or Good preset to set the minimum avatar performance.", world.name, world.id))
         .components(components).ephemeral(true)).await.map(|_| ())
 }
 
-async fn close_instance(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+async fn close_instance(
+    ctx: &Context,
+    command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
+) -> serenity::Result<()> {
     let Some(location) = find_string(sub_options, "vrchat-location") else {
         return super::reply_ephemeral(ctx, command, "`vrchat-location` is required.").await;
     };
     let Some((world_id, instance_id)) = split_location(location) else {
-        return super::reply_ephemeral(ctx, command, "Invalid instance location. Expected format: `worldId:instanceId`.").await;
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            "Invalid instance location. Expected format: `worldId:instanceId`.",
+        )
+        .await;
     };
     let hard_close = find_bool(sub_options, "close-hard");
     let close_in_minutes = find_int(sub_options, "close-in-minutes");
-    let closed_at = close_in_minutes.map(|minutes| chrono::Utc::now() + chrono::Duration::minutes(minutes));
+    let closed_at =
+        close_in_minutes.map(|minutes| chrono::Utc::now() + chrono::Duration::minutes(minutes));
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_INSTANCE_MANAGE).await {
-        Ok(context) => context,
-        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-    };
+    let context =
+        match super::moderation_context(ctx, command, PERMISSION_GROUP_INSTANCE_MANAGE).await {
+            Ok(context) => context,
+            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+        };
 
-    match context.client.close_instance(world_id, instance_id, hard_close, closed_at).await {
+    match context
+        .client
+        .close_instance(world_id, instance_id, hard_close, closed_at)
+        .await
+    {
         Ok(instance) => {
             let id = instance.id.as_deref().unwrap_or(instance_id);
             super::reply_ephemeral(ctx, command, &format!("Closed instance `{id}`")).await
         }
-        Err(err) => super::reply_ephemeral(ctx, command, &format!("Failed to close instance `{location}`: {err}")).await,
+        Err(err) => {
+            super::reply_ephemeral(
+                ctx,
+                command,
+                &format!("Failed to close instance `{location}`: {err}"),
+            )
+            .await
+        }
     }
 }
 
@@ -897,7 +1648,10 @@ mod tests {
         let mut roles = HashMap::new();
         roles.insert("grol_1".to_string(), "Moderator".to_string());
         let line = member_line(&member("usr_1", vec!["grol_1"], Some("member")), &roles);
-        assert!(line.contains("Moderator"), "expected resolved role name in: {line}");
+        assert!(
+            line.contains("Moderator"),
+            "expected resolved role name in: {line}"
+        );
         assert!(line.contains("usr_1"));
         assert!(line.contains("status: member"));
     }
@@ -965,7 +1719,10 @@ mod tests {
     #[test]
     fn split_location_splits_on_first_colon() {
         assert_eq!(split_location("wrld_1:12345"), Some(("wrld_1", "12345")));
-        assert_eq!(split_location("wrld_1:12345~region(us)"), Some(("wrld_1", "12345~region(us)")));
+        assert_eq!(
+            split_location("wrld_1:12345~region(us)"),
+            Some(("wrld_1", "12345~region(us)"))
+        );
     }
 
     #[test]
@@ -979,5 +1736,15 @@ mod tests {
     fn yes_no_formats_booleans() {
         assert_eq!(yes_no(true), "Yes");
         assert_eq!(yes_no(false), "No");
+    }
+
+    #[test]
+    fn audit_titles_match_java_and_fallback_cleanly() {
+        assert_eq!(
+            audit_type_title("group.calendarEvent.create"),
+            "Event Create"
+        );
+        assert_eq!(audit_type_title("group.user.ban"), "User Ban");
+        assert_eq!(audit_type_title("group.future.action"), "Future Action");
     }
 }
