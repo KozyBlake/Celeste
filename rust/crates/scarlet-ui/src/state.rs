@@ -147,6 +147,17 @@ impl UiState {
         }
     }
 
+    /// Like `player_update`, but matches by display name instead of id.
+    /// Some VRChat log lines (e.g. avatar switches) only give a display
+    /// name, not a user id — matching the Java version, which resolves
+    /// those against the currently-known roster the same way.
+    pub fn player_update_by_name(&self, name: &str, update: impl FnOnce(&mut ConnectedPlayer)) {
+        let mut inner = self.0.lock().unwrap();
+        if let Some(player) = inner.players.values_mut().find(|p| p.name == name) {
+            update(player);
+        }
+    }
+
     /// Port of `clearInstance`.
     pub fn clear_instance(&self) {
         let mut inner = self.0.lock().unwrap();
@@ -250,6 +261,20 @@ mod tests {
 
         state.player_leave(false, "usr_1", chrono::Local::now().naive_local());
         assert!(!state.has_active_players());
+    }
+
+    #[test]
+    fn player_update_by_name_finds_matching_player() {
+        let state = UiState::new();
+        state.player_join(false, player("usr_1", 0));
+        state.player_update_by_name("usr_1", |p| p.avatar_name = Some("New Avatar".to_string()));
+        let players = state.ordered_players();
+        assert_eq!(players[0].avatar_name.as_deref(), Some("New Avatar"));
+
+        // No matching name: silently does nothing (mirrors the Java
+        // version's behavior of ignoring updates for unknown players).
+        state.player_update_by_name("nonexistent", |p| p.avatar_name = Some("Should Not Apply".to_string()));
+        assert_eq!(state.ordered_players()[0].avatar_name.as_deref(), Some("New Avatar"));
     }
 
     #[test]

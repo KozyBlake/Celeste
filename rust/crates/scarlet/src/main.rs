@@ -52,6 +52,9 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.spawn(run_discord(discord_token));
 
+    let vrchat_log_events = scarlet_vrchat::log_tail::spawn_tailer(&runtime.handle().clone());
+    runtime.spawn(dispatch_vrchat_log_events(vrchat_log_events, ui_state.clone()));
+
     if scarlet_ui::platform::is_headless() {
         tracing::info!("No display detected; running headless. Ctrl+C to exit.");
         runtime.block_on(std::future::pending::<()>());
@@ -64,6 +67,76 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Drains parsed VRChat local-log events (see `scarlet_vrchat::log_tail`)
+/// and translates them into real `UiState` player join/update/leave calls,
+/// which is what actually makes the Instance tab's table populate. Runs
+/// until the sender side (the tailer task) is dropped, which only happens
+/// if the whole process is shutting down.
+async fn dispatch_vrchat_log_events(
+    mut events: tokio::sync::mpsc::UnboundedReceiver<scarlet_vrchat::log_tail::LogEvent>,
+    state: scarlet_ui::UiState,
+) {
+    use scarlet_vrchat::log_tail::LogEventKind;
+
+    while let Some(event) = events.recv().await {
+        let scarlet_vrchat::log_tail::LogEvent { preamble, timestamp, kind } = event;
+        match kind {
+            LogEventKind::UserAuthenticated { display_name, user_id } => {
+                state.append_cli_output(format!("Authenticated as {display_name} ({user_id})"));
+            }
+            LogEventKind::UserJoined { location } => {
+                // Matches the game's own log semantics: a room join always
+                // starts a fresh instance (an `OnLeftRoom` always precedes
+                // the next `Joining`), so this is the right moment to clear
+                // out the previous instance's roster rather than mixing
+                // rosters across instances.
+                state.clear_instance();
+                state.append_cli_output(format!("Joined instance: {location}"));
+            }
+            LogEventKind::UserLeft => {
+                state.append_cli_output("Left instance");
+            }
+            LogEventKind::UserQuit { lifetime_seconds } => {
+                state.append_cli_output(format!("VRChat closed after {lifetime_seconds:.0}s this session"));
+            }
+            LogEventKind::PlayerJoined { display_name, user_id } => {
+                state.player_join(preamble, scarlet_ui::ConnectedPlayer::new(user_id, display_name, timestamp));
+            }
+            LogEventKind::PlayerLeft { display_name, user_id } => {
+                let _ = display_name;
+                state.player_leave(preamble, &user_id, timestamp);
+            }
+            LogEventKind::PlayerSwitchAvatar { display_name, avatar_display_name } => {
+                state.player_update_by_name(&display_name, |p| p.avatar_name = Some(avatar_display_name));
+            }
+            LogEventKind::VtkInit { target_display_name, actor_display_name } => {
+                state.append_cli_output(match actor_display_name {
+                    Some(actor) => format!("Vote kick initiated against {target_display_name} by {actor}"),
+                    None => format!("Vote kick initiated against {target_display_name}"),
+                });
+            }
+            LogEventKind::PlayerSpawnPedestal { display_name, user_id, content_type, content_id } => {
+                state.append_cli_output(format!(
+                    "{display_name} ({user_id}) created a {content_type} pedestal: {content_id}"
+                ));
+            }
+            LogEventKind::PlayerSpawnSticker { display_name, user_id, sticker_id } => {
+                state.append_cli_output(format!("{display_name} ({user_id}) spawned sticker {sticker_id}"));
+            }
+            LogEventKind::PlayerSpawnProp { user_id, prop_id } => {
+                state.append_cli_output(format!("{user_id} spawned prop {prop_id}"));
+            }
+            LogEventKind::ApiRequest { index, method, url } => {
+                state.append_cli_output(format!("[API #{index}] {method} {url}"));
+            }
+            LogEventKind::VideoLoad { display_name, url, title } => {
+                let _ = title;
+                state.append_cli_output(format!("{display_name} loaded video: {url}"));
+            }
+        }
+    }
 }
 
 async fn run_discord(token: Option<String>) {

@@ -19,3 +19,4 @@ base64.workspace = true
 
 [dev-dependencies]
 wiremock = "0.6"
+tempfile = "3"
