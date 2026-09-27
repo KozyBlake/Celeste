@@ -3,9 +3,11 @@
 //! subsystem crate.
 
 pub mod change_listener;
+pub mod data;
 pub mod features;
 pub mod file_backups;
 pub mod identity;
+pub mod java_hash;
 pub mod json_cache;
 pub mod log;
 pub mod maths;
@@ -13,3 +15,4 @@ pub mod meta;
 pub mod permission;
 pub mod secure_store;
 pub mod settings;
+pub mod unique_strings;
