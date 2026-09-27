@@ -1,11 +1,11 @@
 //! Port of (part of) `ScarletDiscordCommands.VrchatGroups`
 //! (`@SlashCmd("vrchat-group")` — a subcommand-group command). Java's
 //! `VrchatGroups` has ~15 subcommands; ported so far: `add-role`,
-//! `remove-role`, `search-members`, `list-bans`, `view-announcement`,
-//! `create-announcement`, `delete-announcement`. The rest (list-invites,
-//! list-join-requests, posts, transfers, open/close-instance) are a tracked
-//! gap (see PORTING.md) — adding more subcommands under this same parent
-//! command is how they'll land, matching Java's actual
+//! `remove-role`, `search-members`, `list-bans`, `list-invites`,
+//! `list-join-requests`, `view-announcement`, `create-announcement`,
+//! `delete-announcement`. The rest (posts, transfers, open/close-instance)
+//! are a tracked gap (see PORTING.md) — adding more subcommands under this
+//! same parent command is how they'll land, matching Java's actual
 //! `/vrchat-group <subcommand>` shape rather than inventing separate
 //! top-level commands.
 //!
@@ -31,7 +31,8 @@ use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
 
 use scarlet_vrchat::client::{
-    PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_MEMBERS_VIEWALL,
+    PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_INVITES_MANAGE,
+    PERMISSION_GROUP_MEMBERS_VIEWALL,
 };
 
 pub const NAME: &str = "vrchat-group";
@@ -71,6 +72,32 @@ pub fn register() -> CreateCommand {
                     .min_int_value(1)
                     .max_int_value(100),
             ),
+    );
+
+    command = command.add_option(
+        CreateCommandOption::new(CommandOptionType::SubCommand, "list-invites", "Lists pending invites sent by this group")
+            .add_sub_option(
+                CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
+                    .min_int_value(1)
+                    .max_int_value(100),
+            ),
+    );
+    command = command.add_option(
+        CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "list-join-requests",
+            "Lists pending or blocked join requests for this group",
+        )
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::Boolean,
+            "blocked-requests",
+            "Show blocked requests instead of pending requests",
+        ))
+        .add_sub_option(
+            CreateCommandOption::new(CommandOptionType::Integer, "result-limit", "Maximum results to fetch (1-100)")
+                .min_int_value(1)
+                .max_int_value(100),
+        ),
     );
 
     command = command.add_option(CreateCommandOption::new(
@@ -120,6 +147,8 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         "remove-role" => role_change(ctx, command, sub_options, false).await,
         "search-members" => search_members(ctx, command, sub_options).await,
         "list-bans" => list_bans(ctx, command, sub_options).await,
+        "list-invites" => list_invites(ctx, command, sub_options).await,
+        "list-join-requests" => list_join_requests(ctx, command, sub_options).await,
         "view-announcement" => view_announcement(ctx, command).await,
         "create-announcement" => create_announcement(ctx, command, sub_options).await,
         "delete-announcement" => delete_announcement(ctx, command, sub_options).await,
@@ -281,6 +310,55 @@ async fn list_bans(ctx: &Context, command: &CommandInteraction, sub_options: &[R
     let roles_by_id = role_names(&context.client, &context.group_id).await;
     let mut lines = vec!["### Group Ban list".to_string()];
     lines.extend(bans.iter().map(|m| member_line(m, &roles_by_id)));
+
+    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+}
+
+async fn list_invites(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    let invites = match context.client.get_group_invites(&context.group_id, limit, 0).await {
+        Ok(invites) => invites,
+        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to fetch group invites: {err}")).await,
+    };
+    if invites.is_empty() {
+        return super::reply_ephemeral(ctx, command, "No pending group invites were returned.").await;
+    }
+
+    let roles_by_id = role_names(&context.client, &context.group_id).await;
+    let mut lines = vec!["### Group Invite list".to_string()];
+    lines.extend(invites.iter().map(|m| member_line(m, &roles_by_id)));
+
+    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+}
+
+async fn list_join_requests(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>]) -> serenity::Result<()> {
+    let blocked = find_bool(sub_options, "blocked-requests").unwrap_or(false);
+    let limit = find_int(sub_options, "result-limit").unwrap_or(25).clamp(1, 100) as u32;
+
+    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
+
+    let requests = match context.client.get_group_join_requests(&context.group_id, blocked, limit, 0).await {
+        Ok(requests) => requests,
+        Err(err) => return super::reply_ephemeral(ctx, command, &format!("Failed to fetch join requests: {err}")).await,
+    };
+    if requests.is_empty() {
+        let message = if blocked { "No blocked join requests were returned." } else { "No pending join requests were returned." };
+        return super::reply_ephemeral(ctx, command, message).await;
+    }
+
+    let roles_by_id = role_names(&context.client, &context.group_id).await;
+    let heading = if blocked { "### Blocked Join Request list" } else { "### Join Request list" };
+    let mut lines = vec![heading.to_string()];
+    lines.extend(requests.iter().map(|m| member_line(m, &roles_by_id)));
 
     super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
 }

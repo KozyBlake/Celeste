@@ -222,6 +222,38 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// Port of `getGroupInvites`: `GET /groups/{groupId}/invites`. Unlike
+    /// Java's version, this fetches a single page rather than looping with
+    /// a 250ms sleep between pages up to some overall `limit` -- matching
+    /// the same one-page-per-call shape already used for
+    /// `get_group_bans`/`search_group_members` elsewhere in this client.
+    pub async fn get_group_invites(&self, group_id: &str, n: u32, offset: u32) -> Result<Vec<crate::models::GroupMember>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/invites")))
+            .query(&[("n", n.to_string()), ("offset", offset.to_string())])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `getGroupJoinRequests`: `GET /groups/{groupId}/requests`.
+    pub async fn get_group_join_requests(
+        &self,
+        group_id: &str,
+        blocked: bool,
+        n: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::models::GroupMember>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/requests")))
+            .query(&[("n", n.to_string()), ("offset", offset.to_string()), ("blocked", blocked.to_string())])
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     /// Port of `banFromGroup(String targetUserId)`: `POST
     /// /groups/{groupId}/bans` with `{"userId": ...}`.
     pub async fn ban_from_group(&self, group_id: &str, user_id: &str) -> Result<crate::models::GroupMember, VrChatError> {
@@ -875,5 +907,40 @@ mod tests {
         assert!(!created.is_empty());
         assert_eq!(created.title.as_deref(), Some("Hello"));
         client.delete_group_announcement("grp_1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_group_invites_parses_a_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/invites"))
+            .and(query_param("n", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "gmem_1", "userId": "usr_1", "roleIds": []}
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let invites = client.get_group_invites("grp_1", 10, 0).await.unwrap();
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].user_id.as_deref(), Some("usr_1"));
+    }
+
+    #[tokio::test]
+    async fn get_group_join_requests_passes_the_blocked_flag() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/requests"))
+            .and(query_param("blocked", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "gmem_2", "userId": "usr_2", "roleIds": []}
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let requests = client.get_group_join_requests("grp_1", true, 10, 0).await.unwrap();
+        assert_eq!(requests[0].user_id.as_deref(), Some("usr_2"));
     }
 }
