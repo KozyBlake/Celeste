@@ -98,23 +98,38 @@ impl ColumnId {
         }
     }
 
+    /// Starting column width. These are sized so the value Java shows in
+    /// each column fits on one line at the default font — a full
+    /// `usr_`-prefixed id, a `2026-09-27 19:29` timestamp, an `8y 8m 8d`
+    /// account age — because a column narrower than its content is what
+    /// turned every row into a stacked block. Columns stay resizable, so
+    /// these are a starting point rather than a cap.
+    fn initial_width(&self) -> f32 {
+        match self {
+            ColumnId::Name => 130.0,
+            ColumnId::Id => 300.0,
+            ColumnId::Pronouns => 80.0,
+            ColumnId::Avatar => 160.0,
+            ColumnId::Performance => 90.0,
+            ColumnId::AvatarStats => 60.0,
+            ColumnId::AccAge => 90.0,
+            ColumnId::Joined => 125.0,
+            ColumnId::Left => 125.0,
+            ColumnId::Advisory => 160.0,
+            ColumnId::Age18 => 55.0,
+            ColumnId::Rank => 80.0,
+            ColumnId::Profile => 55.0,
+            ColumnId::CopyId => 55.0,
+            ColumnId::Ban => 45.0,
+        }
+    }
+
+    /// How far a column can be dragged in before its header stops being
+    /// readable.
     fn min_width(&self) -> f32 {
         match self {
-            ColumnId::Name => 80.0,
-            ColumnId::Id => 70.0,
-            ColumnId::Pronouns => 60.0,
-            ColumnId::Avatar => 80.0,
-            ColumnId::Performance => 70.0,
-            ColumnId::AvatarStats => 50.0,
-            ColumnId::AccAge => 70.0,
-            ColumnId::Joined => 90.0,
-            ColumnId::Left => 90.0,
-            ColumnId::Advisory => 80.0,
-            ColumnId::Age18 => 40.0,
-            ColumnId::Rank => 60.0,
-            ColumnId::Profile => 50.0,
-            ColumnId::CopyId => 60.0,
-            ColumnId::Ban => 40.0,
+            ColumnId::Age18 | ColumnId::Ban | ColumnId::Profile | ColumnId::CopyId | ColumnId::AvatarStats => 40.0,
+            _ => 55.0,
         }
     }
 }
@@ -135,6 +150,9 @@ pub struct ScarletApp {
     /// `None` until a login succeeds — from the wizard this session, or an
     /// unattended background login using already-stored credentials.
     vrchat_slot: scarlet_discord::data::SharedVrChatClient,
+    /// See `scarlet_discord::data::SharedHttp` — shared with the event
+    /// listener's audit emitter so both see the same connection.
+    discord_http: scarlet_discord::data::SharedHttp,
     scarlet_data: Arc<scarlet_core::data::ScarletData>,
     staff_list: Arc<scarlet_core::staff_list::StaffList>,
     secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
@@ -182,6 +200,7 @@ impl ScarletApp {
         let watched_users = shared.watched_users.clone();
         let watched_avatars = shared.watched_avatars.clone();
         let vrchat_slot = shared.vrchat_client.clone();
+        let discord_http = shared.http.clone();
         let settings = Some(shared.settings.clone());
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
@@ -208,6 +227,7 @@ impl ScarletApp {
                     token,
                     scarlet_discord::data::SharedState {
                         vrchat_client: vrchat_slot.clone(),
+                        http: discord_http.clone(),
                         scarlet_data: scarlet_data.clone(),
                         settings: settings.clone(),
                         staff_list: staff_list.clone(),
@@ -233,6 +253,7 @@ impl ScarletApp {
             runtime_handle,
             wizard,
             vrchat_slot,
+            discord_http,
             scarlet_data,
             staff_list,
             secret_staff_list,
@@ -308,22 +329,34 @@ impl ScarletApp {
     /// Split out from `instance_tab` so the drag-to-reorder header can
     /// change which column an index maps to without duplicating the
     /// per-column render logic.
+    /// A single-line cell: clipped to the column with the full value on
+    /// hover, so a long id or avatar name can't make the row taller.
+    fn text_cell(ui: &mut egui::Ui, text: &str) {
+        let response = ui.add(egui::Label::new(text).truncate());
+        if !text.is_empty() {
+            response.on_hover_text(text);
+        }
+    }
+
     fn render_cell(&mut self, ui: &mut egui::Ui, player: &scarlet_core::ui::ConnectedPlayer, column: ColumnId) {
         match column {
             ColumnId::Name => {
-                ui.label(&player.name);
+                Self::text_cell(ui, &player.name);
             }
             ColumnId::Id => {
-                ui.label(&player.id);
+                Self::text_cell(ui, &player.id);
             }
             ColumnId::Pronouns => {
-                ui.label(player.pronouns.as_deref().unwrap_or(""));
+                Self::text_cell(ui, player.pronouns.as_deref().unwrap_or(""));
             }
             ColumnId::Avatar => {
-                ui.label(player.avatar_name.as_deref().unwrap_or(""));
+                Self::text_cell(ui, player.avatar_name.as_deref().unwrap_or(""));
             }
             ColumnId::Performance => {
-                ui.label(player.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()).unwrap_or(""));
+                Self::text_cell(
+                    ui,
+                    player.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()).unwrap_or(""),
+                );
             }
             ColumnId::AvatarStats => {
                 if ui.button("View").clicked() {
@@ -332,25 +365,25 @@ impl ScarletApp {
             }
             ColumnId::AccAge => {
                 let age = player.account_age.map(|(y, m, d)| format!("{y}y {m}m {d}d")).unwrap_or_default();
-                ui.label(age);
+                Self::text_cell(ui, &age);
             }
             ColumnId::Joined => {
-                ui.label(player.joined.format("%Y-%m-%d %H:%M").to_string());
+                Self::text_cell(ui, &player.joined.format("%Y-%m-%d %H:%M").to_string());
             }
             ColumnId::Left => {
                 let left = player.left.map(|l| l.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default();
-                ui.label(left);
+                Self::text_cell(ui, &left);
             }
             ColumnId::Advisory => {
-                ui.label(player.advisory.as_deref().unwrap_or(""));
+                Self::text_cell(ui, player.advisory.as_deref().unwrap_or(""));
             }
             ColumnId::Age18 => {
-                ui.label(player.age_verification_status.as_deref().unwrap_or(""));
+                Self::text_cell(ui, player.age_verification_status.as_deref().unwrap_or(""));
             }
             ColumnId::Rank => {
                 let color =
                     player.trust_rank.color_rgb().map(|(r, g, b)| egui::Color32::from_rgb(r, g, b)).unwrap_or(egui::Color32::GRAY);
-                ui.colored_label(color, player.trust_rank.label());
+                ui.add(egui::Label::new(egui::RichText::new(player.trust_rank.label()).color(color)).truncate());
             }
             ColumnId::Profile => {
                 if ui.button("Open").clicked() {
@@ -385,9 +418,15 @@ impl ScarletApp {
         let mut swap: Option<(usize, usize)> = None;
 
         egui::ScrollArea::horizontal().show(ui, |ui| {
-            let mut table = TableBuilder::new(ui).striped(true);
+            // `Column::auto()` sizes to content, which is what let a long
+            // VRChat id wrap over five lines. A fixed initial width that
+            // clips (and can still be dragged wider) is the Swing
+            // `JTable`'s behaviour.
+            let mut table = TableBuilder::new(ui).striped(true).resizable(true);
             for column in &column_order {
-                table = table.column(Column::auto().at_least(column.min_width()));
+                table = table.column(
+                    Column::initial(column.initial_width()).at_least(column.min_width()).clip(true).resizable(true),
+                );
             }
 
             table
@@ -407,9 +446,16 @@ impl ScarletApp {
                 })
                 .body(|mut body| {
                     for player in &players {
-                        body.row(18.0, |mut row| {
+                        body.row(20.0, |mut row| {
                             for column in &column_order {
-                                row.col(|ui| self.render_cell(ui, player, *column));
+                                row.col(|ui| {
+                                    // One line per row: anything too long is
+                                    // clipped with an ellipsis and readable
+                                    // in full on hover, instead of wrapping
+                                    // and pushing the row's height out.
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                    self.render_cell(ui, player, *column);
+                                });
                             }
                         });
                     }
@@ -589,6 +635,7 @@ impl eframe::App for ScarletApp {
                         discord_token,
                         scarlet_discord::data::SharedState {
                             vrchat_client: self.vrchat_slot.clone(),
+                            http: self.discord_http.clone(),
                             scarlet_data: self.scarlet_data.clone(),
                             settings,
                             staff_list: self.staff_list.clone(),

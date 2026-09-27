@@ -268,8 +268,10 @@ impl<R: Read> GifDecoder<R> {
                         0xf9 => self.read_graphic_control_ext(),
                         0xff => {
                             self.read_block();
-                            let app: String =
-                                self.block[..11.min(self.block.len())].iter().map(|&b| b as char).collect();
+                            let app: String = self.block[..11.min(self.block.len())]
+                                .iter()
+                                .map(|&b| b as char)
+                                .collect();
                             if app == "NETSCAPE2.0" {
                                 self.read_netscape_ext();
                             } else {
@@ -366,7 +368,10 @@ impl<R: Read> GifDecoder<R> {
         self.frame_count += 1;
         self.image = vec![0u32; (self.width * self.height) as usize];
         self.set_pixels(&act);
-        self.frames.push(GifFrame { image: self.image.clone(), delay: self.delay });
+        self.frames.push(GifFrame {
+            image: self.image.clone(),
+            delay: self.delay,
+        });
 
         self.reset_frame();
     }
@@ -402,7 +407,8 @@ impl<R: Read> GifDecoder<R> {
             self.suffix[code as usize] = code as u8;
         }
 
-        let (mut datum, mut bits, mut count, mut first, mut top, mut pi, mut bi) = (0i32, 0i32, 0i32, 0i32, 0i32, 0usize, 0usize);
+        let (mut datum, mut bits, mut count, mut first, mut top, mut pi, mut bi) =
+            (0i32, 0i32, 0i32, 0i32, 0i32, 0usize, 0usize);
 
         let mut i = 0usize;
         while i < npix {
@@ -492,14 +498,22 @@ impl<R: Read> GifDecoder<R> {
         if self.last_dispose > 0 {
             if self.last_dispose == 3 {
                 let n = self.frame_count - 2;
-                self.last_image = if n > 0 { self.frames.get((n - 1) as usize).map(|f| f.image.clone()) } else { None };
+                self.last_image = if n > 0 {
+                    self.frames.get((n - 1) as usize).map(|f| f.image.clone())
+                } else {
+                    None
+                };
             }
             if let Some(prev) = &self.last_image {
                 let len = (width * height) as usize;
                 dest[..len].copy_from_slice(&prev[..len]);
 
                 if self.last_dispose == 2 {
-                    let fill = if self.transparency { 0u32 } else { self.last_bg_color };
+                    let fill = if self.transparency {
+                        0u32
+                    } else {
+                        self.last_bg_color
+                    };
                     if let Some((rx, ry, rw, rh)) = self.last_rect {
                         for y in ry.max(0)..(ry + rh).min(height) {
                             for x in rx.max(0)..(rx + rw).min(width) {
@@ -654,7 +668,9 @@ mod tests {
     fn matches_java_reference_output_byte_for_byte() {
         use base64::Engine;
         let gif_b64 = "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";
-        let gif_bytes = base64::engine::general_purpose::STANDARD.decode(gif_b64).unwrap();
+        let gif_bytes = base64::engine::general_purpose::STANDARD
+            .decode(gif_b64)
+            .unwrap();
 
         let mut decoder = GifDecoder::new(std::io::Cursor::new(gif_bytes));
         assert_eq!(decoder.read_gif(), STATUS_OK);
@@ -665,12 +681,14 @@ mod tests {
         assert_eq!(decoder.delay(1), 80);
 
         let expected_frame0: [u8; 48] = [
-            255, 4, 86, 5, 255, 38, 93, 2, 255, 82, 95, 3, 255, 111, 89, 4, 255, 4, 86, 5, 255, 38, 93, 2, 255, 82,
-            95, 3, 255, 111, 89, 4, 255, 8, 89, 3, 255, 42, 94, 2, 255, 82, 95, 3, 255, 110, 95, 4,
+            255, 4, 86, 5, 255, 38, 93, 2, 255, 82, 95, 3, 255, 111, 89, 4, 255, 4, 86, 5, 255, 38,
+            93, 2, 255, 82, 95, 3, 255, 111, 89, 4, 255, 8, 89, 3, 255, 42, 94, 2, 255, 82, 95, 3,
+            255, 110, 95, 4,
         ];
         let expected_frame1: [u8; 48] = [
-            255, 13, 87, 10, 255, 48, 93, 7, 255, 89, 94, 8, 255, 122, 80, 9, 255, 13, 87, 10, 255, 48, 93, 7, 255,
-            89, 94, 8, 255, 122, 80, 9, 255, 15, 88, 9, 255, 52, 93, 7, 255, 89, 94, 8, 255, 121, 94, 9,
+            255, 13, 87, 10, 255, 48, 93, 7, 255, 89, 94, 8, 255, 122, 80, 9, 255, 13, 87, 10, 255,
+            48, 93, 7, 255, 89, 94, 8, 255, 122, 80, 9, 255, 15, 88, 9, 255, 52, 93, 7, 255, 89,
+            94, 8, 255, 121, 94, 9,
         ];
 
         for (idx, expected) in [(0, expected_frame0), (1, expected_frame1)] {

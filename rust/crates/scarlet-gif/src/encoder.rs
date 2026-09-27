@@ -259,7 +259,7 @@ impl<W: Write> AnimatedGifEncoder<W> {
         let mut indexed_pixels = vec![0u8; n_pix];
         let mut nq = NeuQuant::new(&pixels, len, self.sample);
         let mut color_tab = nq.process(); // create reduced palette (BGR)
-        // convert map from BGR to RGB
+                                          // convert map from BGR to RGB
         let mut i = 0;
         while i < color_tab.len() {
             color_tab.swap(i, i + 2);
@@ -434,7 +434,10 @@ impl<W: Write> AnimatedGifEncoder<W> {
 
     /// Encodes and writes pixel data.
     fn write_pixels(&mut self) -> io::Result<()> {
-        let indexed_pixels = self.indexed_pixels.take().expect("analyze_pixels sets this");
+        let indexed_pixels = self
+            .indexed_pixels
+            .take()
+            .expect("analyze_pixels sets this");
         let (width, height, color_depth) = (self.width, self.height, self.color_depth);
         let out = self.out.as_mut().expect("started");
         let mut encoder = LzwEncoder::new(width, height, &indexed_pixels, color_depth);

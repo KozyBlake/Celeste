@@ -10,8 +10,8 @@ const BITS: i32 = 12;
 const HSIZE: usize = 5003; // 80% occupancy
 
 const MASKS: [i32; 17] = [
-    0x0000, 0x0001, 0x0003, 0x0007, 0x000F, 0x001F, 0x003F, 0x007F, 0x00FF, 0x01FF, 0x03FF,
-    0x07FF, 0x0FFF, 0x1FFF, 0x3FFF, 0x7FFF, 0xFFFF,
+    0x0000, 0x0001, 0x0003, 0x0007, 0x000F, 0x001F, 0x003F, 0x007F, 0x00FF, 0x01FF, 0x03FF, 0x07FF,
+    0x0FFF, 0x1FFF, 0x3FFF, 0x7FFF, 0xFFFF,
 ];
 
 pub struct LzwEncoder<'a> {
@@ -280,7 +280,9 @@ mod tests {
     fn encodes_varied_pixel_data() {
         let width = 10;
         let height = 10;
-        let pixels: Vec<u8> = (0..(width * height) as usize).map(|i| (i % 7) as u8).collect();
+        let pixels: Vec<u8> = (0..(width * height) as usize)
+            .map(|i| (i % 7) as u8)
+            .collect();
         let mut enc = LzwEncoder::new(width, height, &pixels, 7);
         let mut out = Vec::new();
         enc.encode(&mut out).unwrap();
@@ -300,8 +302,8 @@ mod tests {
 
         let expected: [u8; 57] = [
             6, 54, 192, 1, 164, 83, 144, 124, 14, 148, 80, 194, 50, 90, 96, 0, 13, 141, 224, 193,
-            33, 68, 60, 134, 9, 8, 81, 17, 41, 46, 36, 70, 38, 224, 216, 8, 137, 70, 164, 146,
-            233, 132, 74, 169, 86, 172, 150, 235, 5, 139, 201, 230, 97, 241, 19, 4, 0,
+            33, 68, 60, 134, 9, 8, 81, 17, 41, 46, 36, 70, 38, 224, 216, 8, 137, 70, 164, 146, 233,
+            132, 74, 169, 86, 172, 150, 235, 5, 139, 201, 230, 97, 241, 19, 4, 0,
         ];
         assert_eq!(&out[..], &expected[..]);
     }

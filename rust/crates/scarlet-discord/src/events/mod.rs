@@ -8,4 +8,5 @@
 //! fields to `discord_bot.json`, and nothing ever read them, because the
 //! thing that reads them is `onChannelCreate`.
 
+pub mod audit_emitter;
 pub mod ticket;

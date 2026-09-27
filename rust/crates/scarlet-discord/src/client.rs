@@ -58,6 +58,11 @@ pub async fn connect_and_serve(token: Option<String>, state: SharedState) {
             );
             match build_client(Some(&token)).await {
                 Some(Ok(mut client)) => {
+                    // Publish the HTTP handle before starting, so the event
+                    // listener's audit emitter can post as soon as the
+                    // gateway is up (it lives outside the client and has no
+                    // `Context` of its own).
+                    *state.http.write().await = Some(client.http.clone());
                     {
                         let mut data = client.data.write().await;
                         state.insert_into(&mut data);

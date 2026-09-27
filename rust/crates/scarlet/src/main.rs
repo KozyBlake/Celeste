@@ -50,8 +50,14 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
 
     // Everything the Discord commands and the event listener must agree on.
+    // Published by `connect_and_serve` once the gateway client exists, so
+    // the event listener's audit emitter can post without a `Context`.
+    let discord_http: scarlet_discord::data::SharedHttp = Arc::new(tokio::sync::RwLock::new(None));
+    let discord_config = Arc::new(scarlet_discord::data::DiscordConfigStore::open(&data_dir));
+
     let shared = scarlet_discord::data::SharedState {
         vrchat_client: Arc::new(tokio::sync::RwLock::new(None)),
+        http: discord_http.clone(),
         scarlet_data: Arc::new(scarlet_core::data::ScarletData::open(&data_dir)),
         settings: settings.clone(),
         staff_list: Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json")),
@@ -88,10 +94,12 @@ fn main() -> anyhow::Result<()> {
         watched_groups: shared.watched_groups.clone(),
         pronoun_lists,
         tts: Arc::new(scarlet_ui::tts::TtsSinkAdapter::new(tts.clone(), settings.clone())),
-        // Discord audit emission is not ported yet, so nothing is emitted
-        // and `is_emitting` is false — see PORTING.md. Swapping this for the
-        // real implementation is the whole of that task's wiring.
-        emitter: Arc::new(scarlet_events::NoopAuditEmitter),
+        emitter: Arc::new(scarlet_discord::events::audit_emitter::DiscordAuditEmitter::new(
+            discord_http,
+            discord_config,
+            shared.scarlet_data.clone(),
+            settings.clone(),
+        )),
     });
     runtime.spawn(scarlet_events::listener::run(listener, tailer_events));
 

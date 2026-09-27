@@ -8,11 +8,13 @@ description = "Rust port of net.sybyline.scarlet.server.discord (JDA -> serenity
 [dependencies]
 scarlet-core.workspace = true
 scarlet-vrchat.workspace = true
+scarlet-events.workspace = true
 scarlet-gif.workspace = true
 tokio.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 serenity.workspace = true
+async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

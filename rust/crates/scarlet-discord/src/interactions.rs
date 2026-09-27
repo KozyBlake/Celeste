@@ -180,6 +180,17 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    // The Ban/Unban buttons Scarlet attaches to its instance-event embeds
+    // (port of `ScarletDiscordUI.vrchatUserBan`/`vrchatUserUnban`). Without
+    // these the buttons on every emitted embed would do nothing.
+    if interaction.data.custom_id.starts_with("vrchat-user-ban:")
+        || interaction.data.custom_id.starts_with("vrchat-user-unban:")
+    {
+        if let Err(err) = handle_embed_ban_button(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling ban/unban button: {err}");
+        }
+        return;
+    }
     if interaction
         .data
         .custom_id
@@ -1108,4 +1119,49 @@ mod tests {
             ["abcdefghij", "usr_12345678-1234-1234-1234-123456789abc"]
         );
     }
+}
+
+/// Port of `ScarletDiscordUI.vrchatUserBan`/`vrchatUserUnban`: the
+/// **Ban user** / **Unban user** buttons on an emitted instance-event
+/// embed, whose custom id carries the target (`vrchat-user-ban:usr_...`).
+///
+/// The action itself — linked-account requirement, group ban permission,
+/// already-banned/not-banned checks — is the same implementation the
+/// `/vrchat-user-ban` command uses, exactly as Java shares
+/// `_vrchatUserBan` between its command and its button.
+async fn handle_embed_ban_button(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let (ban, target_id) = match interaction.data.custom_id.split_once(':') {
+        Some(("vrchat-user-ban", target)) => (true, target.to_string()),
+        Some(("vrchat-user-unban", target)) => (false, target.to_string()),
+        _ => return Ok(()),
+    };
+    if target_id.trim().is_empty() {
+        return Ok(());
+    }
+
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+        )
+        .await?;
+
+    let (content, ephemeral) =
+        match crate::commands::vrchat_user_ban::execute(ctx, &interaction.user.id.to_string(), &target_id, ban).await {
+            // Java announces a successful ban publicly and keeps every
+            // refusal ephemeral.
+            Ok(message) => (message, false),
+            Err(message) => (message, true),
+        };
+
+    interaction
+        .create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new().content(content).ephemeral(ephemeral),
+        )
+        .await
+        .map(|_| ())
 }

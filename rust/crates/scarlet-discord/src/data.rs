@@ -278,9 +278,20 @@ impl DiscordConfigStore {
     }
 }
 
+/// The connected client's HTTP handle, published once the client is built
+/// so code outside the gateway (the ported event listener's audit emitter)
+/// can post to Discord. `None` until then, and `None` again for a run with
+/// no Discord token at all.
+pub type SharedHttp = Arc<RwLock<Option<Arc<serenity::http::Http>>>>;
+
 pub struct DiscordConfigKey;
 impl TypeMapKey for DiscordConfigKey {
     type Value = Arc<DiscordConfigStore>;
+}
+
+pub struct HttpKey;
+impl TypeMapKey for HttpKey {
+    type Value = SharedHttp;
 }
 
 /// Every piece of shared app state a command handler might need, bundled so
@@ -290,6 +301,9 @@ impl TypeMapKey for DiscordConfigKey {
 /// [`SharedState::insert_into`] once before `Client::start`.
 pub struct SharedState {
     pub vrchat_client: SharedVrChatClient,
+    /// Filled in by `connect_and_serve` once the client exists; see
+    /// [`SharedHttp`].
+    pub http: SharedHttp,
     pub scarlet_data: Arc<scarlet_core::data::ScarletData>,
     pub settings: Arc<scarlet_core::settings::Settings>,
     pub staff_list: Arc<scarlet_core::staff_list::StaffList>,
@@ -304,6 +318,7 @@ impl SharedState {
     pub fn insert_into(self, data: &mut TypeMap) {
         let discord_config = Arc::new(DiscordConfigStore::open(&self.settings.data_dir));
         data.insert::<VrChatClientKey>(self.vrchat_client);
+        data.insert::<HttpKey>(self.http);
         data.insert::<ScarletDataKey>(self.scarlet_data);
         data.insert::<SettingsKey>(self.settings);
         data.insert::<DiscordConfigKey>(discord_config);

@@ -117,7 +117,7 @@ impl<'a> NeuQuant<'a> {
         for i in 0..NETSIZE {
             let mut smallpos = i;
             let mut smallval = self.network[i][1]; // index on g
-            // find smallest in i..netsize-1
+                                                   // find smallest in i..netsize-1
             for j in (i + 1)..NETSIZE {
                 if self.network[j][1] < smallval {
                     smallpos = j;
@@ -163,8 +163,7 @@ impl<'a> NeuQuant<'a> {
             rad = 0;
         }
         for i in 0..rad {
-            self.radpower[i as usize] =
-                alpha * (((rad * rad - i * i) * RADBIAS) / (rad * rad));
+            self.radpower[i as usize] = alpha * (((rad * rad - i * i) * RADBIAS) / (rad * rad));
         }
 
         let step = if self.lengthcount < MINPICTUREBYTES {
