@@ -1,7 +1,7 @@
 //! First-run setup wizard: port of the interactive parts of `Scarlet.run()`
 //! (`showVibecodedNoticeIfNeeded`), `ScarletDiscordJDA`'s constructor (the
 //! bot-token/guild-snowflake prompt), and `ScarletVRChat.login()` (the
-//! username/password/TOTP prompt) — all of which run as blocking Swing
+//! username/password/2FA prompt) — all of which run as blocking Swing
 //! dialogs in Java, before the main window is usable. `main.rs` previously
 //! skipped straight to the main window with whatever was (or wasn't)
 //! already in `settings.json`; this is what was missing.
@@ -33,16 +33,6 @@
 //! "Skip for now" just leaves credentials unset, so the prompt reappears
 //! next launch.
 //!
-//! ## Known gap: email-OTP two-factor
-//!
-//! VRChat's `requiresTwoFactorAuth` can list `totp` and/or `emailOtp`.
-//! `scarlet_vrchat::client::VrChatClient` only has `verify_totp` so far (no
-//! `verify2FAEmailCode` equivalent — see that crate's PORTING.md entry).
-//! This wizard always submits to the TOTP endpoint regardless of which
-//! methods VRChat reported, which works for the common authenticator-app
-//! case but will reject an email code with a generic error until that
-//! endpoint is ported.
-//!
 //! ## VRChat group ID
 //!
 //! Port of `getStringOrRequireInput("vrchat_group_id", ...)` in
@@ -65,7 +55,7 @@ enum Stage {
     VibecodedNotice,
     Discord { token: String, guild_id: String },
     VrChatCredentials { username: String, password: String, error: Option<String>, in_flight: bool },
-    VrChatTotp { code: String, error: Option<String>, in_flight: bool },
+    VrChatTwoFactor { method: TwoFactorMethod, code: String, error: Option<String>, in_flight: bool },
     VrChatGroupId { group_id: String, error: Option<String> },
     Done,
 }
@@ -81,9 +71,36 @@ enum Action {
     DiscordContinue { token: Option<String>, guild_id: Option<String> },
     VrChatCredentialsSubmit { username: String, password: String },
     VrChatSkip,
-    TotpSubmit { code: String },
-    TotpCancel,
+    TwoFactorSubmit { method: TwoFactorMethod, code: String },
+    TwoFactorCancel,
     GroupIdSubmit { group_id: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TwoFactorMethod {
+    Totp,
+    EmailOtp,
+}
+
+impl TwoFactorMethod {
+    /// Java checks `totp` before `emailOtp`, so preserve that preference
+    /// when VRChat offers both methods.
+    fn preferred(methods: &[String]) -> Option<Self> {
+        if methods.iter().any(|method| method == "totp") {
+            Some(Self::Totp)
+        } else if methods.iter().any(|method| method == "emailOtp") {
+            Some(Self::EmailOtp)
+        } else {
+            None
+        }
+    }
+
+    fn instructions(self) -> &'static str {
+        match self {
+            Self::Totp => "Enter the 6-digit code from your authenticator app.",
+            Self::EmailOtp => "Enter the 6-digit code VRChat sent to your email address.",
+        }
+    }
 }
 
 /// What [`SetupWizard::render`] wants the caller ([`crate::app::ScarletApp`])
@@ -111,7 +128,7 @@ pub struct SetupWizard {
     settings_store: Arc<SettingsStore>,
     vrchat_client: Option<Arc<VrChatClient>>,
     login_rx: Option<mpsc::Receiver<Result<LoginOutcome, VrChatError>>>,
-    totp_rx: Option<mpsc::Receiver<Result<bool, String>>>,
+    two_factor_rx: Option<mpsc::Receiver<Result<bool, String>>>,
 }
 
 impl SetupWizard {
@@ -137,7 +154,7 @@ impl SetupWizard {
             settings_store: settings.store.clone(),
             vrchat_client: None,
             login_rx: None,
-            totp_rx: None,
+            two_factor_rx: None,
         };
         wizard.stage =
             if !wizard.vibecoded_ack.get() { Stage::VibecodedNotice } else { wizard.compute_stage_after_vibecoded() };
@@ -155,7 +172,8 @@ impl SetupWizard {
             Stage::VibecodedNotice => "vibecoded_notice",
             Stage::Discord { .. } => "discord",
             Stage::VrChatCredentials { .. } => "vrchat_credentials",
-            Stage::VrChatTotp { .. } => "vrchat_totp",
+            Stage::VrChatTwoFactor { method: TwoFactorMethod::Totp, .. } => "vrchat_totp",
+            Stage::VrChatTwoFactor { method: TwoFactorMethod::EmailOtp, .. } => "vrchat_email_otp",
             Stage::VrChatGroupId { .. } => "vrchat_group_id",
             Stage::Done => "done",
         }
@@ -240,16 +258,20 @@ impl SetupWizard {
         });
     }
 
-    fn start_totp(&mut self, code: String) {
+    fn start_two_factor(&mut self, method: TwoFactorMethod, code: String) {
         let Some(client) = self.vrchat_client.clone() else { return };
         let (tx, rx) = mpsc::channel();
-        self.totp_rx = Some(rx);
-        if let Stage::VrChatTotp { in_flight, error, .. } = &mut self.stage {
+        self.two_factor_rx = Some(rx);
+        if let Stage::VrChatTwoFactor { in_flight, error, .. } = &mut self.stage {
             *in_flight = true;
             *error = None;
         }
         self.runtime_handle.spawn(async move {
-            let result = client.verify_totp(&code).await.map_err(|e| e.to_string());
+            let result = match method {
+                TwoFactorMethod::Totp => client.verify_totp(&code).await,
+                TwoFactorMethod::EmailOtp => client.verify_email_otp(&code).await,
+            }
+            .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
     }
@@ -264,9 +286,22 @@ impl SetupWizard {
                     self.login_rx = None;
                     self.stage = self.compute_stage_after_vrchat();
                 }
-                Ok(Ok(LoginOutcome::RequiresTwoFactor(_methods))) => {
+                Ok(Ok(LoginOutcome::RequiresTwoFactor(methods))) => {
                     self.login_rx = None;
-                    self.stage = Stage::VrChatTotp { code: String::new(), error: None, in_flight: false };
+                    self.stage = match TwoFactorMethod::preferred(&methods) {
+                        Some(method) => Stage::VrChatTwoFactor {
+                            method,
+                            code: String::new(),
+                            error: None,
+                            in_flight: false,
+                        },
+                        None => Stage::VrChatCredentials {
+                            username: String::new(),
+                            password: String::new(),
+                            error: Some(format!("VRChat requested unsupported 2FA methods: {}", methods.join(", "))),
+                            in_flight: false,
+                        },
+                    };
                 }
                 Ok(Err(err)) => {
                     self.login_rx = None;
@@ -305,30 +340,30 @@ impl SetupWizard {
                 }
             }
         }
-        if let Some(rx) = &self.totp_rx {
+        if let Some(rx) = &self.two_factor_rx {
             match rx.try_recv() {
                 Ok(Ok(true)) => {
-                    self.totp_rx = None;
+                    self.two_factor_rx = None;
                     self.stage = self.compute_stage_after_vrchat();
                 }
                 Ok(Ok(false)) => {
-                    self.totp_rx = None;
-                    if let Stage::VrChatTotp { error, in_flight, .. } = &mut self.stage {
+                    self.two_factor_rx = None;
+                    if let Stage::VrChatTwoFactor { error, in_flight, .. } = &mut self.stage {
                         *error = Some("Incorrect code — try again.".to_string());
                         *in_flight = false;
                     }
                 }
                 Ok(Err(message)) => {
-                    self.totp_rx = None;
-                    if let Stage::VrChatTotp { error, in_flight, .. } = &mut self.stage {
+                    self.two_factor_rx = None;
+                    if let Stage::VrChatTwoFactor { error, in_flight, .. } = &mut self.stage {
                         *error = Some(message);
                         *in_flight = false;
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.totp_rx = None;
-                    if let Stage::VrChatTotp { error, in_flight, .. } = &mut self.stage {
+                    self.two_factor_rx = None;
+                    if let Stage::VrChatTwoFactor { error, in_flight, .. } = &mut self.stage {
                         *error = Some("Verification task ended unexpectedly — try again.".to_string());
                         *in_flight = false;
                     }
@@ -368,16 +403,16 @@ impl SetupWizard {
             Action::VrChatSkip => {
                 self.stage = self.compute_stage_after_vrchat();
             }
-            Action::TotpSubmit { code } => {
+            Action::TwoFactorSubmit { method, code } => {
                 if code.trim().is_empty() {
-                    if let Stage::VrChatTotp { error, .. } = &mut self.stage {
+                    if let Stage::VrChatTwoFactor { error, .. } = &mut self.stage {
                         *error = Some("Enter the code.".to_string());
                     }
                 } else {
-                    self.start_totp(code);
+                    self.start_two_factor(method, code);
                 }
             }
-            Action::TotpCancel => {
+            Action::TwoFactorCancel => {
                 self.stage =
                     Stage::VrChatCredentials { username: String::new(), password: String::new(), error: None, in_flight: false };
             }
@@ -411,8 +446,8 @@ impl SetupWizard {
                     Stage::VrChatCredentials { username, password, error, in_flight } => {
                         render_vrchat_credentials_stage(ui, username, password, error, *in_flight, &mut action)
                     }
-                    Stage::VrChatTotp { code, error, in_flight } => {
-                        render_vrchat_totp_stage(ui, code, error, *in_flight, &mut action)
+                    Stage::VrChatTwoFactor { method, code, error, in_flight } => {
+                        render_vrchat_two_factor_stage(ui, *method, code, error, *in_flight, &mut action)
                     }
                     Stage::VrChatGroupId { group_id, error } => render_vrchat_group_id_stage(ui, group_id, error, &mut action),
                     Stage::Done => {}
@@ -525,8 +560,9 @@ fn render_vrchat_credentials_stage(
     });
 }
 
-fn render_vrchat_totp_stage(
+fn render_vrchat_two_factor_stage(
     ui: &mut egui::Ui,
+    method: TwoFactorMethod,
     code: &mut String,
     error: &Option<String>,
     in_flight: bool,
@@ -534,10 +570,7 @@ fn render_vrchat_totp_stage(
 ) {
     ui.heading("VRChat two-factor code");
     ui.add_space(8.0);
-    ui.label(
-        "VRChat requires a two-factor code for this account. Enter the 6-digit code from your \
-         authenticator app.",
-    );
+    ui.label(format!("VRChat requires a two-factor code for this account. {}", method.instructions()));
     ui.add_space(8.0);
     ui.add_enabled_ui(!in_flight, |ui| {
         ui.horizontal(|ui| {
@@ -552,10 +585,10 @@ fn render_vrchat_totp_stage(
     ui.horizontal(|ui| {
         let verify_label = if in_flight { "Verifying\u{2026}" } else { "Verify" };
         if ui.add_enabled(!in_flight, egui::Button::new(verify_label)).clicked() {
-            *action = Action::TotpSubmit { code: code.clone() };
+            *action = Action::TwoFactorSubmit { method, code: code.clone() };
         }
         if ui.add_enabled(!in_flight, egui::Button::new("Back")).clicked() {
-            *action = Action::TotpCancel;
+            *action = Action::TwoFactorCancel;
         }
     });
 }
@@ -799,8 +832,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         let mut wizard = wizard(&settings);
-        wizard.stage = Stage::VrChatTotp { code: "123456".to_string(), error: None, in_flight: false };
-        wizard.apply_action(Action::TotpCancel);
+        wizard.stage = Stage::VrChatTwoFactor {
+            method: TwoFactorMethod::Totp,
+            code: "123456".to_string(),
+            error: None,
+            in_flight: false,
+        };
+        wizard.apply_action(Action::TwoFactorCancel);
         assert_eq!(wizard.stage_name(), "vrchat_credentials");
     }
 
@@ -809,14 +847,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         let mut wizard = wizard(&settings);
-        wizard.stage = Stage::VrChatTotp { code: String::new(), error: None, in_flight: false };
-        wizard.apply_action(Action::TotpSubmit { code: String::new() });
+        wizard.stage = Stage::VrChatTwoFactor {
+            method: TwoFactorMethod::Totp,
+            code: String::new(),
+            error: None,
+            in_flight: false,
+        };
+        wizard.apply_action(Action::TwoFactorSubmit { method: TwoFactorMethod::Totp, code: String::new() });
         match &wizard.stage {
-            Stage::VrChatTotp { error, in_flight, .. } => {
+            Stage::VrChatTwoFactor { error, in_flight, .. } => {
                 assert!(error.is_some());
                 assert!(!in_flight);
             }
-            _ => panic!("expected to stay on VrChatTotp"),
+            _ => panic!("expected to stay on VrChatTwoFactor"),
         }
+    }
+
+    #[test]
+    fn two_factor_method_matches_java_preference_and_supports_email_only_accounts() {
+        assert_eq!(
+            TwoFactorMethod::preferred(&["emailOtp".to_string(), "totp".to_string()]),
+            Some(TwoFactorMethod::Totp)
+        );
+        assert_eq!(
+            TwoFactorMethod::preferred(&["emailOtp".to_string()]),
+            Some(TwoFactorMethod::EmailOtp)
+        );
+        assert_eq!(TwoFactorMethod::preferred(&["unknown".to_string()]), None);
     }
 }

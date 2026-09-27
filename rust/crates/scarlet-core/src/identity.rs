@@ -58,6 +58,7 @@ mod tests {
     fn api_base_matches_java_format() {
         assert_eq!(api_base(API_HOST_0), "https://vrchat.com/api/1");
         assert_eq!(api_base(API_HOST_1), "https://api.vrchat.com/api/1");
+        assert_eq!(api_base(API_HOST_2), "https://api.vrchat.cloud/api/1");
     }
 
     #[test]

@@ -79,10 +79,16 @@ pub struct VrChatClient {
 }
 
 impl VrChatClient {
-    /// Builds a client against the real VRChat API
-    /// (`https://api.vrchat.com/api/1`, matching `Scarlet.API_BASE_1`).
+    /// Builds a client against VRChat's canonical API host.
+    ///
+    /// `api.vrchat.com` redirects to `api.vrchat.cloud`. Because that is a
+    /// cross-host redirect, reqwest correctly removes the sensitive
+    /// `Authorization` header before following it, causing credential logins
+    /// to fail with `401 Missing Credentials`. Start on the canonical host so
+    /// the Basic Auth header reaches `/auth/user` intact. This also matches the
+    /// Java client's use of `Scarlet.API_BASE_2`.
     pub fn new() -> Result<Self, VrChatError> {
-        Self::with_base_url(&scarlet_core::identity::api_base(scarlet_core::identity::API_HOST_1))
+        Self::with_base_url(&scarlet_core::identity::api_base(scarlet_core::identity::API_HOST_2))
     }
 
     /// Builds a client against an arbitrary base URL — used to point at a
@@ -153,6 +159,23 @@ impl VrChatClient {
             .json(&serde_json::json!({ "code": code }))
             .send()
             .await?;
+        Self::parse_two_factor_response(response).await
+    }
+
+    /// Port of the email-OTP branch of `login()`/`loginAlt()`: `POST
+    /// /auth/twofactorauth/emailotp/verify`, returning whether the emailed
+    /// code was accepted.
+    pub async fn verify_email_otp(&self, code: &str) -> Result<bool, VrChatError> {
+        let response = self
+            .http
+            .post(self.url("/auth/twofactorauth/emailotp/verify"))
+            .json(&serde_json::json!({ "code": code }))
+            .send()
+            .await?;
+        Self::parse_two_factor_response(response).await
+    }
+
+    async fn parse_two_factor_response(response: reqwest::Response) -> Result<bool, VrChatError> {
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -697,6 +720,12 @@ mod tests {
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    #[test]
+    fn production_client_uses_canonical_vrchat_api_host() {
+        let client = VrChatClient::new().unwrap();
+        assert_eq!(client.base_url, "https://api.vrchat.cloud/api/1");
+    }
+
     #[tokio::test]
     async fn login_with_stored_credentials_returns_none_when_nothing_is_stored() {
         let dir = tempfile::tempdir().unwrap();
@@ -834,6 +863,19 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         assert!(client.verify_totp("123456").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn verify_email_otp_uses_email_endpoint_and_reports_acceptance() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/auth/twofactorauth/emailotp/verify"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "verified": true })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert!(client.verify_email_otp("123456").await.unwrap());
     }
 
     #[tokio::test]
