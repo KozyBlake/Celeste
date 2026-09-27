@@ -20,6 +20,7 @@ pub mod discord_warn;
 pub mod export_log;
 pub mod set_event_channel;
 pub mod set_tts_voice;
+pub mod aux_webhooks;
 pub mod moderation_tags;
 pub mod secret_staff_list;
 pub mod staff_list;
@@ -183,6 +184,8 @@ pub async fn register_global_commands(ctx: &Context) {
         set_event_channel::register(set_event_channel::RouteKind::SecretAudit),
         set_event_channel::register(set_event_channel::RouteKind::SecretExtended),
         set_tts_voice::register(),
+        aux_webhooks::register(),
+        aux_webhooks::register_assignment(),
     ];
     if let Err(err) =
         serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
@@ -219,6 +222,8 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         set_event_channel::SECRET_AUDIT_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::SecretAudit).await,
         set_event_channel::SECRET_EXTENDED_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::SecretExtended).await,
         set_tts_voice::NAME => set_tts_voice::run(ctx, command).await,
+        aux_webhooks::NAME => aux_webhooks::run(ctx, command).await,
+        aux_webhooks::ASSIGN_NAME => aux_webhooks::run_assignment(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
             Ok(())

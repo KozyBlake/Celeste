@@ -52,6 +52,10 @@ const AUDIT_TYPES: &[&str] = &[
     "group.user.unban",
 ];
 
+pub(crate) fn valid_audit_type(value: &str) -> bool {
+    AUDIT_TYPES.contains(&value)
+}
+
 const EXTENDED_TYPES: &[&str] = &[
     "groupex.instance.inactive",
     "groupex.instance.staff.join",

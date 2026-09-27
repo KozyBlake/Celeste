@@ -180,6 +180,16 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction
+        .data
+        .custom_id
+        .starts_with("set-audit-aux-webhooks:")
+    {
+        if let Err(err) = handle_audit_aux_webhooks(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling audit auxiliary webhooks: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("watched-remove:") {
         if let Err(err) = handle_watched_remove(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error handling watched removal: {err}");
@@ -193,6 +203,64 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if let Err(err) = handle_instance_component(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling component interaction: {err}");
     }
+}
+
+async fn handle_audit_aux_webhooks(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let Some((_, event_type)) = split_custom_id(&interaction.data.custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid audit event type.").await;
+    };
+    if !crate::commands::set_event_channel::valid_audit_type(event_type) {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            format!("{event_type} isn't a valid audit log event type"),
+        )
+        .await;
+    }
+    let ComponentInteractionDataKind::StringSelect { values } = &interaction.data.kind else {
+        return ephemeral_component(ctx, interaction, "Expected auxiliary webhook selections.")
+            .await;
+    };
+    let config = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::DiscordConfigKey>()
+            .cloned()
+    };
+    let Some(config) = config else {
+        return ephemeral_component(ctx, interaction, "Discord configuration is unavailable.")
+            .await;
+    };
+    let known = config.string_map("scarletAuxWh2webhookUrl");
+    if let Some(unknown) = values.iter().find(|value| !known.contains_key(*value)) {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            format!("Unknown auxiliary webhook `{unknown}`."),
+        )
+        .await;
+    }
+    if let Err(err) = config.set_map_strings("auditType2scarletAuxWh", event_type, values) {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            format!("Could not save auxiliary webhook assignment: {err}"),
+        )
+        .await;
+    }
+    let message = if values.is_empty() {
+        format!("Removing auxiliary webhooks for {event_type}")
+    } else {
+        format!(
+            "Setting auxiliary webhooks for {event_type}:\n{}",
+            values.join(", ")
+        )
+    };
+    ephemeral_component(ctx, interaction, message).await
 }
 
 async fn handle_watched_remove(

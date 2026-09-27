@@ -119,6 +119,80 @@ impl DiscordConfigStore {
             .map(str::to_string)
     }
 
+    pub fn string_map(&self, map_name: &str) -> HashMap<String, String> {
+        self.value
+            .lock()
+            .unwrap()
+            .get(map_name)
+            .and_then(|value| value.as_object())
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(key, value)| {
+                        value.as_str().map(|value| (key.clone(), value.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn map_strings(&self, map_name: &str, key: &str) -> Vec<String> {
+        let root = self.value.lock().unwrap();
+        let Some(value) = root
+            .get(map_name)
+            .and_then(|value| value.as_object())
+            .and_then(|map| map.get(key))
+        else {
+            return Vec::new();
+        };
+        match value {
+            serde_json::Value::String(value) => vec![value.clone()],
+            serde_json::Value::Array(values) => values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn set_map_strings(
+        &self,
+        map_name: &str,
+        key: &str,
+        values: &[String],
+    ) -> anyhow::Result<()> {
+        {
+            let mut root = self.value.lock().unwrap();
+            let map = root
+                .entry(map_name.to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if !map.is_object() {
+                *map = serde_json::json!({});
+            }
+            let map = map.as_object_mut().expect("object assigned above");
+            match values {
+                [] => {
+                    map.remove(key);
+                }
+                [value] => {
+                    map.insert(key.to_string(), serde_json::Value::String(value.clone()));
+                }
+                values => {
+                    map.insert(
+                        key.to_string(),
+                        serde_json::Value::Array(
+                            values
+                                .iter()
+                                .cloned()
+                                .map(serde_json::Value::String)
+                                .collect(),
+                        ),
+                    );
+                }
+            }
+        }
+        self.save()
+    }
+
     pub fn set_map_value(
         &self,
         map_name: &str,
@@ -230,5 +304,16 @@ mod tests {
         assert_eq!(saved["guildSf"], "123");
         assert_eq!(saved["futureJavaField"]["x"], 1);
         assert_eq!(saved["auditType2channelSf"]["group.user.ban"], "456");
+        config
+            .set_map_strings(
+                "auditType2scarletAuxWh",
+                "group.user.ban",
+                &["one".into(), "two".into()],
+            )
+            .unwrap();
+        assert_eq!(
+            config.map_strings("auditType2scarletAuxWh", "group.user.ban"),
+            ["one", "two"]
+        );
     }
 }
