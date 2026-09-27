@@ -282,3 +282,55 @@ mod tests {
         }
     }
 }
+
+/// Adapts the desktop [`TtsService`] to the event listener's
+/// [`scarlet_events::TtsSink`], which is how the ported
+/// `ScarletEventListener` speaks without depending on this GUI crate.
+///
+/// The voice is read from settings on every utterance (rather than captured
+/// once) so changing it in the Settings tab takes effect immediately, the
+/// same way Java's `ttsVoiceName.get()` call inside each announcement does.
+///
+/// **Gap, tracked not hidden:** Java precedes the nuisance-rank and
+/// mixed-character-name announcements with bundled alert tones
+/// (`BL_SFX_*.mp3`, played through `submitAlertThenSpeak`). This service has
+/// no audio-file playback yet, so those two calls speak the announcement
+/// without its chime. The distinction a moderator relies on — that a
+/// nuisance-rank join *sounds* different — is therefore not reproduced yet;
+/// see PORTING.md.
+pub struct TtsSinkAdapter {
+    service: std::sync::Arc<TtsService>,
+    settings: std::sync::Arc<scarlet_core::settings::Settings>,
+}
+
+impl TtsSinkAdapter {
+    pub fn new(
+        service: std::sync::Arc<TtsService>,
+        settings: std::sync::Arc<scarlet_core::settings::Settings>,
+    ) -> Self {
+        TtsSinkAdapter { service, settings }
+    }
+
+    fn speak_now(&self, marker: &str, text: &str) {
+        let voice = self.settings.tts_voice_name.get();
+        if let Err(err) = self.service.submit(text, voice) {
+            tracing::debug!("TTS({marker}): {err}");
+        }
+    }
+}
+
+impl scarlet_events::TtsSink for TtsSinkAdapter {
+    fn speak(&self, marker: &str, text: &str) {
+        self.speak_now(marker, text);
+    }
+
+    fn speak_after_nuisance_alert(&self, marker: &str, text: &str) {
+        // No chime yet (see the type's docs); the announcement itself still
+        // goes out, which is the part that carries the information.
+        self.speak_now(marker, text);
+    }
+
+    fn speak_mixed_character_name_alert(&self, marker: &str) {
+        self.speak_now(marker, &scarlet_core::i18n::tr("adv.ttsMixedCharAlert", &[]));
+    }
+}

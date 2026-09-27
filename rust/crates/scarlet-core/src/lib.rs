@@ -15,6 +15,7 @@ pub mod log;
 pub mod maths;
 pub mod meta;
 pub mod moderation_tags;
+pub mod names;
 pub mod pacer;
 pub mod permission;
 pub mod pronoun_lists;

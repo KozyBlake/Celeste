@@ -368,6 +368,25 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// Port of `getUserGroups(String userId)`: `GET /users/{userId}/groups`.
+    ///
+    /// The watched-group join check runs against this. VRChat only returns
+    /// groups whose membership the *requesting* account is allowed to see,
+    /// so a hidden membership legitimately comes back absent — the check
+    /// treats that as "not in a watched group" rather than retrying, which
+    /// is what Java does too.
+    pub async fn get_user_groups(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<crate::models::LimitedUserGroup>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/users/{user_id}/groups")))
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     // ---- groups (moderation surface) ----
     //
     // Every endpoint below has its exact path, method, and request/response
@@ -1101,6 +1120,56 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Pins the user endpoint's real response shape, including the two
+    /// fields the join checks depend on. `date_joined` is snake_case on the
+    /// wire while everything else on User is camelCase — getting that wrong
+    /// deserializes to `None` and silently disables the new-account
+    /// advisory rather than failing, which is exactly the kind of bug a
+    /// mock-server test catches and a compile does not.
+    #[tokio::test]
+    async fn get_user_reads_date_joined_pronouns_and_tags() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_1",
+                "displayName": "Someone",
+                "date_joined": "2026-09-01",
+                "pronouns": "she/her",
+                "tags": ["system_trust_basic"],
+                "ageVerificationStatus": "18+"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&format!("{}/", server.uri())).unwrap();
+        let user = client.get_user("usr_1").await.unwrap();
+        assert_eq!(user.date_joined, Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()));
+        assert_eq!(user.pronouns.as_deref(), Some("she/her"));
+        assert_eq!(user.age_verification_status.as_deref(), Some("18+"));
+        assert_eq!(user.tags, vec!["system_trust_basic".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn get_user_groups_hits_the_documented_path_and_reads_group_ids() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1/groups"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "gmem_1", "groupId": "grp_watched", "name": "Watched Group", "shortCode": "WATCH"},
+                {"id": "gmem_2", "groupId": "grp_other", "name": "Other"}
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&format!("{}/", server.uri())).unwrap();
+        let groups = client.get_user_groups("usr_1").await.unwrap();
+        assert_eq!(
+            groups.iter().filter_map(|g| g.group_id.clone()).collect::<Vec<_>>(),
+            vec!["grp_watched".to_string(), "grp_other".to_string()]
+        );
+    }
 
     #[test]
     fn production_client_uses_canonical_vrchat_api_host() {

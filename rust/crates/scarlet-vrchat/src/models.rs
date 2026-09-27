@@ -37,6 +37,30 @@ pub struct User {
     pub tags: Vec<String>,
     #[serde(rename = "ageVerificationStatus")]
     pub age_verification_status: Option<String>,
+    /// `date_joined` in the wire format (VRChat uses snake_case for exactly
+    /// this one field on User, confirmed against the spec's `User.yaml`) —
+    /// a plain `YYYY-MM-DD` date, which is what the account-age advisory
+    /// and the player table's "account age" column are computed from.
+    #[serde(rename = "date_joined")]
+    pub date_joined: Option<chrono::NaiveDate>,
+    /// Free-text pronouns field, checked by `PronounValidator`.
+    pub pronouns: Option<String>,
+}
+
+/// Port of `io.github.vrchatapi.model.LimitedUserGroups`, reduced to the
+/// fields the watched-group check reads. `GET /users/{userId}/groups`
+/// returns these; `groupId` is the one the check matches against, and the
+/// name/id pair is useful for logging which group tripped.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LimitedUserGroup {
+    pub id: Option<String>,
+    #[serde(rename = "groupId")]
+    pub group_id: Option<String>,
+    pub name: Option<String>,
+    #[serde(rename = "shortCode")]
+    pub short_code: Option<String>,
+    #[serde(rename = "memberVisibility")]
+    pub member_visibility: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

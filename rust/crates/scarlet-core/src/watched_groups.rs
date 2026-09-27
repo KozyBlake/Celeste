@@ -62,6 +62,19 @@ impl WatchedGroupType {
         }
     }
 
+    /// Port of the enum's `text_color` field: the row colour a player gets
+    /// in the instance table when they're in a group of this type.
+    /// `UNKNOWN` and `OTHER` carry no colour in Java either.
+    pub fn text_color(&self) -> Option<(u8, u8, u8)> {
+        match self {
+            WatchedGroupType::Malicious => Some((235, 95, 95)),
+            WatchedGroupType::Nuisance => Some((235, 165, 65)),
+            WatchedGroupType::Community => Some((95, 200, 120)),
+            WatchedGroupType::Affiliated => Some((95, 165, 235)),
+            WatchedGroupType::Unknown | WatchedGroupType::Other => None,
+        }
+    }
+
     pub fn parse(value: &str) -> Option<WatchedGroupType> {
         WatchedGroupType::ALL
             .into_iter()

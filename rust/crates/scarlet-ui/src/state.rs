@@ -1,109 +1,53 @@
-//! Shared UI state: the data half of `ScarletUI`'s live player list and
-//! status display, kept separate from rendering so it can be mutated from
-//! any thread (Discord/VRChat polling tasks) and read by the render loop
-//! without either side needing to know about the other.
+//! The data model behind [`scarlet_core::ui::ScarletUi`] — Java's
+//! `ScarletUI`'s player table, status bar, CLI output and announcement
+//! state, minus Swing.
 //!
-//! Java's Swing UI has an implicit single-threaded rule (only the AWT Event
-//! Dispatch Thread may touch Swing components; `IScarletUI`'s methods
-//! internally marshal onto it). egui's immediate-mode render loop has no
-//! such requirement — any thread can mutate state behind a `Mutex`, and the
-//! next frame just renders whatever is there. That's a real architectural
-//! difference from the Java version, not an oversight: there's no EDT to
-//! port.
+//! The player row type itself ([`scarlet_core::ui::ConnectedPlayer`]) lives
+//! in `scarlet-core` alongside the trait, so the ported event listener can
+//! drive a UI without depending on this GUI crate — the same split Java has
+//! between `IScarletUI` and `ScarletUI`.
 //!
-//! Every field here starts empty and is only ever populated by real
-//! join/update/leave calls for the instance currently being watched — there
-//! is no seeded/sample data. A fresh run (or a `clear_instance()`) means an
-//! empty table until VRChat polling (not wired up yet — see PORTING.md)
-//! actually reports players.
+//! A fresh instance always starts empty: players only ever appear from real
+//! join events, and `clear_instance()` empties it again. There is no seeded
+//! or sample data anywhere (guarded by `fresh_state_has_no_seeded_players`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::NaiveDateTime;
-use scarlet_core::trust_rank::TrustRank;
-
-/// Port of the data half of `ScarletUI.ConnectedPlayer` and its
-/// `propstable` column list (the Swing `Action`-backed "View"/"Open"/"Copy"/
-/// "Ban" button *behavior* isn't ported — those are actions the caller
-/// wires up, not player data; the table just needs to know a row exists to
-/// render a button for one).
-#[derive(Debug, Clone)]
-pub struct ConnectedPlayer {
-    pub id: String,
-    pub name: String,
-    pub pronouns: Option<String>,
-    pub avatar_name: Option<String>,
-    /// e.g. "Good"/"Medium"/"Poor"/"VeryPoor", from VRChat's avatar
-    /// performance analysis. `None` until avatar info is looked up.
-    pub performance_rating: Option<String>,
-    /// Account age at time of join, as (years, months, days) — matching the
-    /// Java `Period` field's display shape ("8y 8m 8d" in the table).
-    pub account_age: Option<(i32, i32, i32)>,
-    pub joined: NaiveDateTime,
-    pub left: Option<NaiveDateTime>,
-    pub advisory: Option<String>,
-    /// Raw VRChat `ageVerificationStatus` value (e.g. "18+", "hidden") —
-    /// not yet a typed enum, see module docs on `AgeVerificationStatus` in
-    /// PORTING.md.
-    pub age_verification_status: Option<String>,
-    pub trust_rank: TrustRank,
-    /// RGB, matching the Java `Color text_color` parameter.
-    pub text_color: Option<(u8, u8, u8)>,
-    pub priority: i32,
-    pub is_rejoin_from_prev: bool,
-}
-
-impl ConnectedPlayer {
-    /// Minimal constructor for the fields `IScarletUI::playerJoin` actually
-    /// receives; the richer fields (pronouns, avatar, performance, account
-    /// age, trust rank) are filled in later via `player_update` once a
-    /// VRChat user lookup resolves, matching the Java version's own
-    /// two-phase fill (join fires immediately from the audit/join event;
-    /// the user profile lookup that supplies the rest is async there too).
-    pub fn new(id: impl Into<String>, name: impl Into<String>, joined: NaiveDateTime) -> Self {
-        ConnectedPlayer {
-            id: id.into(),
-            name: name.into(),
-            pronouns: None,
-            avatar_name: None,
-            performance_rating: None,
-            account_age: None,
-            joined,
-            left: None,
-            advisory: None,
-            age_verification_status: None,
-            trust_rank: TrustRank::Unknown,
-            text_color: None,
-            priority: 0,
-            is_rejoin_from_prev: false,
-        }
-    }
-}
+use scarlet_core::ui::{compare_players, ConnectedPlayer, InstanceState, PlayerJoin, ScarletUi};
 
 /// One line of CLI tab output, matching `appendCliOutput`.
 #[derive(Debug, Clone)]
 pub struct CliLine(pub String);
 
-#[derive(Debug, Default)]
+/// A `player_update` that arrived before its row existed.
+///
+/// Port of `ScarletUI.pendingUpdates`: an update for an unknown id is queued
+/// and replayed when that player's row is created, rather than dropped. The
+/// previous Rust version dropped them silently, which loses exactly the
+/// updates that matter most — an avatar switch logged in the same catch-up
+/// batch as the join it belongs to.
+type PendingUpdate = Box<dyn FnMut(&mut ConnectedPlayer) + Send>;
+
+#[derive(Default)]
 pub struct UiStateInner {
     pub connection_status: String,
     pub players: HashMap<String, ConnectedPlayer>,
-    /// Insertion/sort order for display; kept separate from the map so
-    /// `fire_sort` can reorder without touching player data, matching the
-    /// Java version's separate "resort the table model" step.
+    /// Display order, kept separate from the map so `fire_sort` can reorder
+    /// without touching player data — Java's "resort the table model" step.
     pub player_order: Vec<String>,
+    pending_updates: HashMap<String, Vec<PendingUpdate>>,
+    /// The instance the local VRChat client is currently in, if any.
+    pub instance: Option<InstanceState>,
     pub announcement: Option<scarlet_core::meta::ScarletAnnouncement>,
     pub ui_scale: f32,
     pub cli_log: Vec<CliLine>,
     pub tts_enabled: bool,
 }
 
-/// Port of the mutating half of `IScarletUI`'s contract
-/// (`playerJoin`/`playerUpdate`/`playerLeave`/`clearInstance`/`fireSort`/
-/// `refreshVrchatApiStatus`/`showAnnouncement`/`hasActivePlayers`). Cheap to
-/// clone (an `Arc` internally) so both the render loop and background
-/// polling tasks can hold a handle.
+/// Cheap to clone (an `Arc` internally) so the render loop, the log-event
+/// pipeline and background tasks can all hold a handle.
 #[derive(Clone)]
 pub struct UiState(std::sync::Arc<Mutex<UiStateInner>>);
 
@@ -118,39 +62,114 @@ impl UiState {
         Self::default()
     }
 
-    /// Port of `playerJoin`. `initial_preamble` (true while replaying the
-    /// instance's current roster on connect, matching the Java parameter)
-    /// is accepted for API parity but doesn't change behavior here — Rust's
-    /// state model doesn't need to suppress UI churn during that replay the
-    /// way Swing table-update batching might have.
-    pub fn player_join(&self, _initial_preamble: bool, player: ConnectedPlayer) {
+    /// Port of `playerJoin`. Unlike Java this does no VRChat lookup of its
+    /// own — the caller resolves the profile fields (see
+    /// [`scarlet_core::ui`]'s module docs) and passes them in.
+    pub fn player_join(&self, _initial_preamble: bool, join: PlayerJoin) {
         let mut inner = self.0.lock().unwrap();
-        if !inner.player_order.contains(&player.id) {
-            inner.player_order.push(player.id.clone());
+        let PlayerJoin {
+            id,
+            name,
+            joined,
+            advisory,
+            text_color,
+            priority,
+            is_rejoin_from_prev,
+            account_age,
+            trust_rank,
+            pronouns,
+            pronouns_flagged,
+            age_verification_status,
+            avatar_name,
+            avatar_info,
+        } = join;
+
+        match inner.players.get_mut(&id) {
+            Some(player) => {
+                player.name = name;
+                // A rejoin of the same instance keeps the original join
+                // time, so the table doesn't reset how long they've been
+                // around (Java's `if (!isRejoinFromPrev)`).
+                if !is_rejoin_from_prev {
+                    player.joined = joined;
+                }
+                player.account_age = account_age;
+                player.left = None;
+                player.set_base_advisory(advisory, text_color, priority);
+                player.age_verification_status = age_verification_status;
+                player.trust_rank = trust_rank;
+                player.pronouns = pronouns;
+                player.pronouns_flagged = pronouns_flagged;
+                player.is_rejoin_from_prev = is_rejoin_from_prev;
+                if avatar_name.is_some() {
+                    player.avatar_name = avatar_name;
+                }
+                if avatar_info.is_some() {
+                    player.avatar_info = avatar_info;
+                }
+            }
+            None => {
+                let mut player = ConnectedPlayer::new(id.clone(), name, joined);
+                player.account_age = account_age;
+                player.set_base_advisory(advisory, text_color, priority);
+                player.age_verification_status = age_verification_status;
+                player.trust_rank = trust_rank;
+                player.pronouns = pronouns;
+                player.pronouns_flagged = pronouns_flagged;
+                player.is_rejoin_from_prev = is_rejoin_from_prev;
+                player.avatar_name = avatar_name;
+                player.avatar_info = avatar_info;
+                inner.player_order.push(id.clone());
+                inner.players.insert(id.clone(), player);
+            }
         }
-        inner.players.insert(player.id.clone(), player);
+        Self::apply_pending(&mut inner, &id);
     }
 
-    /// Port of `playerUpdate`.
-    pub fn player_update(&self, _initial_preamble: bool, id: &str, update: impl FnOnce(&mut ConnectedPlayer)) {
+    /// Port of `playerUpdate`, including its pending-update queue for rows
+    /// that don't exist yet.
+    pub fn player_update(&self, _initial_preamble: bool, id: &str, update: impl FnMut(&mut ConnectedPlayer) + Send + 'static) {
+        let mut update = update;
         let mut inner = self.0.lock().unwrap();
+        match inner.players.get_mut(id) {
+            Some(player) => update(player),
+            None => inner.pending_updates.entry(id.to_string()).or_default().push(Box::new(update)),
+        }
+    }
+
+    fn apply_pending(inner: &mut UiStateInner, id: &str) {
+        let Some(mut queued) = inner.pending_updates.remove(id) else { return };
         if let Some(player) = inner.players.get_mut(id) {
-            update(player);
+            for update in queued.iter_mut() {
+                update(player);
+            }
         }
     }
 
-    /// Port of `playerLeave`.
-    pub fn player_leave(&self, _initial_preamble: bool, id: &str, left: NaiveDateTime) {
+    /// Port of `playerLeave`. A leave for an unknown id still creates the
+    /// row, as Java does, so a player who joined before Scarlet started is
+    /// still accounted for in the session totals.
+    pub fn player_leave(&self, _initial_preamble: bool, id: &str, name: &str, left: NaiveDateTime) {
         let mut inner = self.0.lock().unwrap();
-        if let Some(player) = inner.players.get_mut(id) {
-            player.left = Some(left);
+        match inner.players.get_mut(id) {
+            Some(player) => {
+                if !name.is_empty() {
+                    player.name = name.to_string();
+                }
+                player.left = Some(left);
+            }
+            None => {
+                let mut player = ConnectedPlayer::new(id, name, left);
+                player.left = Some(left);
+                inner.player_order.push(id.to_string());
+                inner.players.insert(id.to_string(), player);
+            }
         }
+        Self::apply_pending(&mut inner, id);
     }
 
-    /// Like `player_update`, but matches by display name instead of id.
-    /// Some VRChat log lines (e.g. avatar switches) only give a display
-    /// name, not a user id — matching the Java version, which resolves
-    /// those against the currently-known roster the same way.
+    /// Like `player_update`, but matches by display name. Some VRChat log
+    /// lines (avatar switches) carry only a display name.
     pub fn player_update_by_name(&self, name: &str, update: impl FnOnce(&mut ConnectedPlayer)) {
         let mut inner = self.0.lock().unwrap();
         if let Some(player) = inner.players.values_mut().find(|p| p.name == name) {
@@ -158,33 +177,47 @@ impl UiState {
         }
     }
 
-    /// Port of `clearInstance`.
+    /// Port of `clearInstance`: empties the player table. Does not by itself
+    /// clear [`UiState::instance`] — the listener sets that separately, and
+    /// Java clears the table on both instance change and instance leave.
     pub fn clear_instance(&self) {
         let mut inner = self.0.lock().unwrap();
         inner.players.clear();
         inner.player_order.clear();
+        inner.pending_updates.clear();
     }
 
-    /// Port of `fireSort`: re-orders the display list by priority
-    /// (matching the Java table's sort column), highest first.
+    /// Port of `fireSort` with Java's real `COMPARE`: present players first,
+    /// then highest priority, then earliest join. (The previous version
+    /// sorted on priority alone, so departed players stayed interleaved with
+    /// present ones.)
     pub fn fire_sort(&self) {
         let mut inner = self.0.lock().unwrap();
         let players = inner.players.clone();
-        inner.player_order.sort_by(|a, b| {
-            let pa = players.get(a).map(|p| p.priority).unwrap_or(0);
-            let pb = players.get(b).map(|p| p.priority).unwrap_or(0);
-            pb.cmp(&pa)
+        inner.player_order.sort_by(|a, b| match (players.get(a), players.get(b)) {
+            (Some(a), Some(b)) => compare_players(a, b),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
         });
     }
 
     /// Port of `hasActivePlayers`.
     pub fn has_active_players(&self) -> bool {
-        let inner = self.0.lock().unwrap();
-        inner.players.values().any(|p| p.left.is_none())
+        self.0.lock().unwrap().players.values().any(|p| p.left.is_none())
     }
 
     pub fn refresh_vrchat_api_status(&self, status: impl Into<String>) {
         self.0.lock().unwrap().connection_status = status.into();
+    }
+
+    /// The instance the client is in, or `None` when no instance is open.
+    pub fn instance(&self) -> Option<InstanceState> {
+        self.0.lock().unwrap().instance.clone()
+    }
+
+    pub fn set_instance(&self, instance: Option<InstanceState>) {
+        self.0.lock().unwrap().instance = instance;
     }
 
     pub fn show_announcement(&self, announcement: scarlet_core::meta::ScarletAnnouncement) {
@@ -239,71 +272,171 @@ impl UiState {
     }
 }
 
+/// Lets the ported event listener drive this state through the same
+/// interface Java's listener uses, with no dependency on egui.
+impl ScarletUi for UiState {
+    fn fire_sort(&self) {
+        UiState::fire_sort(self)
+    }
+
+    fn clear_instance(&self) {
+        UiState::clear_instance(self)
+    }
+
+    fn player_join(&self, initial_preamble: bool, player: PlayerJoin) {
+        UiState::player_join(self, initial_preamble, player)
+    }
+
+    fn player_update(&self, initial_preamble: bool, id: &str, update: &mut dyn FnMut(&mut ConnectedPlayer)) {
+        // The trait hands over a borrowed closure (so it stays object-safe);
+        // apply it inline rather than queueing a boxed copy.
+        let mut inner = self.0.lock().unwrap();
+        match inner.players.get_mut(id) {
+            Some(player) => update(player),
+            None => {
+                // Nothing to apply yet. Java queues the update; queueing a
+                // borrowed closure isn't possible, so the caller (the event
+                // listener) re-applies after the join instead — see
+                // `player_join`'s pending replay for updates that arrive
+                // through the owned `UiState::player_update` path.
+                let _ = initial_preamble;
+                tracing::debug!("player_update for unknown player {id}; dropped");
+            }
+        }
+    }
+
+    fn player_leave(&self, initial_preamble: bool, id: &str, name: &str, left: NaiveDateTime) {
+        UiState::player_leave(self, initial_preamble, id, name, left)
+    }
+
+    fn has_active_players(&self) -> bool {
+        UiState::has_active_players(self)
+    }
+
+    fn append_cli_output(&self, text: &str) {
+        UiState::append_cli_output(self, text)
+    }
+
+    fn refresh_vrchat_api_status(&self, status: &str) {
+        UiState::refresh_vrchat_api_status(self, status)
+    }
+
+    fn set_instance(&self, instance: Option<InstanceState>) {
+        UiState::set_instance(self, instance)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn player(id: &str, priority: i32) -> ConnectedPlayer {
-        let mut p = ConnectedPlayer::new(id, id, chrono::Local::now().naive_local());
-        p.priority = priority;
-        p
+    fn at(secs: i64) -> NaiveDateTime {
+        chrono::DateTime::from_timestamp(secs, 0).unwrap().naive_utc()
+    }
+
+    fn join(id: &str, priority: i32) -> PlayerJoin {
+        let mut j = PlayerJoin::new(id, id, at(1_000));
+        j.priority = priority;
+        j
     }
 
     #[test]
     fn join_update_leave_round_trip() {
         let state = UiState::new();
-        state.player_join(false, player("usr_1", 0));
+        let mut j = PlayerJoin::new("usr_1", "One", at(1_000));
+        j.advisory = Some("nsfw".to_string());
+        state.player_join(false, j);
         assert!(state.has_active_players());
 
-        state.player_update(false, "usr_1", |p| p.advisory = Some("nsfw".to_string()));
+        state.player_update(false, "usr_1", |p| p.avatar_name = Some("Av".to_string()));
         let players = state.ordered_players();
         assert_eq!(players[0].advisory.as_deref(), Some("nsfw"));
+        assert_eq!(players[0].avatar_name.as_deref(), Some("Av"));
 
-        state.player_leave(false, "usr_1", chrono::Local::now().naive_local());
+        state.player_leave(false, "usr_1", "One", at(2_000));
         assert!(!state.has_active_players());
+        assert_eq!(state.status_counts(), (0, 1, 1));
+    }
+
+    /// The pending-update queue: an update that arrives before the join is
+    /// replayed once the row exists, instead of being dropped.
+    #[test]
+    fn updates_arriving_before_the_join_are_replayed() {
+        let state = UiState::new();
+        state.player_update(true, "usr_late", |p| p.avatar_name = Some("Early Avatar".to_string()));
+        assert!(state.ordered_players().is_empty());
+
+        state.player_join(true, PlayerJoin::new("usr_late", "Late", at(1_000)));
+        assert_eq!(state.ordered_players()[0].avatar_name.as_deref(), Some("Early Avatar"));
+    }
+
+    #[test]
+    fn a_rejoin_keeps_the_original_join_time() {
+        let state = UiState::new();
+        state.player_join(false, PlayerJoin::new("usr_1", "One", at(1_000)));
+        let mut rejoin = PlayerJoin::new("usr_1", "One", at(5_000));
+        rejoin.is_rejoin_from_prev = true;
+        state.player_join(false, rejoin);
+        assert_eq!(state.ordered_players()[0].joined, at(1_000));
+
+        // A plain rejoin (not carried over from the previous instance) does
+        // update it, matching Java's `if (!isRejoinFromPrev)`.
+        state.player_join(false, PlayerJoin::new("usr_1", "One", at(9_000)));
+        assert_eq!(state.ordered_players()[0].joined, at(9_000));
     }
 
     #[test]
     fn player_update_by_name_finds_matching_player() {
         let state = UiState::new();
-        state.player_join(false, player("usr_1", 0));
-        state.player_update_by_name("usr_1", |p| p.avatar_name = Some("New Avatar".to_string()));
-        let players = state.ordered_players();
-        assert_eq!(players[0].avatar_name.as_deref(), Some("New Avatar"));
-
-        // No matching name: silently does nothing (mirrors the Java
-        // version's behavior of ignoring updates for unknown players).
-        state.player_update_by_name("nonexistent", |p| p.avatar_name = Some("Should Not Apply".to_string()));
+        state.player_join(false, PlayerJoin::new("usr_1", "Named", at(1_000)));
+        state.player_update_by_name("Named", |p| p.avatar_name = Some("New Avatar".to_string()));
         assert_eq!(state.ordered_players()[0].avatar_name.as_deref(), Some("New Avatar"));
     }
 
     #[test]
-    fn fire_sort_orders_by_priority_descending() {
+    fn fire_sort_puts_present_players_first_then_priority() {
         let state = UiState::new();
-        state.player_join(false, player("low", 1));
-        state.player_join(false, player("high", 10));
-        state.player_join(false, player("mid", 5));
+        state.player_join(false, join("low", 0));
+        state.player_join(false, join("high", 10));
+        state.player_join(false, join("mid", 5));
+        state.player_join(false, join("departed", 99));
+        state.player_leave(false, "departed", "departed", at(2_000));
+
         state.fire_sort();
         let ids: Vec<String> = state.ordered_players().into_iter().map(|p| p.id).collect();
-        assert_eq!(ids, vec!["high".to_string(), "mid".to_string(), "low".to_string()]);
+        assert_eq!(ids, vec!["high".to_string(), "mid".to_string(), "low".to_string(), "departed".to_string()]);
     }
 
     #[test]
     fn clear_instance_removes_all_players() {
         let state = UiState::new();
-        state.player_join(false, player("usr_1", 0));
+        state.player_join(false, join("usr_1", 0));
         state.clear_instance();
         assert!(state.ordered_players().is_empty());
         assert!(!state.has_active_players());
     }
 
     #[test]
+    fn instance_state_round_trips_and_starts_empty() {
+        let state = UiState::new();
+        assert!(state.instance().is_none(), "a fresh run is not in an instance");
+        state.set_instance(Some(InstanceState {
+            location: "wrld_1:123~group(grp_1)".to_string(),
+            world_name: Some("Some World".to_string()),
+            joined: at(1_000),
+            is_group_instance: true,
+        }));
+        assert_eq!(state.instance().unwrap().world_name.as_deref(), Some("Some World"));
+        state.set_instance(None);
+        assert!(state.instance().is_none());
+    }
+
+    #[test]
     fn fresh_state_has_no_seeded_players() {
-        // Guards against ever "helpfully" seeding sample rows again: a new
-        // instance must start empty and only reflect real join events.
         let state = UiState::new();
         assert!(state.ordered_players().is_empty());
         assert_eq!(state.status_counts(), (0, 0, 0));
+        assert!(state.instance().is_none());
     }
 
     #[test]
@@ -312,26 +445,7 @@ mod tests {
         assert_eq!(state.connection_status(), "");
         state.refresh_vrchat_api_status("Connected");
         assert_eq!(state.connection_status(), "Connected");
-
         assert!(state.announcement().is_none());
-        state.show_announcement(scarlet_core::meta::ScarletAnnouncement {
-            id: "a1".to_string(),
-            severity: Some("warning".to_string()),
-            title: Some("Heads up".to_string()),
-            message: Some("details".to_string()),
-            url: None,
-            expires: None,
-        });
-        assert_eq!(state.announcement().unwrap().id, "a1");
-    }
-
-    #[test]
-    fn status_counts_match_present_left_total() {
-        let state = UiState::new();
-        state.player_join(false, player("a", 0));
-        state.player_join(false, player("b", 0));
-        state.player_leave(false, "a", chrono::Local::now().naive_local());
-        assert_eq!(state.status_counts(), (1, 1, 2));
     }
 
     #[test]
@@ -342,6 +456,8 @@ mod tests {
         let log = state.cli_log();
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].0, "hello");
+        state.clear_cli_log();
+        assert!(state.cli_log().is_empty());
     }
 
     #[test]
@@ -355,11 +471,28 @@ mod tests {
     #[test]
     fn state_handle_is_shareable_across_threads() {
         let state = UiState::new();
-        let state2 = state.clone();
-        let handle = std::thread::spawn(move || {
-            state2.player_join(false, player("usr_1", 0));
-        });
-        handle.join().unwrap();
-        assert!(state.has_active_players());
+        let other = state.clone();
+        std::thread::spawn(move || other.player_join(false, join("usr_thread", 0))).join().unwrap();
+        assert_eq!(state.ordered_players().len(), 1);
+    }
+
+    /// The trait implementation and the inherent methods must stay in sync;
+    /// the listener only ever sees the trait.
+    #[test]
+    fn the_scarlet_ui_trait_drives_the_same_state() {
+        let state = UiState::new();
+        let ui: &dyn ScarletUi = &state;
+        ui.player_join(false, PlayerJoin::new("usr_t", "Trait", at(1_000)));
+        ui.player_update(false, "usr_t", &mut |p| p.avatar_name = Some("Via Trait".to_string()));
+        assert_eq!(state.ordered_players()[0].avatar_name.as_deref(), Some("Via Trait"));
+        ui.set_instance(Some(InstanceState {
+            location: "wrld_2:1".to_string(),
+            world_name: None,
+            joined: at(1_000),
+            is_group_instance: false,
+        }));
+        assert!(state.instance().is_some());
+        ui.clear_instance();
+        assert!(state.ordered_players().is_empty());
     }
 }

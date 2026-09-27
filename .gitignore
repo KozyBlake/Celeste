@@ -24,3 +24,20 @@ hs_err_pid*
 replay_pid*
 target
 .vscode
+# Scarlet runtime data written when the Rust build is run from rust/
+rust/settings.json
+rust/registry.json
+rust/secure-prefs.json
+rust/global-prefs.key
+rust/discord_bot.json
+rust/staff_list.json
+rust/secret_staff_list.json
+rust/watched_*.json
+rust/moderation_tags.json
+rust/good_pronoun.json
+rust/bad_pronoun.json
+rust/backups/
+rust/logs/
+rust/ex/
+rust/usr/
+rust/gaud/

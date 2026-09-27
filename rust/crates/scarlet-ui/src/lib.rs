@@ -26,4 +26,5 @@ pub mod state;
 pub mod tts;
 
 pub use app::run;
-pub use state::{ConnectedPlayer, UiState};
+pub use scarlet_core::ui::{ConnectedPlayer, InstanceState, PlayerJoin};
+pub use state::UiState;

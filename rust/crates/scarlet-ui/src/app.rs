@@ -142,7 +142,7 @@ pub struct ScarletApp {
     watched_groups: Arc<scarlet_core::watched_groups::WatchedGroups>,
     watched_users: Arc<scarlet_core::watched_entities::WatchedEntities>,
     watched_avatars: Arc<scarlet_core::watched_entities::WatchedEntities>,
-    tts: crate::tts::TtsService,
+    tts: Arc<crate::tts::TtsService>,
     tab: Tab,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -161,23 +161,28 @@ pub struct ScarletApp {
 }
 
 impl ScarletApp {
-    pub fn new(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> Self {
-        let scarlet_data = Arc::new(scarlet_core::data::ScarletData::open(&data_dir));
-        let staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json"));
-        let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
-        let moderation_tags = Arc::new(scarlet_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json"));
-        let watched_groups = Arc::new(scarlet_core::watched_groups::WatchedGroups::open(&data_dir, "watched_groups.json"));
-        let watched_users = Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
-            &data_dir,
-            "watched_users.json",
-            scarlet_core::watched_entities::is_valid_user_id,
-        ));
-        let watched_avatars = Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
-            &data_dir,
-            "watched_avatars.json",
-            scarlet_core::watched_entities::is_valid_avatar_id,
-        ));
-        let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
+    /// `shared` carries the data objects every subsystem must agree on —
+    /// the same `ScarletData`, watched lists and VRChat session the Discord
+    /// commands and the ported event listener use. They are built once by
+    /// the caller and handed in; this used to open its own copies here,
+    /// which meant the GUI and the event listener would have been looking
+    /// at two different in-memory views of the same files.
+    pub fn new(
+        state: UiState,
+        shared: scarlet_discord::data::SharedState,
+        data_dir: PathBuf,
+        runtime_handle: tokio::runtime::Handle,
+        tts: Arc<crate::tts::TtsService>,
+    ) -> Self {
+        let scarlet_data = shared.scarlet_data.clone();
+        let staff_list = shared.staff_list.clone();
+        let secret_staff_list = shared.secret_staff_list.clone();
+        let moderation_tags = shared.moderation_tags.clone();
+        let watched_groups = shared.watched_groups.clone();
+        let watched_users = shared.watched_users.clone();
+        let watched_avatars = shared.watched_avatars.clone();
+        let vrchat_slot = shared.vrchat_client.clone();
+        let settings = Some(shared.settings.clone());
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
 
@@ -235,7 +240,7 @@ impl ScarletApp {
             watched_groups,
             watched_users,
             watched_avatars,
-            tts: crate::tts::TtsService::new(),
+            tts,
             tab: Tab::Instance,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -303,7 +308,7 @@ impl ScarletApp {
     /// Split out from `instance_tab` so the drag-to-reorder header can
     /// change which column an index maps to without duplicating the
     /// per-column render logic.
-    fn render_cell(&mut self, ui: &mut egui::Ui, player: &crate::state::ConnectedPlayer, column: ColumnId) {
+    fn render_cell(&mut self, ui: &mut egui::Ui, player: &scarlet_core::ui::ConnectedPlayer, column: ColumnId) {
         match column {
             ColumnId::Name => {
                 ui.label(&player.name);
@@ -318,7 +323,7 @@ impl ScarletApp {
                 ui.label(player.avatar_name.as_deref().unwrap_or(""));
             }
             ColumnId::Performance => {
-                ui.label(player.performance_rating.as_deref().unwrap_or(""));
+                ui.label(player.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()).unwrap_or(""));
             }
             ColumnId::AvatarStats => {
                 if ui.button("View").clicked() {
@@ -618,13 +623,33 @@ impl eframe::App for ScarletApp {
 
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             let (present, left, total) = self.state.status_counts();
+            // Java's `updateStatusBar`, through the same message catalogue
+            // so the wording (and its translations) stay in one place.
             let text = if total == 0 {
-                "No instance loaded".to_string()
+                scarlet_core::i18n::tr("ui.statusNoInstance", &[])
             } else {
-                format!("\u{25CF} {present} present   \u{25CB} {left} left   \u{2022} {total} total this session")
+                scarlet_core::i18n::tr(
+                    "ui.statusBar",
+                    &[&present.to_string(), &left.to_string(), &total.to_string()],
+                )
             };
             ui.horizontal(|ui| {
                 ui.label(text);
+                // Which instance those players are in. Java never showed
+                // this; without it there is no way to tell "no instance
+                // open" from "instance open, nobody joined yet".
+                match self.state.instance() {
+                    Some(instance) => {
+                        ui.separator();
+                        let label = instance.world_name.clone().unwrap_or_else(|| instance.location.clone());
+                        let label = if instance.is_group_instance { format!("{label}  (group)") } else { label };
+                        ui.label(label).on_hover_text(instance.location.clone());
+                    }
+                    None => {
+                        ui.separator();
+                        ui.weak(scarlet_core::i18n::tr("ui.statusNoInstance", &[]).trim().to_string());
+                    }
+                }
                 if let Some(announcement) = self.state.announcement() {
                     ui.separator();
                     ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Scarlet announcement"));
@@ -653,12 +678,18 @@ impl eframe::App for ScarletApp {
 /// `runtime_handle` is used both by the setup wizard (to run the VRChat
 /// login/TOTP calls without blocking the UI thread) and, once setup
 /// resolves a Discord token, to spawn the Discord client itself.
-pub fn run(state: UiState, settings: Option<Arc<Settings>>, data_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> eframe::Result<()> {
+pub fn run(
+    state: UiState,
+    shared: scarlet_discord::data::SharedState,
+    data_dir: PathBuf,
+    runtime_handle: tokio::runtime::Handle,
+    tts: Arc<crate::tts::TtsService>,
+) -> eframe::Result<()> {
     let options = eframe::NativeOptions::default();
     eframe::run_native(
         scarlet_core::identity::APP_NAME,
         options,
-        Box::new(move |_cc| Ok(Box::new(ScarletApp::new(state, settings, data_dir, runtime_handle)))),
+        Box::new(move |_cc| Ok(Box::new(ScarletApp::new(state, shared, data_dir, runtime_handle, tts)))),
     )
 }
 

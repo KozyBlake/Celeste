@@ -9,6 +9,7 @@ description = "Rust port of net.sybyline.scarlet.ui (Swing/FlatLaf -> egui/efram
 scarlet-core.workspace = true
 scarlet-discord.workspace = true
 scarlet-vrchat.workspace = true
+scarlet-events.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 tokio.workspace = true

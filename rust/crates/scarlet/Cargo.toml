@@ -16,6 +16,7 @@ scarlet-discord.workspace = true
 scarlet-vrchat.workspace = true
 scarlet-dave.workspace = true
 scarlet-ui.workspace = true
+scarlet-events.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -1,26 +1,28 @@
 //! Rust port of `net.sybyline.scarlet.Main` / `Scarlet.main`.
 //!
-//! **Status: headless bootstrap only.** Ported so far: settings load,
-//! Discord connect-if-a-token-is-configured (mirroring
-//! `ScarletDiscordJDA`'s `if (token0 != null && !token0.isEmpty())` guard),
-//! and — when a display is available — a `scarlet-ui` window that opens
-//! with `scarlet_ui::setup`'s first-run wizard (vibe-coded notice, Discord
-//! bot token/guild, VRChat login) when it hasn't run yet. Not yet ported:
-//! the rest of `Scarlet.java`'s startup sequence (data-dir resolution
-//! beyond `SCARLET_HOME`, executors, restart/update exit-code handling).
-//! See ../../PORTING.md.
+//! Startup sequence, in order:
+//!
+//! 1. Resolve the data directory and open the log.
+//! 2. Open settings and the shared data objects (`ScarletData`, staff lists,
+//!    moderation tags, watched lists) — **once**, so the GUI, the Discord
+//!    commands and the event listener all read and write the same in-memory
+//!    view of the same files.
+//! 3. Start the VRChat log tailer and the ported `ScarletEventListener`,
+//!    which is what turns those log lines into instance state, player rows,
+//!    advisories and announcements.
+//! 4. Either open the window (which also runs the first-run setup wizard) or,
+//!    with no display, connect Discord headlessly.
+//!
+//! Not yet ported from `Scarlet.java`'s own startup: data-dir resolution
+//! beyond `SCARLET_HOME`, the executor pool, and restart/update exit-code
+//! handling. See ../../PORTING.md.
 //!
 //! ## Why this isn't `#[tokio::main] async fn main()`
 //!
-//! `eframe`'s window (via `winit`) needs to run its event loop on the
-//! process's real main OS thread on some platforms (notably macOS) — it
-//! can't be handed to a `tokio::task::spawn_blocking` worker thread. So
-//! this builds the tokio runtime explicitly, spawns the async work
-//! (currently just Discord and the VRChat log tailer) onto it, and reserves
-//! the actual main thread for the GUI event loop when one is opened. Not
-//! visually verified in this environment (no display server here — see
-//! `scarlet_ui::app`'s module docs), so double-check this threading split
-//! on a machine with a display before trusting it further.
+//! `eframe`'s window (via `winit`) needs the process's real main OS thread
+//! on some platforms. So this builds the tokio runtime explicitly, spawns
+//! the async work onto it, and reserves the main thread for the GUI event
+//! loop.
 
 use std::sync::Arc;
 
@@ -35,6 +37,7 @@ fn main() -> anyhow::Result<()> {
     let _log_guard = scarlet_core::log::init(&data_dir)?;
 
     tracing::info!("App: {} {}", scarlet_core::identity::APP_NAME, scarlet_core::identity::VERSION);
+    tracing::info!("Data folder resolved to: {}", data_dir.display());
 
     let settings = Arc::new(Settings::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(scarlet_core::identity::VERSION) {
@@ -43,41 +46,66 @@ fn main() -> anyhow::Result<()> {
     settings.update_run_version_and_time(scarlet_core::identity::VERSION);
 
     let ui_state = scarlet_ui::UiState::new();
-    ui_state.refresh_vrchat_api_status("not connected (VRChat client not wired up yet)");
 
     let runtime = tokio::runtime::Runtime::new()?;
 
-    let vrchat_log_events = scarlet_vrchat::log_tail::spawn_tailer(&runtime.handle().clone());
-    runtime.spawn(dispatch_vrchat_log_events(vrchat_log_events, ui_state.clone()));
-
-    if scarlet_ui::platform::is_headless() {
-        tracing::info!("No display detected; running headless. Ctrl+C to exit.");
-        // Headless can't run the interactive setup wizard (no window to
-        // show it in), so — matching a scheduled/unattended Java run —
-        // just connect with whatever token is already on disk, if any, and
-        // attempt an unattended VRChat login (fails if 2FA is required;
-        // see login_with_stored_credentials's docs).
-        let discord_token =
-            scarlet_core::settings::registry::registry_string_encrypted(settings.encrypted.clone(), "discord.token")
-                .get_or_null();
-        let scarlet_data = Arc::new(scarlet_core::data::ScarletData::open(&data_dir));
-        let staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json"));
-        let secret_staff_list = Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json"));
-        let moderation_tags = Arc::new(scarlet_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json"));
-        let watched_groups = Arc::new(scarlet_core::watched_groups::WatchedGroups::open(&data_dir, "watched_groups.json"));
-        let watched_users = Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
+    // Everything the Discord commands and the event listener must agree on.
+    let shared = scarlet_discord::data::SharedState {
+        vrchat_client: Arc::new(tokio::sync::RwLock::new(None)),
+        scarlet_data: Arc::new(scarlet_core::data::ScarletData::open(&data_dir)),
+        settings: settings.clone(),
+        staff_list: Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json")),
+        secret_staff_list: Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json")),
+        moderation_tags: Arc::new(scarlet_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json")),
+        watched_groups: Arc::new(scarlet_core::watched_groups::WatchedGroups::open(&data_dir, "watched_groups.json")),
+        watched_users: Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
             &data_dir,
             "watched_users.json",
             scarlet_core::watched_entities::is_valid_user_id,
-        ));
-        let watched_avatars = Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
+        )),
+        watched_avatars: Arc::new(scarlet_core::watched_entities::WatchedEntities::open(
             &data_dir,
             "watched_avatars.json",
             scarlet_core::watched_entities::is_valid_avatar_id,
-        ));
-        let vrchat_slot: scarlet_discord::data::SharedVrChatClient = Arc::new(tokio::sync::RwLock::new(None));
+        )),
+    };
+
+    let tts = Arc::new(scarlet_ui::tts::TtsService::new());
+    let pronoun_lists = Arc::new(scarlet_core::pronoun_lists::PronounLists::open(&data_dir));
+
+    // The VRChat log tailer feeds the ported event listener, which drives
+    // the instance table. `spawn_tailer` reports and then stops on a machine
+    // with no VRChat client, so this costs nothing there.
+    let tailer_events = scarlet_vrchat::log_tail::spawn_tailer(&runtime.handle().clone());
+    let listener = scarlet_events::ScarletEventListener::new(scarlet_events::listener::ListenerDeps {
+        ui: Arc::new(ui_state.clone()),
+        vrchat: shared.vrchat_client.clone(),
+        settings: settings.clone(),
+        data: shared.scarlet_data.clone(),
+        staff_list: shared.staff_list.clone(),
+        watched_users: shared.watched_users.clone(),
+        watched_avatars: shared.watched_avatars.clone(),
+        watched_groups: shared.watched_groups.clone(),
+        pronoun_lists,
+        tts: Arc::new(scarlet_ui::tts::TtsSinkAdapter::new(tts.clone(), settings.clone())),
+        // Discord audit emission is not ported yet, so nothing is emitted
+        // and `is_emitting` is false — see PORTING.md. Swapping this for the
+        // real implementation is the whole of that task's wiring.
+        emitter: Arc::new(scarlet_events::NoopAuditEmitter),
+    });
+    runtime.spawn(scarlet_events::listener::run(listener, tailer_events));
+
+    if scarlet_ui::platform::is_headless() {
+        tracing::info!("No display detected; running headless. Ctrl+C to exit.");
+        // Headless can't run the interactive setup wizard (no window to show
+        // it in), so — matching a scheduled/unattended Java run — connect
+        // with whatever token is already on disk and attempt an unattended
+        // VRChat login.
+        let discord_token =
+            scarlet_core::settings::registry::registry_string_encrypted(settings.encrypted.clone(), "discord.token")
+                .get_or_null();
         runtime.spawn({
-            let slot = vrchat_slot.clone();
+            let slot = shared.vrchat_client.clone();
             let settings = settings.clone();
             async move {
                 if let Some(client) = scarlet_vrchat::client::login_with_stored_credentials(&settings).await {
@@ -85,101 +113,17 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         });
-        runtime.spawn(scarlet_discord::client::connect_and_serve(
-            discord_token,
-            scarlet_discord::data::SharedState {
-                vrchat_client: vrchat_slot,
-                scarlet_data,
-                settings,
-                staff_list,
-                secret_staff_list,
-                moderation_tags,
-                watched_groups,
-                watched_users,
-                watched_avatars,
-            },
-        ));
+        runtime.spawn(scarlet_discord::client::connect_and_serve(discord_token, shared));
         runtime.block_on(std::future::pending::<()>());
     } else {
         // Blocks this (real OS main) thread until the window closes. The
-        // setup wizard (if it needs to run) and the main window share this
-        // one `eframe::run_native` call; Discord only connects once the
-        // wizard resolves a token (or immediately, if setup already ran on
-        // a previous launch) — see `scarlet_ui::setup`.
-        if let Err(err) = scarlet_ui::run(ui_state, Some(settings), data_dir, runtime.handle().clone()) {
+        // setup wizard, if it needs to run, shares this one
+        // `eframe::run_native` call; Discord connects once the wizard
+        // resolves a token, or immediately if setup already ran.
+        if let Err(err) = scarlet_ui::run(ui_state, shared, data_dir, runtime.handle().clone(), tts) {
             tracing::error!("UI error: {}", err);
         }
     }
 
     Ok(())
-}
-
-/// Drains parsed VRChat local-log events (see `scarlet_vrchat::log_tail`)
-/// and translates them into real `UiState` player join/update/leave calls,
-/// which is what actually makes the Instance tab's table populate. Runs
-/// until the sender side (the tailer task) is dropped, which only happens
-/// if the whole process is shutting down.
-async fn dispatch_vrchat_log_events(
-    mut events: tokio::sync::mpsc::UnboundedReceiver<scarlet_vrchat::log_tail::LogEvent>,
-    state: scarlet_ui::UiState,
-) {
-    use scarlet_vrchat::log_tail::LogEventKind;
-
-    while let Some(event) = events.recv().await {
-        let scarlet_vrchat::log_tail::LogEvent { preamble, timestamp, kind } = event;
-        match kind {
-            LogEventKind::UserAuthenticated { display_name, user_id } => {
-                state.append_cli_output(format!("Authenticated as {display_name} ({user_id})"));
-            }
-            LogEventKind::UserJoined { location } => {
-                // Matches the game's own log semantics: a room join always
-                // starts a fresh instance (an `OnLeftRoom` always precedes
-                // the next `Joining`), so this is the right moment to clear
-                // out the previous instance's roster rather than mixing
-                // rosters across instances.
-                state.clear_instance();
-                state.append_cli_output(format!("Joined instance: {location}"));
-            }
-            LogEventKind::UserLeft => {
-                state.append_cli_output("Left instance");
-            }
-            LogEventKind::UserQuit { lifetime_seconds } => {
-                state.append_cli_output(format!("VRChat closed after {lifetime_seconds:.0}s this session"));
-            }
-            LogEventKind::PlayerJoined { display_name, user_id } => {
-                state.player_join(preamble, scarlet_ui::ConnectedPlayer::new(user_id, display_name, timestamp));
-            }
-            LogEventKind::PlayerLeft { display_name, user_id } => {
-                let _ = display_name;
-                state.player_leave(preamble, &user_id, timestamp);
-            }
-            LogEventKind::PlayerSwitchAvatar { display_name, avatar_display_name } => {
-                state.player_update_by_name(&display_name, |p| p.avatar_name = Some(avatar_display_name));
-            }
-            LogEventKind::VtkInit { target_display_name, actor_display_name } => {
-                state.append_cli_output(match actor_display_name {
-                    Some(actor) => format!("Vote kick initiated against {target_display_name} by {actor}"),
-                    None => format!("Vote kick initiated against {target_display_name}"),
-                });
-            }
-            LogEventKind::PlayerSpawnPedestal { display_name, user_id, content_type, content_id } => {
-                state.append_cli_output(format!(
-                    "{display_name} ({user_id}) created a {content_type} pedestal: {content_id}"
-                ));
-            }
-            LogEventKind::PlayerSpawnSticker { display_name, user_id, sticker_id } => {
-                state.append_cli_output(format!("{display_name} ({user_id}) spawned sticker {sticker_id}"));
-            }
-            LogEventKind::PlayerSpawnProp { user_id, prop_id } => {
-                state.append_cli_output(format!("{user_id} spawned prop {prop_id}"));
-            }
-            LogEventKind::ApiRequest { index, method, url } => {
-                state.append_cli_output(format!("[API #{index}] {method} {url}"));
-            }
-            LogEventKind::VideoLoad { display_name, url, title } => {
-                let _ = title;
-                state.append_cli_output(format!("{display_name} loaded video: {url}"));
-            }
-        }
-    }
 }

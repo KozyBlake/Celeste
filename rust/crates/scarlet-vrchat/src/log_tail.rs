@@ -216,6 +216,15 @@ pub enum LogEventKind {
     UserAuthenticated { display_name: String, user_id: String },
     UserQuit { lifetime_seconds: f64 },
     UserJoined { location: String },
+    /// `[Behaviour] Entering Room: <world name>`, logged immediately before
+    /// the `Joining wrld_...` line for the same instance.
+    ///
+    /// **Not in Java.** `handleEntry` ignores this line, so the Java UI only
+    /// ever knows an instance by its raw `wrld_...:1234~group(...)` location.
+    /// The Rust UI surfaces the instance it is watching, and showing a world
+    /// id there instead of "Studio Apartment J31" would be strictly worse
+    /// for the person reading it. Parsing one more line is the whole cost.
+    EnteringRoom { world_name: String },
     UserLeft,
     PlayerJoined { display_name: String, user_id: String },
     PlayerLeft { display_name: String, user_id: String },
@@ -288,6 +297,9 @@ pub fn parse_entry_text(text: &str) -> Option<LogEventKind> {
     }
 
     if let Some(after_behaviour) = text.strip_prefix("[Behaviour] ") {
+        if let Some(rest) = after_behaviour.strip_prefix("Entering Room: ") {
+            return Some(LogEventKind::EnteringRoom { world_name: rest.to_string() });
+        }
         if let Some(rest) = after_behaviour.strip_prefix("Joining ") {
             if !rest.starts_with("or Creating Room: ") {
                 return Some(LogEventKind::UserJoined { location: rest.to_string() });
@@ -621,6 +633,7 @@ mod tests {
     fn parses_real_client_log_lines() {
         let real = [
             "2026.09.26 22:31:07 Debug      -  User Authenticated: BlakeBelladonna (usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1)\r",
+            "2026.09.26 22:31:13 Debug      -  [Behaviour] Entering Room: Studio Apartment J31\r",
             "2026.09.26 22:31:13 Debug      -  [Behaviour] Joining wrld_0ebc959b-d11e-44fc-aff0-b17d8e71d37d:09580~private(usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1)~region(us)\r",
             "2026.09.26 22:31:13 Debug      -  [Behaviour] Joining or Creating Room: Studio Apartment J31\r",
             "2026.09.26 22:32:10 Debug      -  [Behaviour] OnPlayerJoined Church (usr_849ac025-7f46-4645-b23a-ac52fd13dfac)\r",
@@ -645,6 +658,7 @@ mod tests {
                     display_name: "BlakeBelladonna".to_string(),
                     user_id: "usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1".to_string(),
                 },
+                LogEventKind::EnteringRoom { world_name: "Studio Apartment J31".to_string() },
                 LogEventKind::UserJoined {
                     location: "wrld_0ebc959b-d11e-44fc-aff0-b17d8e71d37d:09580~private(usr_34cb56bd-ef02-46b1-b80c-abcf5acbeef1)~region(us)".to_string(),
                 },
