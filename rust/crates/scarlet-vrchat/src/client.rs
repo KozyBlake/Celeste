@@ -22,6 +22,7 @@
 //! not a silent omission -- it needs a serializable cookie jar (e.g. the
 //! `reqwest_cookie_store` crate) that this skeleton doesn't pull in yet.
 
+use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 
@@ -222,13 +223,110 @@ impl VrChatClient {
         n: u32,
         offset: u32,
     ) -> Result<PaginatedGroupAuditLogEntryList, VrChatError> {
+        self.get_group_audit_logs_filtered(group_id, n, offset, None, None, None, None, None)
+            .await
+    }
+
+    /// Filtered one-page form of `getGroupAuditLogs`, using the same query
+    /// names as VRChat's generated Java client. Comma-separated id/type
+    /// filters are passed through unchanged because the API accepts multiple
+    /// values in one parameter.
+    pub async fn get_group_audit_logs_filtered(
+        &self,
+        group_id: &str,
+        n: u32,
+        offset: u32,
+        start_date: Option<DateTime<Utc>>,
+        end_date: Option<DateTime<Utc>>,
+        actor_ids: Option<&str>,
+        event_types: Option<&str>,
+        target_ids: Option<&str>,
+    ) -> Result<PaginatedGroupAuditLogEntryList, VrChatError> {
+        let mut query = vec![("n", n.to_string()), ("offset", offset.to_string())];
+        if let Some(start_date) = start_date {
+            query.push(("startDate", start_date.to_rfc3339()));
+        }
+        if let Some(end_date) = end_date {
+            query.push(("endDate", end_date.to_rfc3339()));
+        }
+        if let Some(actor_ids) = actor_ids.filter(|value| !value.trim().is_empty()) {
+            query.push(("actorIds", actor_ids.to_string()));
+        }
+        if let Some(event_types) = event_types.filter(|value| !value.trim().is_empty()) {
+            query.push(("eventTypes", event_types.to_string()));
+        }
+        if let Some(target_ids) = target_ids.filter(|value| !value.trim().is_empty()) {
+            query.push(("targetIds", target_ids.to_string()));
+        }
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/auditLogs")))
-            .query(&[("n", n.to_string()), ("offset", offset.to_string())])
+            .query(&query)
             .send()
             .await?;
         Self::parse_response(response).await
+    }
+
+    /// Port of Java's `auditQuery`: fetches every page and returns entries
+    /// oldest-to-newest, which is the ordering its history commands expect.
+    pub async fn query_group_audit_logs(
+        &self,
+        group_id: &str,
+        start_date: DateTime<Utc>,
+        end_date: DateTime<Utc>,
+        actor_ids: Option<&str>,
+        event_types: Option<&str>,
+        target_ids: Option<&str>,
+    ) -> Result<Vec<crate::models::GroupAuditLogEntry>, VrChatError> {
+        const PAGE_SIZE: u32 = 100;
+        let mut offset = 0;
+        let mut entries = Vec::new();
+        loop {
+            let page = self
+                .get_group_audit_logs_filtered(
+                    group_id,
+                    PAGE_SIZE,
+                    offset,
+                    Some(start_date),
+                    Some(end_date),
+                    actor_ids,
+                    event_types,
+                    target_ids,
+                )
+                .await?;
+            entries.extend(page.results);
+            if !page.has_next {
+                break;
+            }
+            offset = offset.saturating_add(PAGE_SIZE);
+        }
+        entries.sort_by_key(|entry| entry.created_at);
+        Ok(entries)
+    }
+
+    /// Count-only counterpart to Java's `auditQueryCount`.
+    pub async fn count_group_audit_logs(
+        &self,
+        group_id: &str,
+        start_date: DateTime<Utc>,
+        end_date: DateTime<Utc>,
+        actor_ids: Option<&str>,
+        event_types: Option<&str>,
+        target_ids: Option<&str>,
+    ) -> Result<i64, VrChatError> {
+        Ok(self
+            .get_group_audit_logs_filtered(
+                group_id,
+                0,
+                0,
+                Some(start_date),
+                Some(end_date),
+                actor_ids,
+                event_types,
+                target_ids,
+            )
+            .await?
+            .total_count)
     }
 
     /// `GET /groups/{groupId}/auditLogTypes`, the list of audit event
@@ -1777,6 +1875,57 @@ mod tests {
         let results = client.search_groups("moderators", 25, 0).await.unwrap();
         assert_eq!(results[0].name, "Moderators Group");
         assert_eq!(results[0].member_count, 5);
+    }
+
+    #[tokio::test]
+    async fn audit_query_passes_filters_and_sorts_oldest_first() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/auditLogs"))
+            .and(query_param("n", "100"))
+            .and(query_param("offset", "0"))
+            .and(query_param("startDate", "2026-01-01T00:00:00+00:00"))
+            .and(query_param("endDate", "2026-01-02T00:00:00+00:00"))
+            .and(query_param("actorIds", "usr_actor"))
+            .and(query_param("eventTypes", "group.user.ban"))
+            .and(query_param("targetIds", "usr_target"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [
+                    {
+                        "id": "gaud_new",
+                        "groupId": "grp_1",
+                        "createdAt": "2026-01-01T12:00:00Z",
+                        "eventType": "group.user.ban"
+                    },
+                    {
+                        "id": "gaud_old",
+                        "groupId": "grp_1",
+                        "createdAt": "2026-01-01T10:00:00Z",
+                        "eventType": "group.user.ban"
+                    }
+                ],
+                "totalCount": 2,
+                "hasNext": false
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let start = "2026-01-01T00:00:00Z".parse().unwrap();
+        let end = "2026-01-02T00:00:00Z".parse().unwrap();
+        let entries = client
+            .query_group_audit_logs(
+                "grp_1",
+                start,
+                end,
+                Some("usr_actor"),
+                Some("group.user.ban"),
+                Some("usr_target"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(entries[0].id, "gaud_old");
+        assert_eq!(entries[1].id, "gaud_new");
     }
 
     #[tokio::test]

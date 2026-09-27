@@ -25,6 +25,7 @@ pub mod server_config;
 pub mod ticket_config;
 pub mod aux_webhooks;
 pub mod moderation_tags;
+pub mod moderation_history;
 pub mod secret_staff_list;
 pub mod staff_list;
 pub mod unlink_vrchat_account;
@@ -175,6 +176,10 @@ pub async fn register_global_commands(ctx: &Context) {
         staff_list::register(),
         secret_staff_list::register(),
         moderation_tags::register(),
+        moderation_history::register_moderation_log(),
+        moderation_history::register_query_target(),
+        moderation_history::register_query_actor(),
+        moderation_history::register_actor_summary(),
         watched_group::register(),
         watched_user::register(),
         watched_avatar::register(),
@@ -222,6 +227,10 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         staff_list::NAME => staff_list::run(ctx, command).await,
         secret_staff_list::NAME => secret_staff_list::run(ctx, command).await,
         moderation_tags::NAME => moderation_tags::run(ctx, command).await,
+        moderation_history::MODERATION_LOG_NAME => moderation_history::run_moderation_log(ctx, command).await,
+        moderation_history::QUERY_TARGET_NAME => moderation_history::run_query_target(ctx, command).await,
+        moderation_history::QUERY_ACTOR_NAME => moderation_history::run_query_actor(ctx, command).await,
+        moderation_history::ACTOR_SUMMARY_NAME => moderation_history::run_actor_summary(ctx, command).await,
         watched_group::NAME => watched_group::run(ctx, command).await,
         watched_user::NAME => watched_user::run(ctx, command).await,
         watched_avatar::NAME => watched_avatar::run(ctx, command).await,
