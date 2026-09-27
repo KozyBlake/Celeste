@@ -3766,6 +3766,7 @@ version = "0.4.20"
 dependencies = [
  "anyhow",
  "chrono",
+ "regex",
  "scarlet-core",
  "scarlet-vrchat",
  "serde",

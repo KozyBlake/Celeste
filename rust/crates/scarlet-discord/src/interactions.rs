@@ -530,6 +530,15 @@ async fn create_instance(
 }
 
 pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
+    if matches!(
+        interaction.data.custom_id.as_str(),
+        "vrchat-user-ban-multi" | "vrchat-user-unban-multi"
+    ) {
+        if let Err(err) = handle_vrchat_user_multi(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling multi-user moderation modal: {err}");
+        }
+        return;
+    }
     if interaction
         .data
         .custom_id
@@ -555,6 +564,107 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
     }
+}
+
+fn find_user_ids(input: &str) -> Vec<String> {
+    let regex = regex::Regex::new(
+        r"(?:[a-zA-Z0-9]{10}|usr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+    )
+    .expect("static VRChat user id regex");
+    regex
+        .find_iter(input)
+        .map(|matched| matched.as_str().to_string())
+        .collect()
+}
+
+async fn handle_vrchat_user_multi(
+    ctx: &Context,
+    interaction: &ModalInteraction,
+) -> serenity::Result<()> {
+    let ban = interaction.data.custom_id == "vrchat-user-ban-multi";
+    let ids = find_user_ids(&modal_text(interaction, "target-ids"));
+    if ids.is_empty() {
+        return ephemeral_modal(ctx, interaction, "No user ids found!").await;
+    }
+    let context = match crate::commands::moderation_context_for_snowflake(
+        ctx,
+        &interaction.user.id.to_string(),
+        scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(message) => return ephemeral_modal(ctx, interaction, message).await,
+    };
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(
+                CreateInteractionResponseMessage::new().ephemeral(true),
+            ),
+        )
+        .await?;
+
+    let mut changed = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = Vec::new();
+    for id in &ids {
+        if context.client.get_user(id).await.is_err() {
+            failed.push(format!("`{id}` (user does not appear to exist)"));
+            continue;
+        }
+        let is_banned = match context.client.get_group_member(&context.group_id, id).await {
+            Ok(Some(member)) => member.banned_at.is_some(),
+            Ok(None) => false,
+            Err(err) => {
+                failed.push(format!("`{id}` (status check failed: {err})"));
+                continue;
+            }
+        };
+        if is_banned == ban {
+            skipped += 1;
+            continue;
+        }
+        let result = if ban {
+            context.client.ban_from_group(&context.group_id, id).await
+        } else {
+            context.client.unban_from_group(&context.group_id, id).await
+        };
+        match result {
+            Ok(_) => changed += 1,
+            Err(err) => failed.push(format!("`{id}` ({err})")),
+        }
+    }
+    let verb = if ban { "Banned" } else { "Unbanned" };
+    let mut message =
+        format!("{verb} {changed} user(s); skipped {skipped} already-correct user(s).");
+    if !failed.is_empty() {
+        let shown = failed
+            .iter()
+            .take(10)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        message.push_str(&format!("\nFailed {} user(s):\n{shown}", failed.len()));
+        if failed.len() > 10 {
+            message.push_str(&format!(
+                "\n…and {} more failure(s); see Scarlet's log for details.",
+                failed.len() - 10
+            ));
+            for failure in failed.iter().skip(10) {
+                tracing::warn!("Multi-user moderation failure: {failure}");
+            }
+        }
+    }
+    interaction
+        .create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new()
+                .content(message)
+                .ephemeral(true),
+        )
+        .await
+        .map(|_| ())
 }
 
 fn modal_text(interaction: &ModalInteraction, custom_id: &str) -> String {
@@ -703,5 +813,13 @@ mod tests {
         let request = creation.request();
         assert_eq!(request["contentSettings"]["stickers"], false);
         assert_eq!(request["minimumAvatarPerformance"], "Good");
+    }
+
+    #[test]
+    fn extracts_all_legacy_and_uuid_user_ids() {
+        assert_eq!(
+            find_user_ids("abcdefghij, usr_12345678-1234-1234-1234-123456789abc\ninvalid"),
+            ["abcdefghij", "usr_12345678-1234-1234-1234-123456789abc"]
+        );
     }
 }

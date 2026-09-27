@@ -27,6 +27,7 @@ pub mod vrchat_group;
 pub mod vrchat_search;
 pub mod vrchat_user_ban;
 pub mod vrchat_user_info;
+pub mod vrchat_user_multi;
 pub mod vrchat_user_unban;
 pub mod watched_avatar;
 pub mod watched_entity;
@@ -35,10 +36,13 @@ pub mod watched_user;
 
 use std::sync::Arc;
 
-use serenity::builder::{CreateActionRow, CreateInteractionResponse, CreateInteractionResponseFollowup, CreateInteractionResponseMessage, CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption};
+use serenity::builder::{
+    CreateActionRow, CreateInteractionResponse, CreateInteractionResponseFollowup,
+    CreateInteractionResponseMessage, CreateSelectMenu, CreateSelectMenuKind,
+    CreateSelectMenuOption,
+};
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
-use serenity::model::mention::Mentionable;
 
 /// Acks the interaction immediately without a visible message yet ("Scarlet
 /// is thinking..."), then lets the handler take as long as it needs (a
@@ -48,23 +52,46 @@ use serenity::model::mention::Mentionable;
 /// [`send_pages`]/[`reply_ephemeral`] (both post-defer followups, not a
 /// second initial response).
 pub(crate) async fn defer(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
-    command.create_response(&ctx.http, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new())).await
+    command
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()),
+        )
+        .await
 }
 
 /// Sends each already-[`paginate_on_lines`]-split page as its own
 /// follow-up message, in order. Must be called after [`defer`].
-pub(crate) async fn send_pages(ctx: &Context, command: &CommandInteraction, pages: Vec<String>) -> serenity::Result<()> {
+pub(crate) async fn send_pages(
+    ctx: &Context,
+    command: &CommandInteraction,
+    pages: Vec<String>,
+) -> serenity::Result<()> {
     for page in pages {
-        command.create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(page)).await?;
+        command
+            .create_followup(
+                &ctx.http,
+                CreateInteractionResponseFollowup::new().content(page),
+            )
+            .await?;
     }
     Ok(())
 }
 
 /// A short, ephemeral (only-you-can-see-it) error/status reply. Must be
 /// called after [`defer`].
-pub(crate) async fn reply_ephemeral(ctx: &Context, command: &CommandInteraction, message: &str) -> serenity::Result<()> {
+pub(crate) async fn reply_ephemeral(
+    ctx: &Context,
+    command: &CommandInteraction,
+    message: &str,
+) -> serenity::Result<()> {
     command
-        .create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(message).ephemeral(true))
+        .create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new()
+                .content(message)
+                .ephemeral(true),
+        )
         .await
         .map(|_| ())
 }
@@ -80,22 +107,43 @@ pub(crate) async fn watched_remove_menu(
 ) -> serenity::Result<()> {
     let total = entries.len();
     if total == 0 {
-        return reply_ephemeral(ctx, command, &format!("There are no watched {plural} to remove.")).await;
+        return reply_ephemeral(
+            ctx,
+            command,
+            &format!("There are no watched {plural} to remove."),
+        )
+        .await;
     }
     let mut rows = Vec::new();
-    for (index, chunk) in entries.into_iter().take(125).collect::<Vec<_>>().chunks(25).enumerate() {
-        let options = chunk.iter().map(|(id, name)| {
-            let label: String = name.chars().take(100).collect();
-            CreateSelectMenuOption::new(label, id)
-        }).collect();
+    for (index, chunk) in entries
+        .into_iter()
+        .take(125)
+        .collect::<Vec<_>>()
+        .chunks(25)
+        .enumerate()
+    {
+        let options = chunk
+            .iter()
+            .map(|(id, name)| {
+                let label: String = name.chars().take(100).collect();
+                CreateSelectMenuOption::new(label, id)
+            })
+            .collect();
         rows.push(CreateActionRow::SelectMenu(
-            CreateSelectMenu::new(format!("watched-remove:{kind}:{index}"), CreateSelectMenuKind::String { options })
-                .placeholder(format!("Select watched {plural} to remove"))
-                .min_values(1)
-                .max_values(chunk.len() as u8),
+            CreateSelectMenu::new(
+                format!("watched-remove:{kind}:{index}"),
+                CreateSelectMenuKind::String { options },
+            )
+            .placeholder(format!("Select watched {plural} to remove"))
+            .min_values(1)
+            .max_values(chunk.len() as u8),
         ));
     }
-    let note = if total > 125 { format!("\nShowing the first 125 of {total}; remove some and run this again for the rest.") } else { String::new() };
+    let note = if total > 125 {
+        format!("\nShowing the first 125 of {total}; remove some and run this again for the rest.")
+    } else {
+        String::new()
+    };
     command.create_followup(&ctx.http, CreateInteractionResponseFollowup::new()
         .content(format!("Select watched {plural} to remove — they'll be deleted from the list immediately.{note}"))
         .components(rows).ephemeral(true)).await.map(|_| ())
@@ -112,7 +160,9 @@ pub async fn register_global_commands(ctx: &Context) {
         discord_user_info::register(),
         vrchat_user_info::register(),
         vrchat_user_ban::register(),
+        vrchat_user_multi::register(true),
         vrchat_user_unban::register(),
+        vrchat_user_multi::register(false),
         vrchat_group::register(),
         vrchat_search::register(),
         staff_list::register(),
@@ -125,7 +175,9 @@ pub async fn register_global_commands(ctx: &Context) {
         unlink_vrchat_account_for::register(),
         discord_warn::register(),
     ];
-    if let Err(err) = serenity::model::application::Command::set_global_commands(&ctx.http, commands).await {
+    if let Err(err) =
+        serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
+    {
         tracing::error!("Failed to register global slash commands: {}", err);
     }
 }
@@ -138,7 +190,9 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         discord_user_info::NAME => discord_user_info::run(ctx, command).await,
         vrchat_user_info::NAME => vrchat_user_info::run(ctx, command).await,
         vrchat_user_ban::NAME => vrchat_user_ban::run(ctx, command).await,
+        vrchat_user_multi::BAN_NAME => vrchat_user_multi::run(ctx, command, true).await,
         vrchat_user_unban::NAME => vrchat_user_unban::run(ctx, command).await,
+        vrchat_user_multi::UNBAN_NAME => vrchat_user_multi::run(ctx, command, false).await,
         vrchat_group::NAME => vrchat_group::run(ctx, command).await,
         vrchat_search::NAME => vrchat_search::run(ctx, command).await,
         staff_list::NAME => staff_list::run(ctx, command).await,
@@ -186,16 +240,32 @@ pub(crate) struct ModerationContext {
 /// per-command permission settings (`@DefaultPerms`). Faithfully porting
 /// "no extra in-code gate" means not inventing one here.
 pub(crate) async fn vrchat_context(ctx: &Context) -> Result<ModerationContext, String> {
-    let settings = { ctx.data.read().await.get::<crate::data::SettingsKey>().cloned() }
-        .ok_or_else(|| "Settings are not available.".to_string())?;
-    let vrchat_slot = { ctx.data.read().await.get::<crate::data::VrChatClientKey>().cloned() }
+    let settings = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::SettingsKey>()
+            .cloned()
+    }
+    .ok_or_else(|| "Settings are not available.".to_string())?;
+    let vrchat_slot = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::VrChatClientKey>()
+            .cloned()
+    }
+    .ok_or_else(|| "Scarlet isn't logged in to VRChat right now.".to_string())?;
+    let client = { vrchat_slot.read().await.clone() }
         .ok_or_else(|| "Scarlet isn't logged in to VRChat right now.".to_string())?;
-    let client = { vrchat_slot.read().await.clone() }.ok_or_else(|| "Scarlet isn't logged in to VRChat right now.".to_string())?;
 
-    let group_id: Option<String> = settings.store.get_object(scarlet_vrchat::client::GROUP_ID_KEY);
-    let group_id = group_id
-        .filter(|id| !id.trim().is_empty())
-        .ok_or_else(|| "No VRChat group is configured (run Scarlet's setup wizard, or set `vrchat_group_id`).".to_string())?;
+    let group_id: Option<String> = settings
+        .store
+        .get_object(scarlet_vrchat::client::GROUP_ID_KEY);
+    let group_id = group_id.filter(|id| !id.trim().is_empty()).ok_or_else(|| {
+        "No VRChat group is configured (run Scarlet's setup wizard, or set `vrchat_group_id`)."
+            .to_string()
+    })?;
 
     Ok(ModerationContext { client, group_id })
 }
@@ -208,14 +278,28 @@ pub(crate) async fn moderation_context(
     command: &CommandInteraction,
     permission: &str,
 ) -> Result<ModerationContext, String> {
-    let scarlet_data = { ctx.data.read().await.get::<crate::data::ScarletDataKey>().cloned() }
-        .ok_or_else(|| "Scarlet data is not available.".to_string())?;
+    moderation_context_for_snowflake(ctx, &command.user.id.to_string(), permission).await
+}
+
+/// Modal/component counterpart to [`moderation_context`].
+pub(crate) async fn moderation_context_for_snowflake(
+    ctx: &Context,
+    snowflake: &str,
+    permission: &str,
+) -> Result<ModerationContext, String> {
+    let scarlet_data = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::ScarletDataKey>()
+            .cloned()
+    }
+    .ok_or_else(|| "Scarlet data is not available.".to_string())?;
     let context = vrchat_context(ctx).await?;
 
-    let actor_vrc_id = scarlet_data.global_get_snowflake_id(&command.user.id.to_string()).ok_or_else(|| {
+    let actor_vrc_id = scarlet_data.global_get_snowflake_id(snowflake).ok_or_else(|| {
         format!(
-            "You must have linked ids to perform this action.\n(Use `/staff-list add` `vrchat-user`:*<your VRChat user ID>* `discord-user`:{} to accomplish this)",
-            command.user.mention()
+            "You must have linked ids to perform this action.\n(Use `/staff-list add` `vrchat-user`:*<your VRChat user ID>* `discord-user`:<@{snowflake}> to accomplish this)"
         )
     })?;
 
@@ -262,11 +346,23 @@ pub fn paginate_on_lines(input: &str, max_component_len: usize) -> Vec<String> {
         match chars[start..end].iter().rposition(|&c| c == '\n') {
             Some(rel) if rel > 0 => {
                 let last_newline = start + rel;
-                parts.push(chars[start..last_newline].iter().collect::<String>().trim().to_string());
+                parts.push(
+                    chars[start..last_newline]
+                        .iter()
+                        .collect::<String>()
+                        .trim()
+                        .to_string(),
+                );
                 start = last_newline + 1;
             }
             _ => {
-                parts.push(chars[start..end].iter().collect::<String>().trim().to_string());
+                parts.push(
+                    chars[start..end]
+                        .iter()
+                        .collect::<String>()
+                        .trim()
+                        .to_string(),
+                );
                 start = end;
             }
         }
@@ -280,7 +376,10 @@ mod tests {
 
     #[test]
     fn short_input_is_a_single_page() {
-        assert_eq!(paginate_on_lines("hello world", 2000), vec!["hello world".to_string()]);
+        assert_eq!(
+            paginate_on_lines("hello world", 2000),
+            vec!["hello world".to_string()]
+        );
     }
 
     #[test]
@@ -296,7 +395,10 @@ mod tests {
         // first opportunity, maximizing how much fits per message.
         let input = "line one\nline two\nline three";
         let pages = paginate_on_lines(input, 18);
-        assert_eq!(pages, vec!["line one\nline two".to_string(), "line three".to_string()]);
+        assert_eq!(
+            pages,
+            vec!["line one\nline two".to_string(), "line three".to_string()]
+        );
     }
 
     #[test]
