@@ -52,6 +52,9 @@ pub const GROUP_ID_KEY: &str = "vrchat_group_id";
 /// easy wrong guess).
 pub const PERMISSION_ALL: &str = "*";
 pub const PERMISSION_GROUP_BANS_MANAGE: &str = "group-bans-manage";
+pub const PERMISSION_GROUP_MEMBERS_VIEWALL: &str = "group-members-viewall";
+pub const PERMISSION_GROUP_INVITES_MANAGE: &str = "group-invites-manage";
+pub const PERMISSION_GROUP_ANNOUNCEMENT_MANAGE: &str = "group-announcement-manage";
 
 #[derive(Debug, thiserror::Error)]
 pub enum VrChatError {
@@ -304,6 +307,45 @@ impl VrChatClient {
         let response =
             self.http.delete(self.url(&format!("/groups/{group_id}/members/{user_id}/roles/{role_id}"))).send().await?;
         Self::parse_response(response).await
+    }
+
+    /// Port of `getGroupAnnouncement`: `GET /groups/{groupId}/announcement`.
+    /// Returns an "empty" `GroupAnnouncement` (see its `is_empty`) rather
+    /// than an error when the group has no current announcement, matching
+    /// the API's own documented behavior.
+    pub async fn get_group_announcement(&self, group_id: &str) -> Result<crate::models::GroupAnnouncement, VrChatError> {
+        let response = self.http.get(self.url(&format!("/groups/{group_id}/announcement"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `createGroupAnnouncement`: `POST /groups/{groupId}/announcement`.
+    /// Per VRChat's own API docs this **replaces** any existing announcement
+    /// (there's only ever at most one).
+    pub async fn create_group_announcement(
+        &self,
+        group_id: &str,
+        title: &str,
+        text: &str,
+        send_notification: bool,
+    ) -> Result<crate::models::GroupAnnouncement, VrChatError> {
+        let response = self
+            .http
+            .post(self.url(&format!("/groups/{group_id}/announcement")))
+            .json(&serde_json::json!({ "title": title, "text": text, "sendNotification": send_notification }))
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `deleteGroupAnnouncement`: `DELETE /groups/{groupId}/announcement`.
+    pub async fn delete_group_announcement(&self, group_id: &str) -> Result<(), VrChatError> {
+        let response = self.http.delete(self.url(&format!("/groups/{group_id}/announcement"))).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        Ok(())
     }
 
     // ---- worlds / avatars / instances ----
@@ -794,5 +836,44 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         assert!(!client.user_has_group_permission("grp_1", "usr_stranger", PERMISSION_GROUP_BANS_MANAGE).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn get_group_announcement_returns_empty_object_as_is_empty() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/announcement"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let announcement = client.get_group_announcement("grp_1").await.unwrap();
+        assert!(announcement.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_and_delete_group_announcement_round_trip() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/groups/grp_1/announcement"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gann_1", "title": "Hello", "text": "World"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/groups/grp_1/announcement"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": {"message": "Group announcement was cleared!", "status_code": 200}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let created = client.create_group_announcement("grp_1", "Hello", "World", false).await.unwrap();
+        assert!(!created.is_empty());
+        assert_eq!(created.title.as_deref(), Some("Hello"));
+        client.delete_group_announcement("grp_1").await.unwrap();
     }
 }

@@ -200,6 +200,35 @@ pub struct Avatar {
     pub tags: Vec<String>,
 }
 
+/// Confirmed against `components/schemas/GroupAnnouncement.yaml`. Every
+/// field is optional in the schema itself -- `GET .../announcement`
+/// documents returning an **empty object** when no announcement has been
+/// made, rather than `null` or a 404, so callers check `title`/`text` (or
+/// just `id`) to tell "no announcement" from a real one, not `Option`-ness
+/// of the whole struct.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupAnnouncement {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub text: Option<String>,
+    #[serde(rename = "authorId")]
+    pub author_id: Option<String>,
+    #[serde(rename = "imageUrl")]
+    pub image_url: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+impl GroupAnnouncement {
+    /// The API returns an empty object (all fields absent/null) rather
+    /// than a 404 when there's no current announcement.
+    pub fn is_empty(&self) -> bool {
+        self.id.is_none() && self.title.is_none() && self.text.is_none()
+    }
+}
+
 /// Hand-picked subset of `Instance`. Not confirmed field-by-field against
 /// the spec (unlike the models above) -- kept intentionally small and
 /// `Option`-heavy since this is the shape `get_instance`/`close_instance`
