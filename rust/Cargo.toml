@@ -34,6 +34,7 @@ serenity = { version = "0.12", default-features = false, features = [
     "cache",
 ] }
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
 lru = "0.12"
 aes-gcm = "0.10"

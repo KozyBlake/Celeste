@@ -15,6 +15,7 @@
 //! instead, a direct port of `MiscUtils.paginateOnLines`).
 
 pub mod config_info;
+pub mod config_set;
 pub mod discord_user_info;
 pub mod discord_warn;
 pub mod discord_member_action;
@@ -166,6 +167,7 @@ pub async fn register_global_commands(ctx: &Context) {
     let commands = vec![
         version::register(),
         config_info::register(),
+        config_set::register(),
         discord_user_info::register(),
         vrchat_user_info::register(),
         vrchat_user_ban::register(),
@@ -219,6 +221,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
     let result = match command.data.name.as_str() {
         version::NAME => version::run(ctx, command).await,
         config_info::NAME => config_info::run(ctx, command).await,
+        config_set::NAME => config_set::run(ctx, command).await,
         discord_user_info::NAME => discord_user_info::run(ctx, command).await,
         vrchat_user_info::NAME => vrchat_user_info::run(ctx, command).await,
         vrchat_user_ban::NAME => vrchat_user_ban::run(ctx, command).await,
