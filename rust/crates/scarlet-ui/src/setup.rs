@@ -49,14 +49,33 @@ use scarlet_core::settings::file_valued::FileValued;
 use scarlet_core::settings::registry::{registry_string_encrypted, RegistryStringValued};
 use scarlet_core::settings::store::SettingsStore;
 use scarlet_core::settings::Settings;
-use scarlet_vrchat::client::{LoginOutcome, VrChatClient, VrChatError, GROUP_ID_KEY as VRCHAT_GROUP_ID_KEY};
+use scarlet_vrchat::client::{
+    LoginOutcome, VrChatClient, VrChatError, GROUP_ID_KEY as VRCHAT_GROUP_ID_KEY,
+};
 
 enum Stage {
     VibecodedNotice,
-    Discord { token: String, guild_id: String },
-    VrChatCredentials { username: String, password: String, error: Option<String>, in_flight: bool },
-    VrChatTwoFactor { method: TwoFactorMethod, code: String, error: Option<String>, in_flight: bool },
-    VrChatGroupId { group_id: String, error: Option<String> },
+    Discord {
+        token: String,
+        guild_id: String,
+    },
+    VrChatCredentials {
+        username: String,
+        password: String,
+        error: Option<String>,
+        in_flight: bool,
+    },
+    VrChatTwoFactor {
+        method: TwoFactorMethod,
+        code: String,
+        authenticator_secret: String,
+        error: Option<String>,
+        in_flight: bool,
+    },
+    VrChatGroupId {
+        group_id: String,
+        error: Option<String>,
+    },
     Done,
 }
 
@@ -68,12 +87,24 @@ enum Stage {
 enum Action {
     None,
     VibecodedContinue,
-    DiscordContinue { token: Option<String>, guild_id: Option<String> },
-    VrChatCredentialsSubmit { username: String, password: String },
+    DiscordContinue {
+        token: Option<String>,
+        guild_id: Option<String>,
+    },
+    VrChatCredentialsSubmit {
+        username: String,
+        password: String,
+    },
     VrChatSkip,
-    TwoFactorSubmit { method: TwoFactorMethod, code: String },
+    TwoFactorSubmit {
+        method: TwoFactorMethod,
+        code: String,
+        authenticator_secret: String,
+    },
     TwoFactorCancel,
-    GroupIdSubmit { group_id: String },
+    GroupIdSubmit {
+        group_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,17 +170,24 @@ pub struct SetupWizard {
     vrchat_client: Option<Arc<VrChatClient>>,
     login_rx: Option<mpsc::Receiver<Result<LoginOutcome, VrChatError>>>,
     two_factor_rx: Option<mpsc::Receiver<Result<bool, String>>>,
+    /// A normalized authenticator setup key awaiting successful code
+    /// verification. It is encrypted only after VRChat accepts the code.
+    pending_totp_secret: Option<String>,
 }
 
 impl SetupWizard {
     pub fn new(settings: &Arc<Settings>, runtime_handle: tokio::runtime::Handle) -> Self {
-        let discord_token_reg = registry_string_encrypted(settings.encrypted.clone(), "discord.token");
-        let discord_guild_reg = registry_string_encrypted(settings.encrypted.clone(), "discord.guild_id");
+        let discord_token_reg =
+            registry_string_encrypted(settings.encrypted.clone(), "discord.token");
+        let discord_guild_reg =
+            registry_string_encrypted(settings.encrypted.clone(), "discord.guild_id");
         // Matches ScarletVRChat's own encrypted-key domain ("global:username"
         // etc. -- see `new ScarletVRChat(this, "global", ...)` in Scarlet.java)
         // so a data directory carried over from a Java install round-trips.
-        let vrchat_username_reg = registry_string_encrypted(settings.encrypted.clone(), "global:username");
-        let vrchat_password_reg = registry_string_encrypted(settings.encrypted.clone(), "global:password");
+        let vrchat_username_reg =
+            registry_string_encrypted(settings.encrypted.clone(), "global:username");
+        let vrchat_password_reg =
+            registry_string_encrypted(settings.encrypted.clone(), "global:password");
 
         let mut wizard = SetupWizard {
             stage: Stage::Done, // placeholder; replaced below once every field exists
@@ -167,9 +205,13 @@ impl SetupWizard {
             vrchat_client: None,
             login_rx: None,
             two_factor_rx: None,
+            pending_totp_secret: None,
         };
-        wizard.stage =
-            if !wizard.vibecoded_ack.get() { Stage::VibecodedNotice } else { wizard.compute_stage_after_vibecoded() };
+        wizard.stage = if !wizard.vibecoded_ack.get() {
+            Stage::VibecodedNotice
+        } else {
+            wizard.compute_stage_after_vibecoded()
+        };
         wizard.done = matches!(wizard.stage, Stage::Done);
         wizard
     }
@@ -193,7 +235,13 @@ impl SetupWizard {
         wizard.two_factor_only = true;
         wizard.done = false;
         wizard.vrchat_client = Some(client);
-        wizard.stage = Stage::VrChatTwoFactor { method, code: String::new(), error: None, in_flight: false };
+        wizard.stage = Stage::VrChatTwoFactor {
+            method,
+            code: String::new(),
+            authenticator_secret: String::new(),
+            error: None,
+            in_flight: false,
+        };
         Some(wizard)
     }
 
@@ -212,8 +260,14 @@ impl SetupWizard {
             Stage::VibecodedNotice => "vibecoded_notice",
             Stage::Discord { .. } => "discord",
             Stage::VrChatCredentials { .. } => "vrchat_credentials",
-            Stage::VrChatTwoFactor { method: TwoFactorMethod::Totp, .. } => "vrchat_totp",
-            Stage::VrChatTwoFactor { method: TwoFactorMethod::EmailOtp, .. } => "vrchat_email_otp",
+            Stage::VrChatTwoFactor {
+                method: TwoFactorMethod::Totp,
+                ..
+            } => "vrchat_totp",
+            Stage::VrChatTwoFactor {
+                method: TwoFactorMethod::EmailOtp,
+                ..
+            } => "vrchat_email_otp",
             Stage::VrChatGroupId { .. } => "vrchat_group_id",
             Stage::Done => "done",
         }
@@ -249,12 +303,17 @@ impl SetupWizard {
     }
 
     fn compute_stage_after_discord(&self) -> Stage {
-        let vrchat_configured =
-            self.vrchat_username_reg.get_or_null().is_some() && self.vrchat_password_reg.get_or_null().is_some();
+        let vrchat_configured = self.vrchat_username_reg.get_or_null().is_some()
+            && self.vrchat_password_reg.get_or_null().is_some();
         if vrchat_configured {
             self.compute_stage_after_vrchat()
         } else {
-            Stage::VrChatCredentials { username: String::new(), password: String::new(), error: None, in_flight: false }
+            Stage::VrChatCredentials {
+                username: String::new(),
+                password: String::new(),
+                error: None,
+                in_flight: false,
+            }
         }
     }
 
@@ -265,7 +324,10 @@ impl SetupWizard {
         let group_id: Option<String> = self.settings_store.get_object(VRCHAT_GROUP_ID_KEY);
         match group_id {
             Some(id) if !id.trim().is_empty() => Stage::Done,
-            _ => Stage::VrChatGroupId { group_id: String::new(), error: None },
+            _ => Stage::VrChatGroupId {
+                group_id: String::new(),
+                error: None,
+            },
         }
     }
 
@@ -294,10 +356,15 @@ impl SetupWizard {
     }
 
     fn start_login(&mut self, username: String, password: String) {
-        let Some(client) = self.vrchat_client_or_init() else { return };
+        let Some(client) = self.vrchat_client_or_init() else {
+            return;
+        };
         let (tx, rx) = mpsc::channel();
         self.login_rx = Some(rx);
-        if let Stage::VrChatCredentials { in_flight, error, .. } = &mut self.stage {
+        if let Stage::VrChatCredentials {
+            in_flight, error, ..
+        } = &mut self.stage
+        {
             *in_flight = true;
             *error = None;
         }
@@ -307,11 +374,33 @@ impl SetupWizard {
         });
     }
 
-    fn start_two_factor(&mut self, method: TwoFactorMethod, code: String) {
-        let Some(client) = self.vrchat_client.clone() else { return };
+    fn start_two_factor(
+        &mut self,
+        method: TwoFactorMethod,
+        code: String,
+        authenticator_secret: String,
+    ) {
+        self.pending_totp_secret = None;
+        if method == TwoFactorMethod::Totp && !authenticator_secret.trim().is_empty() {
+            match scarlet_vrchat::totp::normalize_secret(&authenticator_secret) {
+                Ok(secret) => self.pending_totp_secret = Some(secret),
+                Err(message) => {
+                    if let Stage::VrChatTwoFactor { error, .. } = &mut self.stage {
+                        *error = Some(message);
+                    }
+                    return;
+                }
+            }
+        }
+        let Some(client) = self.vrchat_client.clone() else {
+            return;
+        };
         let (tx, rx) = mpsc::channel();
         self.two_factor_rx = Some(rx);
-        if let Stage::VrChatTwoFactor { in_flight, error, .. } = &mut self.stage {
+        if let Stage::VrChatTwoFactor {
+            in_flight, error, ..
+        } = &mut self.stage
+        {
             *in_flight = true;
             *error = None;
         }
@@ -350,13 +439,17 @@ impl SetupWizard {
                         Some(method) => Stage::VrChatTwoFactor {
                             method,
                             code: String::new(),
+                            authenticator_secret: String::new(),
                             error: None,
                             in_flight: false,
                         },
                         None => Stage::VrChatCredentials {
                             username: String::new(),
                             password: String::new(),
-                            error: Some(format!("VRChat requested unsupported 2FA methods: {}", methods.join(", "))),
+                            error: Some(format!(
+                                "VRChat requested unsupported 2FA methods: {}",
+                                methods.join(", ")
+                            )),
                             in_flight: false,
                         },
                     };
@@ -383,7 +476,10 @@ impl SetupWizard {
                         self.vrchat_username_reg.clear();
                         self.vrchat_password_reg.clear();
                     }
-                    if let Stage::VrChatCredentials { error, in_flight, .. } = &mut self.stage {
+                    if let Stage::VrChatCredentials {
+                        error, in_flight, ..
+                    } = &mut self.stage
+                    {
                         *error = Some(err.to_string());
                         *in_flight = false;
                     }
@@ -391,7 +487,10 @@ impl SetupWizard {
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.login_rx = None;
-                    if let Stage::VrChatCredentials { error, in_flight, .. } = &mut self.stage {
+                    if let Stage::VrChatCredentials {
+                        error, in_flight, ..
+                    } = &mut self.stage
+                    {
                         *error = Some("Login task ended unexpectedly — try again.".to_string());
                         *in_flight = false;
                     }
@@ -402,6 +501,13 @@ impl SetupWizard {
             match rx.try_recv() {
                 Ok(Ok(true)) => {
                     self.two_factor_rx = None;
+                    if let Some(secret) = self.pending_totp_secret.take() {
+                        if let Err(error) =
+                            scarlet_vrchat::client::save_totp_secret(&self.settings, &secret)
+                        {
+                            tracing::error!("Could not save VRChat authenticator secret: {error}");
+                        }
+                    }
                     // VRChat issues the `twoFactorAuth` cookie on a verified
                     // code; saving the jar here is what stops the next
                     // launch asking again.
@@ -410,14 +516,22 @@ impl SetupWizard {
                 }
                 Ok(Ok(false)) => {
                     self.two_factor_rx = None;
-                    if let Stage::VrChatTwoFactor { error, in_flight, .. } = &mut self.stage {
+                    self.pending_totp_secret = None;
+                    if let Stage::VrChatTwoFactor {
+                        error, in_flight, ..
+                    } = &mut self.stage
+                    {
                         *error = Some("Incorrect code — try again.".to_string());
                         *in_flight = false;
                     }
                 }
                 Ok(Err(message)) => {
                     self.two_factor_rx = None;
-                    if let Stage::VrChatTwoFactor { error, in_flight, .. } = &mut self.stage {
+                    self.pending_totp_secret = None;
+                    if let Stage::VrChatTwoFactor {
+                        error, in_flight, ..
+                    } = &mut self.stage
+                    {
                         *error = Some(message);
                         *in_flight = false;
                     }
@@ -425,8 +539,13 @@ impl SetupWizard {
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.two_factor_rx = None;
-                    if let Stage::VrChatTwoFactor { error, in_flight, .. } = &mut self.stage {
-                        *error = Some("Verification task ended unexpectedly — try again.".to_string());
+                    self.pending_totp_secret = None;
+                    if let Stage::VrChatTwoFactor {
+                        error, in_flight, ..
+                    } = &mut self.stage
+                    {
+                        *error =
+                            Some("Verification task ended unexpectedly — try again.".to_string());
                         *in_flight = false;
                     }
                 }
@@ -465,26 +584,36 @@ impl SetupWizard {
             Action::VrChatSkip => {
                 self.stage = self.compute_stage_after_vrchat();
             }
-            Action::TwoFactorSubmit { method, code } => {
+            Action::TwoFactorSubmit {
+                method,
+                code,
+                authenticator_secret,
+            } => {
                 if code.trim().is_empty() {
                     if let Stage::VrChatTwoFactor { error, .. } = &mut self.stage {
                         *error = Some("Enter the code.".to_string());
                     }
                 } else {
-                    self.start_two_factor(method, code);
+                    self.start_two_factor(method, code, authenticator_secret);
                 }
             }
             Action::TwoFactorCancel => {
-                self.stage =
-                    Stage::VrChatCredentials { username: String::new(), password: String::new(), error: None, in_flight: false };
+                self.stage = Stage::VrChatCredentials {
+                    username: String::new(),
+                    password: String::new(),
+                    error: None,
+                    in_flight: false,
+                };
             }
             Action::GroupIdSubmit { group_id } => {
                 let trimmed = group_id.trim();
                 if trimmed.starts_with("grp_") && trimmed.len() > "grp_".len() {
-                    self.settings_store.set_object(VRCHAT_GROUP_ID_KEY, &trimmed.to_string());
+                    self.settings_store
+                        .set_object(VRCHAT_GROUP_ID_KEY, &trimmed.to_string());
                     self.stage = Stage::Done;
                 } else if let Stage::VrChatGroupId { error, .. } = &mut self.stage {
-                    *error = Some("Enter a valid VRChat group ID (starts with \"grp_\").".to_string());
+                    *error =
+                        Some("Enter a valid VRChat group ID (starts with \"grp_\").".to_string());
                 }
             }
         }
@@ -504,14 +633,40 @@ impl SetupWizard {
                 ui.set_max_width(480.0);
                 match &mut self.stage {
                     Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
-                    Stage::Discord { token, guild_id } => render_discord_stage(ui, token, guild_id, &mut action),
-                    Stage::VrChatCredentials { username, password, error, in_flight } => {
-                        render_vrchat_credentials_stage(ui, username, password, error, *in_flight, &mut action)
+                    Stage::Discord { token, guild_id } => {
+                        render_discord_stage(ui, token, guild_id, &mut action)
                     }
-                    Stage::VrChatTwoFactor { method, code, error, in_flight } => {
-                        render_vrchat_two_factor_stage(ui, *method, code, error, *in_flight, &mut action)
+                    Stage::VrChatCredentials {
+                        username,
+                        password,
+                        error,
+                        in_flight,
+                    } => render_vrchat_credentials_stage(
+                        ui,
+                        username,
+                        password,
+                        error,
+                        *in_flight,
+                        &mut action,
+                    ),
+                    Stage::VrChatTwoFactor {
+                        method,
+                        code,
+                        authenticator_secret,
+                        error,
+                        in_flight,
+                    } => render_vrchat_two_factor_stage(
+                        ui,
+                        *method,
+                        code,
+                        authenticator_secret,
+                        error,
+                        *in_flight,
+                        &mut action,
+                    ),
+                    Stage::VrChatGroupId { group_id, error } => {
+                        render_vrchat_group_id_stage(ui, group_id, error, &mut action)
                     }
-                    Stage::VrChatGroupId { group_id, error } => render_vrchat_group_id_stage(ui, group_id, error, &mut action),
                     Stage::Done => {}
                 }
             });
@@ -521,7 +676,9 @@ impl SetupWizard {
 
         if !self.done && matches!(self.stage, Stage::Done) {
             self.done = true;
-            SetupOutcome::JustFinished { discord_token: self.discord_token_reg.get_or_null() }
+            SetupOutcome::JustFinished {
+                discord_token: self.discord_token_reg.get_or_null(),
+            }
         } else if self.done {
             SetupOutcome::AlreadyDone
         } else {
@@ -551,7 +708,12 @@ fn render_vibecoded_notice(ui: &mut egui::Ui, action: &mut Action) {
     });
 }
 
-fn render_discord_stage(ui: &mut egui::Ui, token: &mut String, guild_id: &mut String, action: &mut Action) {
+fn render_discord_stage(
+    ui: &mut egui::Ui,
+    token: &mut String,
+    guild_id: &mut String,
+    action: &mut Action,
+) {
     ui.heading("Discord setup");
     ui.add_space(8.0);
     ui.label(
@@ -561,7 +723,11 @@ fn render_discord_stage(ui: &mut egui::Ui, token: &mut String, guild_id: &mut St
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label("Bot token:");
-        ui.add(egui::TextEdit::singleline(token).password(true).desired_width(320.0));
+        ui.add(
+            egui::TextEdit::singleline(token)
+                .password(true)
+                .desired_width(320.0),
+        );
     });
     let token_present = !token.trim().is_empty();
     if token_present {
@@ -573,14 +739,28 @@ fn render_discord_stage(ui: &mut egui::Ui, token: &mut String, guild_id: &mut St
     ui.add_space(12.0);
     let can_continue = !token_present || !guild_id.trim().is_empty();
     if token_present && !can_continue {
-        ui.colored_label(egui::Color32::YELLOW, "A guild ID is required when a bot token is set.");
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "A guild ID is required when a bot token is set.",
+        );
     }
-    if ui.add_enabled(can_continue, egui::Button::new("Continue")).clicked() {
+    if ui
+        .add_enabled(can_continue, egui::Button::new("Continue"))
+        .clicked()
+    {
         let token = token.trim();
         let guild_id = guild_id.trim();
         *action = Action::DiscordContinue {
-            token: if token.is_empty() { None } else { Some(token.to_string()) },
-            guild_id: if guild_id.is_empty() { None } else { Some(guild_id.to_string()) },
+            token: if token.is_empty() {
+                None
+            } else {
+                Some(token.to_string())
+            },
+            guild_id: if guild_id.is_empty() {
+                None
+            } else {
+                Some(guild_id.to_string())
+            },
         };
     }
 }
@@ -604,7 +784,11 @@ fn render_vrchat_credentials_stage(
         });
         ui.horizontal(|ui| {
             ui.label("Password:");
-            ui.add(egui::TextEdit::singleline(password).password(true).desired_width(320.0));
+            ui.add(
+                egui::TextEdit::singleline(password)
+                    .password(true)
+                    .desired_width(320.0),
+            );
         });
     });
     if let Some(error) = error {
@@ -612,11 +796,24 @@ fn render_vrchat_credentials_stage(
     }
     ui.add_space(12.0);
     ui.horizontal(|ui| {
-        let login_label = if in_flight { "Logging in\u{2026}" } else { "Log in" };
-        if ui.add_enabled(!in_flight, egui::Button::new(login_label)).clicked() {
-            *action = Action::VrChatCredentialsSubmit { username: username.clone(), password: password.clone() };
+        let login_label = if in_flight {
+            "Logging in\u{2026}"
+        } else {
+            "Log in"
+        };
+        if ui
+            .add_enabled(!in_flight, egui::Button::new(login_label))
+            .clicked()
+        {
+            *action = Action::VrChatCredentialsSubmit {
+                username: username.clone(),
+                password: password.clone(),
+            };
         }
-        if ui.add_enabled(!in_flight, egui::Button::new("Skip for now")).clicked() {
+        if ui
+            .add_enabled(!in_flight, egui::Button::new("Skip for now"))
+            .clicked()
+        {
             *action = Action::VrChatSkip;
         }
     });
@@ -626,53 +823,101 @@ fn render_vrchat_two_factor_stage(
     ui: &mut egui::Ui,
     method: TwoFactorMethod,
     code: &mut String,
+    authenticator_secret: &mut String,
     error: &Option<String>,
     in_flight: bool,
     action: &mut Action,
 ) {
     ui.heading("VRChat two-factor code");
     ui.add_space(8.0);
-    ui.label(format!("VRChat requires a two-factor code for this account. {}", method.instructions()));
+    ui.label(format!(
+        "VRChat requires a two-factor code for this account. {}",
+        method.instructions()
+    ));
     ui.add_space(8.0);
     ui.add_enabled_ui(!in_flight, |ui| {
         ui.horizontal(|ui| {
             ui.label("Code:");
             ui.add(egui::TextEdit::singleline(code).desired_width(120.0));
         });
+        if method == TwoFactorMethod::Totp {
+            ui.add_space(8.0);
+            ui.label(
+                "Optional: enter the 32-character Base32 setup key from your authenticator. \
+                 Scarlet will encrypt it and generate future codes automatically. This is not \
+                 the six-digit code above.",
+            );
+            ui.horizontal(|ui| {
+                ui.label("Setup key:");
+                ui.add(
+                    egui::TextEdit::singleline(authenticator_secret)
+                        .password(true)
+                        .desired_width(320.0)
+                        .hint_text("32-character Base32 key"),
+                );
+            });
+        }
     });
     if let Some(error) = error {
         ui.colored_label(egui::Color32::RED, error);
     }
     ui.add_space(12.0);
     ui.horizontal(|ui| {
-        let verify_label = if in_flight { "Verifying\u{2026}" } else { "Verify" };
-        if ui.add_enabled(!in_flight, egui::Button::new(verify_label)).clicked() {
-            *action = Action::TwoFactorSubmit { method, code: code.clone() };
+        let verify_label = if in_flight {
+            "Verifying\u{2026}"
+        } else {
+            "Verify"
+        };
+        if ui
+            .add_enabled(!in_flight, egui::Button::new(verify_label))
+            .clicked()
+        {
+            *action = Action::TwoFactorSubmit {
+                method,
+                code: code.clone(),
+                authenticator_secret: authenticator_secret.clone(),
+            };
         }
-        if ui.add_enabled(!in_flight, egui::Button::new("Back")).clicked() {
+        if ui
+            .add_enabled(!in_flight, egui::Button::new("Back"))
+            .clicked()
+        {
             *action = Action::TwoFactorCancel;
         }
     });
 }
 
-fn render_vrchat_group_id_stage(ui: &mut egui::Ui, group_id: &mut String, error: &Option<String>, action: &mut Action) {
+fn render_vrchat_group_id_stage(
+    ui: &mut egui::Ui,
+    group_id: &mut String,
+    error: &Option<String>,
+    action: &mut Action,
+) {
     ui.heading("VRChat group");
     ui.add_space(8.0);
     ui.label("Which VRChat group should Scarlet moderate? This is required.");
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label("Group ID:");
-        ui.add(egui::TextEdit::singleline(group_id).desired_width(320.0).hint_text("grp_..."));
+        ui.add(
+            egui::TextEdit::singleline(group_id)
+                .desired_width(320.0)
+                .hint_text("grp_..."),
+        );
     });
     if ui.link("Open vrchat.com/home/groups to find it").clicked() {
-        ui.ctx().open_url(egui::OpenUrl::same_tab("https://vrchat.com/home/groups".to_string()));
+        ui.ctx().open_url(egui::OpenUrl::same_tab(
+            "https://vrchat.com/home/groups".to_string(),
+        ));
     }
     if let Some(error) = error {
         ui.colored_label(egui::Color32::RED, error);
     }
     ui.add_space(12.0);
     if ui.button("Continue").clicked() {
-        *action = Action::GroupIdSubmit { group_id: group_id.clone() };
+        *action = Action::GroupIdSubmit {
+            group_id: group_id.clone(),
+        };
     }
 }
 
@@ -697,11 +942,18 @@ mod tests {
     async fn fully_configured_settings_skip_straight_to_done() {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
-        settings.vibecoded_notice_acknowledged.set(Some(true), "test");
+        settings
+            .vibecoded_notice_acknowledged
+            .set(Some(true), "test");
         settings.discord_setup_prompted.set(Some(true), "test");
-        registry_string_encrypted(settings.encrypted.clone(), "global:username").set(Some("someone".to_string()));
-        registry_string_encrypted(settings.encrypted.clone(), "global:password").set(Some("hunter2".to_string()));
-        settings.store.set_object(VRCHAT_GROUP_ID_KEY, &"grp_11111111-1111-1111-1111-111111111111".to_string());
+        registry_string_encrypted(settings.encrypted.clone(), "global:username")
+            .set(Some("someone".to_string()));
+        registry_string_encrypted(settings.encrypted.clone(), "global:password")
+            .set(Some("hunter2".to_string()));
+        settings.store.set_object(
+            VRCHAT_GROUP_ID_KEY,
+            &"grp_11111111-1111-1111-1111-111111111111".to_string(),
+        );
 
         let wizard = wizard(&settings);
         assert!(wizard.is_done());
@@ -734,7 +986,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         let mut wizard = wizard(&settings);
-        wizard.apply_action(Action::DiscordContinue { token: None, guild_id: None });
+        wizard.apply_action(Action::DiscordContinue {
+            token: None,
+            guild_id: None,
+        });
         assert!(settings.discord_setup_prompted.get());
         assert_eq!(wizard.stored_discord_token(), None);
         assert_eq!(wizard.stage_name(), "vrchat_credentials");
@@ -749,9 +1004,14 @@ mod tests {
             token: Some("my-bot-token".to_string()),
             guild_id: Some("123456".to_string()),
         });
-        assert_eq!(wizard.stored_discord_token().as_deref(), Some("my-bot-token"));
         assert_eq!(
-            registry_string_encrypted(settings.encrypted.clone(), "discord.guild_id").get_or_null().as_deref(),
+            wizard.stored_discord_token().as_deref(),
+            Some("my-bot-token")
+        );
+        assert_eq!(
+            registry_string_encrypted(settings.encrypted.clone(), "discord.guild_id")
+                .get_or_null()
+                .as_deref(),
             Some("123456")
         );
     }
@@ -760,7 +1020,9 @@ mod tests {
     async fn vrchat_skip_advances_to_group_id_without_storing_credentials() {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
-        settings.vibecoded_notice_acknowledged.set(Some(true), "test");
+        settings
+            .vibecoded_notice_acknowledged
+            .set(Some(true), "test");
         settings.discord_setup_prompted.set(Some(true), "test");
         let mut wizard = wizard(&settings);
         assert_eq!(wizard.stage_name(), "vrchat_credentials");
@@ -777,11 +1039,18 @@ mod tests {
     async fn group_id_stage_is_skipped_when_already_stored() {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
-        settings.vibecoded_notice_acknowledged.set(Some(true), "test");
+        settings
+            .vibecoded_notice_acknowledged
+            .set(Some(true), "test");
         settings.discord_setup_prompted.set(Some(true), "test");
-        registry_string_encrypted(settings.encrypted.clone(), "global:username").set(Some("someone".to_string()));
-        registry_string_encrypted(settings.encrypted.clone(), "global:password").set(Some("hunter2".to_string()));
-        settings.store.set_object(VRCHAT_GROUP_ID_KEY, &"grp_11111111-1111-1111-1111-111111111111".to_string());
+        registry_string_encrypted(settings.encrypted.clone(), "global:username")
+            .set(Some("someone".to_string()));
+        registry_string_encrypted(settings.encrypted.clone(), "global:password")
+            .set(Some("hunter2".to_string()));
+        settings.store.set_object(
+            VRCHAT_GROUP_ID_KEY,
+            &"grp_11111111-1111-1111-1111-111111111111".to_string(),
+        );
 
         let wizard = wizard(&settings);
         assert!(wizard.is_done());
@@ -793,8 +1062,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         let mut wizard = wizard(&settings);
-        wizard.stage = Stage::VrChatGroupId { group_id: String::new(), error: None };
-        wizard.apply_action(Action::GroupIdSubmit { group_id: "not-a-group-id".to_string() });
+        wizard.stage = Stage::VrChatGroupId {
+            group_id: String::new(),
+            error: None,
+        };
+        wizard.apply_action(Action::GroupIdSubmit {
+            group_id: "not-a-group-id".to_string(),
+        });
         assert_eq!(wizard.stage_name(), "vrchat_group_id");
         match &wizard.stage {
             Stage::VrChatGroupId { error, .. } => assert!(error.is_some()),
@@ -807,26 +1081,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         let mut wizard = wizard(&settings);
-        wizard.stage = Stage::VrChatGroupId { group_id: String::new(), error: None };
-        wizard.apply_action(Action::GroupIdSubmit { group_id: "grp_11111111-1111-1111-1111-111111111111".to_string() });
+        wizard.stage = Stage::VrChatGroupId {
+            group_id: String::new(),
+            error: None,
+        };
+        wizard.apply_action(Action::GroupIdSubmit {
+            group_id: "grp_11111111-1111-1111-1111-111111111111".to_string(),
+        });
         assert_eq!(wizard.stage_name(), "done");
         let stored: Option<String> = settings.store.get_object(VRCHAT_GROUP_ID_KEY);
-        assert_eq!(stored.as_deref(), Some("grp_11111111-1111-1111-1111-111111111111"));
+        assert_eq!(
+            stored.as_deref(),
+            Some("grp_11111111-1111-1111-1111-111111111111")
+        );
     }
 
     #[tokio::test]
     async fn blank_vrchat_credentials_show_an_error_without_starting_a_login() {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
-        settings.vibecoded_notice_acknowledged.set(Some(true), "test");
+        settings
+            .vibecoded_notice_acknowledged
+            .set(Some(true), "test");
         settings.discord_setup_prompted.set(Some(true), "test");
         let mut wizard = wizard(&settings);
-        wizard.apply_action(Action::VrChatCredentialsSubmit { username: String::new(), password: String::new() });
+        wizard.apply_action(Action::VrChatCredentialsSubmit {
+            username: String::new(),
+            password: String::new(),
+        });
         assert_eq!(wizard.stage_name(), "vrchat_credentials");
         match &wizard.stage {
-            Stage::VrChatCredentials { error, in_flight, .. } => {
+            Stage::VrChatCredentials {
+                error, in_flight, ..
+            } => {
                 assert!(error.is_some());
-                assert!(!in_flight, "must not have spawned a login for blank credentials");
+                assert!(
+                    !in_flight,
+                    "must not have spawned a login for blank credentials"
+                );
             }
             _ => unreachable!("just asserted stage_name() == vrchat_credentials"),
         }
@@ -836,7 +1128,9 @@ mod tests {
     async fn a_rejected_login_clears_stored_credentials_so_the_stage_reappears_next_launch() {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
-        settings.vibecoded_notice_acknowledged.set(Some(true), "test");
+        settings
+            .vibecoded_notice_acknowledged
+            .set(Some(true), "test");
         settings.discord_setup_prompted.set(Some(true), "test");
         let mut first_wizard = wizard(&settings);
         assert_eq!(first_wizard.stage_name(), "vrchat_credentials");
@@ -844,8 +1138,12 @@ mod tests {
         // Simulate what `Action::VrChatCredentialsSubmit` does before the
         // (real, network-hitting) login attempt resolves: persist the
         // entered credentials up front, same as `ScarletVRChat.login()`.
-        first_wizard.vrchat_username_reg.set(Some("someone".to_string()));
-        first_wizard.vrchat_password_reg.set(Some("wrong-password".to_string()));
+        first_wizard
+            .vrchat_username_reg
+            .set(Some("someone".to_string()));
+        first_wizard
+            .vrchat_password_reg
+            .set(Some("wrong-password".to_string()));
         first_wizard.stage = Stage::VrChatCredentials {
             username: "someone".to_string(),
             password: "wrong-password".to_string(),
@@ -857,8 +1155,11 @@ mod tests {
         // `VrChatError::Api` (VRChat itself rejecting the credentials, e.g.
         // a 401) rather than actually spawning a network call.
         let (tx, rx) = mpsc::channel();
-        tx.send(Err(VrChatError::Api { status: reqwest::StatusCode::UNAUTHORIZED, body: "Invalid credentials".to_string() }))
-            .unwrap();
+        tx.send(Err(VrChatError::Api {
+            status: reqwest::StatusCode::UNAUTHORIZED,
+            body: "Invalid credentials".to_string(),
+        }))
+        .unwrap();
         first_wizard.login_rx = Some(rx);
 
         first_wizard.poll_async_results();
@@ -874,7 +1175,9 @@ mod tests {
             "a rejected login must not leave stale credentials stored"
         );
         match &first_wizard.stage {
-            Stage::VrChatCredentials { error, in_flight, .. } => {
+            Stage::VrChatCredentials {
+                error, in_flight, ..
+            } => {
                 assert!(error.is_some());
                 assert!(!in_flight);
             }
@@ -897,6 +1200,7 @@ mod tests {
         wizard.stage = Stage::VrChatTwoFactor {
             method: TwoFactorMethod::Totp,
             code: "123456".to_string(),
+            authenticator_secret: String::new(),
             error: None,
             in_flight: false,
         };
@@ -912,12 +1216,19 @@ mod tests {
         wizard.stage = Stage::VrChatTwoFactor {
             method: TwoFactorMethod::Totp,
             code: String::new(),
+            authenticator_secret: String::new(),
             error: None,
             in_flight: false,
         };
-        wizard.apply_action(Action::TwoFactorSubmit { method: TwoFactorMethod::Totp, code: String::new() });
+        wizard.apply_action(Action::TwoFactorSubmit {
+            method: TwoFactorMethod::Totp,
+            code: String::new(),
+            authenticator_secret: String::new(),
+        });
         match &wizard.stage {
-            Stage::VrChatTwoFactor { error, in_flight, .. } => {
+            Stage::VrChatTwoFactor {
+                error, in_flight, ..
+            } => {
                 assert!(error.is_some());
                 assert!(!in_flight);
             }

@@ -30,8 +30,8 @@
 
 use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode};
-use std::sync::Arc;
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::basic_auth::basic_auth_header;
 use crate::models::{CurrentUser, PaginatedGroupAuditLogEntryList};
@@ -44,6 +44,9 @@ use crate::models::{CurrentUser, PaginatedGroupAuditLogEntryList};
 /// so the two never drift apart.
 pub const USERNAME_KEY: &str = "global:username";
 pub const PASSWORD_KEY: &str = "global:password";
+/// Encrypted Base32 authenticator seed used by Java for unattended TOTP.
+/// This is a reusable setup secret, never a six-digit one-time code.
+pub const TOTP_SECRET_KEY: &str = "global:totpsecret";
 
 /// Port of `ScarletVRChat`'s `vrchat_group_id` settings key (the "which
 /// group does Scarlet moderate" config, asked for via
@@ -135,7 +138,10 @@ impl VrChatClient {
     /// rather than a once-per-launch one: VRChat's `auth` cookie is good for
     /// a year, and the `twoFactorAuth` cookie it issues after a verified
     /// code is what tells VRChat not to ask again.
-    pub fn with_base_url_and_cookies(base_url: &str, saved_cookies: Option<&str>) -> Result<Self, VrChatError> {
+    pub fn with_base_url_and_cookies(
+        base_url: &str,
+        saved_cookies: Option<&str>,
+    ) -> Result<Self, VrChatError> {
         let base_url = base_url.trim_end_matches('/').to_string();
         let mut store = reqwest_cookie_store::CookieStore::new(None);
         if let Some(saved) = saved_cookies {
@@ -152,7 +158,11 @@ impl VrChatClient {
             .cookie_provider(cookies.clone())
             .user_agent(scarlet_core::identity::user_agent())
             .build()?;
-        Ok(VrChatClient { http, base_url, cookies })
+        Ok(VrChatClient {
+            http,
+            base_url,
+            cookies,
+        })
     }
 
     /// The current session as `Set-Cookie` lines, one per cookie, for
@@ -214,6 +224,23 @@ impl VrChatClient {
             return Err(VrChatError::Api { status, body });
         }
         serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
+    }
+
+    /// Returns VRChat's clock, used for TOTP generation so a machine with a
+    /// slightly incorrect local clock can still sign in (matching Java's
+    /// `MiscellaneousApi.getSystemTime()`).
+    pub async fn get_server_time(&self) -> Result<DateTime<Utc>, VrChatError> {
+        let response = self.http.get(self.url("/time")).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        let timestamp: String = serde_json::from_str(&body)
+            .map_err(|error| VrChatError::UnexpectedShape(error.to_string()))?;
+        DateTime::parse_from_rfc3339(&timestamp)
+            .map(|time| time.with_timezone(&Utc))
+            .map_err(|error| VrChatError::UnexpectedShape(error.to_string()))
     }
 
     async fn parse_login_response(
@@ -1099,14 +1126,6 @@ impl VrChatClient {
 /// [`PASSWORD_KEY`], for use at app startup when the interactive setup
 /// wizard didn't run this session (it already completed in an earlier one).
 ///
-/// Returns `None` (after logging why) if nothing is stored, the login
-/// fails, or VRChat asks for two-factor. **Known gap**: Java's
-/// `ScarletVRChat` also stores a TOTP secret (`RegistryStringEncrypted
-/// totpsecret`) so an unattended login can generate a valid code itself;
-/// this doesn't yet (no TOTP-code-generation dependency pulled in), so an
-/// account requiring 2FA can only log in through the interactive wizard,
-/// which then hands its already-authenticated client onward instead of
-/// calling this at all.
 /// What an unattended login attempt with stored credentials ended up as.
 ///
 /// The two-factor case used to be collapsed into "no client" with a log
@@ -1120,7 +1139,10 @@ impl VrChatClient {
 /// here is what lets the UI do the same.
 pub enum StoredLogin {
     LoggedIn(VrChatClient),
-    RequiresTwoFactor { client: VrChatClient, methods: Vec<String> },
+    RequiresTwoFactor {
+        client: VrChatClient,
+        methods: Vec<String>,
+    },
     /// No credentials stored, or VRChat rejected them (in which case they
     /// have been cleared).
     Unavailable,
@@ -1133,12 +1155,79 @@ pub enum StoredLogin {
 /// `global`).
 pub const COOKIE_STORE_KEY: &str = "global.cookieStore";
 
+/// Loads Java's encrypted TOTP seed, migrating the old plaintext
+/// `vrc_secret` setting if one is present.
+pub fn stored_totp_secret(settings: &scarlet_core::settings::Settings) -> Option<String> {
+    use scarlet_core::settings::registry::registry_string_encrypted;
+    let encrypted = registry_string_encrypted(settings.encrypted.clone(), TOTP_SECRET_KEY);
+    if let Some(legacy) = settings.store.get_string("vrc_secret") {
+        match crate::totp::normalize_secret(&legacy) {
+            Ok(secret) => {
+                encrypted.set(Some(secret.clone()));
+                settings.store.remove("vrc_secret");
+                tracing::info!("Migrated the legacy VRChat TOTP secret into encrypted storage");
+                return Some(secret);
+            }
+            Err(error) => tracing::warn!("Ignoring invalid legacy VRChat TOTP secret: {error}"),
+        }
+    }
+    encrypted
+        .get_or_null()
+        .and_then(|secret| match crate::totp::normalize_secret(&secret) {
+            Ok(secret) => Some(secret),
+            Err(error) => {
+                tracing::warn!("Ignoring invalid stored VRChat TOTP secret: {error}");
+                None
+            }
+        })
+}
+
+/// Encrypts an authenticator setup key under the same registry key Java
+/// uses. The returned value is normalized and safe to pass to the TOTP
+/// generator.
+pub fn save_totp_secret(
+    settings: &scarlet_core::settings::Settings,
+    secret: &str,
+) -> Result<String, String> {
+    use scarlet_core::settings::registry::registry_string_encrypted;
+    let secret = crate::totp::normalize_secret(secret)?;
+    registry_string_encrypted(settings.encrypted.clone(), TOTP_SECRET_KEY)
+        .set(Some(secret.clone()));
+    Ok(secret)
+}
+
+/// Attempts Java-style unattended TOTP verification with VRChat's own
+/// clock. `false` means no usable secret was stored or VRChat rejected both
+/// generated codes; API failures are returned so callers can log them and
+/// fall back to an interactive prompt.
+async fn verify_with_stored_totp(
+    settings: &scarlet_core::settings::Settings,
+    client: &VrChatClient,
+) -> Result<bool, VrChatError> {
+    let Some(secret) = stored_totp_secret(settings) else {
+        return Ok(false);
+    };
+    for attempt in 0..2 {
+        let server_time = client.get_server_time().await?;
+        let code = crate::totp::generate_code(&secret, server_time.timestamp())
+            .map_err(VrChatError::UnexpectedShape)?;
+        if client.verify_totp(&code).await? {
+            return Ok(true);
+        }
+        if attempt == 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+    }
+    Ok(false)
+}
+
 /// Builds a client from the saved session, or `None` if nothing is saved.
 pub fn client_from_saved_session(
     settings: &scarlet_core::settings::Settings,
 ) -> Option<VrChatClient> {
     use scarlet_core::settings::registry::registry_string_encrypted;
-    let saved = registry_string_encrypted(settings.encrypted.clone(), COOKIE_STORE_KEY).get_or_null()?;
+    let saved =
+        registry_string_encrypted(settings.encrypted.clone(), COOKIE_STORE_KEY).get_or_null()?;
     if saved.trim().is_empty() {
         return None;
     }
@@ -1200,14 +1289,18 @@ pub async fn login_with_stored_credentials_detailed(
         }
     }
 
-    let (Some(username), Some(password)) = (username_reg.get_or_null(), password_reg.get_or_null()) else {
+    let (Some(username), Some(password)) = (username_reg.get_or_null(), password_reg.get_or_null())
+    else {
         return StoredLogin::Unavailable;
     };
 
     let client = match VrChatClient::with_cookies(None) {
         Ok(client) => client,
         Err(err) => {
-            tracing::error!("Could not build VRChat client for unattended login: {}", err);
+            tracing::error!(
+                "Could not build VRChat client for unattended login: {}",
+                err
+            );
             return StoredLogin::Unavailable;
         }
     };
@@ -1222,7 +1315,23 @@ pub async fn login_with_stored_credentials_detailed(
             StoredLogin::LoggedIn(client)
         }
         Ok(LoginOutcome::RequiresTwoFactor(methods)) => {
-            tracing::info!("VRChat unattended login needs a two-factor code ({:?})", methods);
+            if methods.iter().any(|method| method == "totp") {
+                match verify_with_stored_totp(settings, &client).await {
+                    Ok(true) => {
+                        tracing::info!("VRChat unattended TOTP verification succeeded");
+                        save_session(settings, &client);
+                        return StoredLogin::LoggedIn(client);
+                    }
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(
+                        "Could not use the stored VRChat authenticator secret: {error}"
+                    ),
+                }
+            }
+            tracing::info!(
+                "VRChat unattended login needs a two-factor code ({:?})",
+                methods
+            );
             StoredLogin::RequiresTwoFactor { client, methods }
         }
         Err(err) => {
@@ -1242,37 +1351,24 @@ pub async fn login_with_stored_credentials_detailed(
 pub async fn login_with_stored_credentials(
     settings: &scarlet_core::settings::Settings,
 ) -> Option<VrChatClient> {
-    use scarlet_core::settings::registry::registry_string_encrypted;
-
-    let username_reg = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY);
-    let password_reg = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY);
-    let username = username_reg.get_or_null()?;
-    let password = password_reg.get_or_null()?;
-
-    let client = match VrChatClient::new() {
-        Ok(client) => client,
-        Err(err) => {
-            tracing::error!(
-                "Could not build VRChat client for unattended login: {}",
-                err
+    match login_with_stored_credentials_detailed(settings).await {
+        StoredLogin::LoggedIn(client) => Some(client),
+        StoredLogin::RequiresTwoFactor { methods, .. } => {
+            tracing::warn!(
+                "VRChat unattended login requires two-factor ({:?}); run Scarlet with its UI to log in",
+                methods
             );
-            return None;
+            None
         }
-    };
-    attempt_login_clearing_stored_credentials_on_rejection(
-        client,
-        &username,
-        &password,
-        &username_reg,
-        &password_reg,
-    )
-    .await
+        StoredLogin::Unavailable => None,
+    }
 }
 
 /// The actual login-then-clear-on-rejection logic, split out from
 /// [`login_with_stored_credentials`] so it can be exercised against a mock
 /// server in tests (the public function always builds a [`VrChatClient`]
 /// pointed at the real VRChat API, with no test seam of its own).
+#[cfg(test)]
 async fn attempt_login_clearing_stored_credentials_on_rejection(
     client: VrChatClient,
     username: &str,
@@ -1336,7 +1432,9 @@ mod tests {
 
         let restored = VrChatClient::with_cookies(Some(&exported)).unwrap();
         assert!(restored.has_session_cookie());
-        assert!(restored.export_cookies().contains("twoFactorAuth=2fa-token"));
+        assert!(restored
+            .export_cookies()
+            .contains("twoFactorAuth=2fa-token"));
     }
 
     /// Pins the user endpoint's real response shape, including the two
@@ -1363,7 +1461,10 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&format!("{}/", server.uri())).unwrap();
         let user = client.get_user("usr_1").await.unwrap();
-        assert_eq!(user.date_joined, Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()));
+        assert_eq!(
+            user.date_joined,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap())
+        );
         assert_eq!(user.pronouns.as_deref(), Some("she/her"));
         assert_eq!(user.age_verification_status.as_deref(), Some("18+"));
         assert_eq!(user.tags, vec!["system_trust_basic".to_string()]);
@@ -1384,7 +1485,10 @@ mod tests {
         let client = VrChatClient::with_base_url(&format!("{}/", server.uri())).unwrap();
         let groups = client.get_user_groups("usr_1").await.unwrap();
         assert_eq!(
-            groups.iter().filter_map(|g| g.group_id.clone()).collect::<Vec<_>>(),
+            groups
+                .iter()
+                .filter_map(|g| g.group_id.clone())
+                .collect::<Vec<_>>(),
             vec!["grp_watched".to_string(), "grp_other".to_string()]
         );
     }
@@ -1570,6 +1674,67 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         assert!(client.verify_email_otp("123456").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn server_time_reads_the_api_json_string() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/time"))
+            .respond_with(ResponseTemplate::new(200).set_body_json("1970-01-01T00:00:59Z"))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert_eq!(client.get_server_time().await.unwrap().timestamp(), 59);
+    }
+
+    #[tokio::test]
+    async fn stored_totp_secret_generates_and_verifies_a_fresh_code() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/time"))
+            .respond_with(ResponseTemplate::new(200).set_body_json("1970-01-01T00:00:59Z"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/auth/twofactorauth/totp/verify"))
+            .and(body_json(serde_json::json!({ "code": "287082" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "verified": true })),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings = scarlet_core::settings::Settings::open(dir.path());
+        save_totp_secret(&settings, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").unwrap();
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+
+        assert!(verify_with_stored_totp(&settings, &client).await.unwrap());
+    }
+
+    #[test]
+    fn legacy_plaintext_totp_secret_is_migrated_to_encrypted_storage() {
+        use scarlet_core::settings::registry::registry_string_encrypted;
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings = scarlet_core::settings::Settings::open(dir.path());
+        settings
+            .store
+            .set_string("vrc_secret", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+
+        assert_eq!(
+            stored_totp_secret(&settings).as_deref(),
+            Some("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        );
+        assert_eq!(settings.store.get_string("vrc_secret"), None);
+        assert_eq!(
+            registry_string_encrypted(settings.encrypted.clone(), TOTP_SECRET_KEY)
+                .get_or_null()
+                .as_deref(),
+            Some("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        );
     }
 
     #[tokio::test]

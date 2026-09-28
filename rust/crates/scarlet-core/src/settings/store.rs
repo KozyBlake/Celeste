@@ -22,7 +22,10 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     pub fn new(path: PathBuf) -> Self {
-        SettingsStore { path, json: Mutex::new(None) }
+        SettingsStore {
+            path,
+            json: Mutex::new(None),
+        }
     }
 
     /// Returns a clone of the whole settings object, loading (and
@@ -121,6 +124,15 @@ impl SettingsStore {
         self.save();
     }
 
+    /// Removes a setting and saves immediately. This is needed for the
+    /// one-time migration of Java's legacy plaintext credential keys.
+    pub fn remove(&self, key: &str) {
+        self.with_json(|json| {
+            json.remove(key);
+        });
+        self.save();
+    }
+
     pub fn get_object<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
         let element = self.with_json(|json| json.get(key).cloned());
         element.and_then(|element| match serde_json::from_value(element) {
@@ -162,7 +174,10 @@ impl SettingsStore {
 }
 
 fn env_override_name(key: &str) -> String {
-    format!("SCARLET_SETTING_{}", key.to_uppercase().replace(['.', '-'], "_"))
+    format!(
+        "SCARLET_SETTING_{}",
+        key.to_uppercase().replace(['.', '-'], "_")
+    )
 }
 
 #[cfg(test)]
@@ -187,7 +202,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(dir.path().join("settings.json"));
         store.set_object("origin", &Point { x: 1, y: 2 });
-        assert_eq!(store.get_object::<Point>("origin"), Some(Point { x: 1, y: 2 }));
+        assert_eq!(
+            store.get_object::<Point>("origin"),
+            Some(Point { x: 1, y: 2 })
+        );
     }
 
     #[test]

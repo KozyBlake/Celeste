@@ -7,10 +7,10 @@
 //! ported: VRChat's non-standard Basic Auth encoding ([`basic_auth`]),
 //! login + TOTP two-factor verification, and group audit log lookups
 //! ([`client::VrChatClient`]). See PORTING.md for what's still outstanding
-//! (persistent encrypted cookie storage, alt-account support, the rest of
-//! the API surface).
+//! (alt-account support and the rest of the API surface).
 
 pub mod basic_auth;
 pub mod client;
 pub mod log_tail;
 pub mod models;
+pub mod totp;
