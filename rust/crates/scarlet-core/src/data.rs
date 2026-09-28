@@ -488,39 +488,71 @@ impl ScarletData {
     }
 }
 
+/// Java's Gson is configured without a `FieldNamingPolicy`
+/// (`util/JsonAdapters.java`), so it writes each field under its Java name —
+/// which is camelCase. These structs were serialising Rust's snake_case
+/// field names instead, which meant a Java install's `global.json`,
+/// `live.json`, `usr/<id>` and `gaud/<id>` were found, deserialised as
+/// **all-default**, and then re-saved empty: every account link, tag,
+/// description, redaction flag and evidence record silently lost on first
+/// read. `rename_all = "camelCase"` fixes the wire format; the `alias`
+/// attributes keep reading the snake_case files written by Rust builds
+/// between the port starting and this fix, so nothing written during
+/// testing is stranded either. The pinning test at the bottom of this
+/// module is what stops this regressing again.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GlobalMetadata {
-    #[serde(default)]
+    /// Java: `public Map<String, String> userSnowflake2userId` — the
+    /// Discord↔VRChat account link table every "linked ids" check reads.
+    #[serde(rename = "userSnowflake2userId", alias = "user_snowflake_to_user_id", default)]
     pub user_snowflake_to_user_id: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LiveInstancesMetadata {
-    #[serde(default)]
+    /// Java: `location2AuditEntryId`.
+    #[serde(rename = "location2AuditEntryId", alias = "location_to_audit_entry_id", default)]
     pub location_to_audit_entry_id: std::collections::HashMap<String, String>,
-    #[serde(default)]
+    /// Java: `location2instanceEmbedMessage` — note the lower-case `i`,
+    /// which is why this can't be derived from the Rust name.
+    #[serde(
+        rename = "location2instanceEmbedMessage",
+        alias = "location_to_instance_embed_message",
+        default
+    )]
     pub location_to_instance_embed_message: std::collections::HashMap<String, InstanceEmbedMessage>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InstanceEmbedMessage {
+    #[serde(alias = "guild_snowflake")]
     pub guild_snowflake: Option<String>,
+    #[serde(alias = "channel_snowflake")]
     pub channel_snowflake: Option<String>,
+    #[serde(alias = "message_snowflake")]
     pub message_snowflake: Option<String>,
+    #[serde(alias = "thread_snowflake")]
     pub thread_snowflake: Option<String>,
+    #[serde(alias = "aux_message_snowflake")]
     pub aux_message_snowflake: Option<String>,
+    #[serde(alias = "opened_at")]
     pub opened_at: Option<DateTime<Utc>>,
+    #[serde(alias = "closed_at")]
     pub closed_at: Option<DateTime<Utc>>,
     /// Snowflake of the live player list message in the instance thread.
+    #[serde(alias = "playerlist_message_snowflake")]
     pub playerlist_message_snowflake: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserMetadata {
+    #[serde(alias = "user_snowflake")]
     pub user_snowflake: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "audit_entry_ids")]
     pub audit_entry_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default, alias = "evidence_submissions")]
     pub evidence_submissions: Vec<EvidenceSubmission>,
 }
 
@@ -537,44 +569,66 @@ impl UserMetadata {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EvidenceSubmission {
+    #[serde(alias = "audit_entry_id")]
     pub audit_entry_id: Option<String>,
+    #[serde(alias = "submitter_snowflake")]
     pub submitter_snowflake: Option<String>,
+    #[serde(alias = "submitter_display_name")]
     pub submitter_display_name: Option<String>,
+    #[serde(alias = "submission_time")]
     pub submission_time: Option<DateTime<Utc>>,
+    #[serde(alias = "file_name")]
     pub file_name: Option<String>,
+    #[serde(alias = "file_path")]
     pub file_path: Option<String>,
     pub url: Option<String>,
+    #[serde(alias = "proxy_url")]
     pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditEntryMetadata {
+    #[serde(alias = "guild_snowflake")]
     pub guild_snowflake: Option<String>,
+    #[serde(alias = "channel_snowflake")]
     pub channel_snowflake: Option<String>,
+    #[serde(alias = "message_snowflake")]
     pub message_snowflake: Option<String>,
+    #[serde(alias = "thread_snowflake")]
     pub thread_snowflake: Option<String>,
+    #[serde(alias = "aux_message_snowflake")]
     pub aux_message_snowflake: Option<String>,
 
     /// Placeholder for `io.github.vrchatapi.model.GroupAuditLogEntry` --
     /// see the module docs.
     pub entry: Option<Value>,
 
-    #[serde(default)]
+    #[serde(default, alias = "entry_tags")]
     pub entry_tags: UniqueStrings,
+    #[serde(alias = "entry_description")]
     pub entry_description: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "entry_redacted")]
     pub entry_redacted: bool,
 
+    #[serde(alias = "aux_actor_id")]
     pub aux_actor_id: Option<String>,
+    #[serde(alias = "aux_actor_display_name")]
     pub aux_actor_display_name: Option<String>,
 
+    #[serde(alias = "parent_event_id")]
     pub parent_event_id: Option<String>,
 
+    #[serde(alias = "aux_data")]
     pub aux_data: Option<Map<String, Value>>,
 
+    #[serde(alias = "snapshot_target_user")]
     pub snapshot_target_user: Option<Value>,
+    #[serde(alias = "snapshot_target_user_groups")]
     pub snapshot_target_user_groups: Option<Value>,
+    #[serde(alias = "snapshot_target_user_represented_group")]
     pub snapshot_target_user_represented_group: Option<Value>,
 }
 
@@ -686,12 +740,18 @@ impl AuditEntryMetadata {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CustomEvent {
     pub id: String,
+    #[serde(alias = "type_ex")]
     pub type_ex: String,
+    #[serde(alias = "actor_id")]
     pub actor_id: Option<String>,
+    #[serde(alias = "actor_display_name")]
     pub actor_display_name: Option<String>,
+    #[serde(alias = "target_id")]
     pub target_id: Option<String>,
+    #[serde(alias = "target_display_name")]
     pub target_display_name: Option<String>,
     pub timestamp: Option<DateTime<Utc>>,
     pub data: Option<Value>,
@@ -699,6 +759,127 @@ pub struct CustomEvent {
 
 #[cfg(test)]
 mod tests {
+    /// Pins the on-disk key names to Java's. Java's Gson has no
+    /// `FieldNamingPolicy`, so each key is the Java field name verbatim;
+    /// these structs briefly serialised Rust's snake_case names instead,
+    /// which made a Java data directory load as all-defaults and then get
+    /// re-saved empty. Any rename here is a silent data loss, so it has to
+    /// break a test.
+    #[test]
+    fn metadata_json_keys_match_javas_field_names() {
+        let mut meta = AuditEntryMetadata::default();
+        meta.guild_snowflake = Some("1".into());
+        meta.channel_snowflake = Some("2".into());
+        meta.message_snowflake = Some("3".into());
+        meta.thread_snowflake = Some("4".into());
+        meta.aux_message_snowflake = Some("5".into());
+        meta.entry_description = Some("d".into());
+        meta.entry_redacted = true;
+        meta.aux_actor_id = Some("usr_1".into());
+        meta.aux_actor_display_name = Some("Someone".into());
+        meta.parent_event_id = Some("p".into());
+        let json = serde_json::to_value(&meta).unwrap();
+        for key in [
+            "guildSnowflake",
+            "channelSnowflake",
+            "messageSnowflake",
+            "threadSnowflake",
+            "auxMessageSnowflake",
+            "entryTags",
+            "entryDescription",
+            "entryRedacted",
+            "auxActorId",
+            "auxActorDisplayName",
+            "parentEventId",
+            "snapshotTargetUser",
+            "snapshotTargetUserGroups",
+            "snapshotTargetUserRepresentedGroup",
+        ] {
+            assert!(json.get(key).is_some(), "AuditEntryMetadata is missing Java's `{key}`");
+        }
+
+        let mut user = UserMetadata::default();
+        user.user_snowflake = Some("12345".into());
+        let json = serde_json::to_value(&user).unwrap();
+        for key in ["userSnowflake", "auditEntryIds", "evidenceSubmissions"] {
+            assert!(json.get(key).is_some(), "UserMetadata is missing Java's `{key}`");
+        }
+
+        let evidence = EvidenceSubmission::default();
+        let json = serde_json::to_value(&evidence).unwrap();
+        for key in [
+            "auditEntryId",
+            "submitterSnowflake",
+            "submitterDisplayName",
+            "submissionTime",
+            "fileName",
+            "filePath",
+            "proxyUrl",
+        ] {
+            assert!(json.get(key).is_some(), "EvidenceSubmission is missing Java's `{key}`");
+        }
+
+        // Java names these three maps idiosyncratically; camelCasing the
+        // Rust field names would produce the wrong key for all of them.
+        let json = serde_json::to_value(GlobalMetadata::default()).unwrap();
+        assert!(json.get("userSnowflake2userId").is_some());
+        let json = serde_json::to_value(LiveInstancesMetadata::default()).unwrap();
+        assert!(json.get("location2AuditEntryId").is_some());
+        assert!(json.get("location2instanceEmbedMessage").is_some());
+
+        let json = serde_json::to_value(InstanceEmbedMessage::default()).unwrap();
+        for key in ["guildSnowflake", "openedAt", "closedAt", "playerlistMessageSnowflake"] {
+            assert!(json.get(key).is_some(), "InstanceEmbedMessage is missing Java's `{key}`");
+        }
+
+        let json = serde_json::to_value(CustomEvent::default()).unwrap();
+        for key in ["typeEx", "actorId", "actorDisplayName", "targetId", "targetDisplayName"] {
+            assert!(json.get(key).is_some(), "CustomEvent is missing Java's `{key}`");
+        }
+    }
+
+    /// A Java-written record loads with its values intact — the actual
+    /// failure mode, rather than just the key spelling.
+    #[test]
+    fn a_java_written_record_round_trips_with_its_values() {
+        let java = serde_json::json!({
+            "guildSnowflake": "111",
+            "entryTags": ["tag.a", "tag.b"],
+            "entryDescription": "why they were banned",
+            "entryRedacted": true,
+            "auxActorId": "usr_actor"
+        });
+        let meta: AuditEntryMetadata = serde_json::from_value(java).unwrap();
+        assert_eq!(meta.guild_snowflake.as_deref(), Some("111"));
+        assert_eq!(meta.entry_description.as_deref(), Some("why they were banned"));
+        assert!(meta.entry_redacted);
+        assert_eq!(meta.aux_actor_id.as_deref(), Some("usr_actor"));
+        assert_eq!(meta.entry_tags.len(), 2);
+
+        let links = serde_json::json!({ "userSnowflake2userId": { "12345": "usr_1" } });
+        let global: GlobalMetadata = serde_json::from_value(links).unwrap();
+        assert_eq!(global.user_snowflake_to_user_id.get("12345").map(String::as_str), Some("usr_1"));
+    }
+
+    /// The snake_case files Rust builds wrote before this fix still load,
+    /// so testing data isn't stranded by the correction.
+    #[test]
+    fn a_snake_case_record_from_an_earlier_rust_build_still_loads() {
+        let old = serde_json::json!({
+            "guild_snowflake": "111",
+            "entry_description": "from an earlier build",
+            "entry_redacted": true
+        });
+        let meta: AuditEntryMetadata = serde_json::from_value(old).unwrap();
+        assert_eq!(meta.guild_snowflake.as_deref(), Some("111"));
+        assert_eq!(meta.entry_description.as_deref(), Some("from an earlier build"));
+        assert!(meta.entry_redacted);
+
+        let old = serde_json::json!({ "user_snowflake_to_user_id": { "12345": "usr_1" } });
+        let global: GlobalMetadata = serde_json::from_value(old).unwrap();
+        assert_eq!(global.user_snowflake_to_user_id.get("12345").map(String::as_str), Some("usr_1"));
+    }
+
     use super::*;
 
     #[test]
