@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use scarlet_core::settings::file_valued::SettingDescriptor;
 use scarlet_core::settings::file_valued::{SettingCategory, SettingKind};
+use scarlet_core::settings::registry::Rectangle;
 use scarlet_core::settings::Settings;
 
 use crate::state::UiState;
@@ -204,6 +205,10 @@ pub struct ScarletApp {
     /// AUDIT-2026-09-28.md — the claim that Java doesn't persist it was
     /// simply wrong.
     column_order: Vec<ColumnId>,
+    /// Last native window rectangle written to Java's `uiBounds` registry
+    /// key. Keeping the previous value avoids rewriting registry.json on
+    /// every immediate-mode frame when the window has not moved.
+    last_window_bounds: Option<Rectangle>,
     /// Which sidebar category the Settings tab currently shows, matching
     /// the reference screenshots' left-hand category list (General/
     /// Moderation/Notifications/Discord/Integrations/System) instead of one
@@ -251,6 +256,7 @@ impl ScarletApp {
         let voice_manager = shared.voice_manager.clone();
         let process_controller = shared.process_controller.clone();
         let settings = Some(shared.settings.clone());
+        let last_window_bounds = settings.as_ref().and_then(|settings| settings.ui_bounds.get_or_null());
 
         let mut pending_two_factor = None;
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
@@ -327,6 +333,7 @@ impl ScarletApp {
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
             column_order: ColumnId::ALL.to_vec(),
+            last_window_bounds,
             settings_category: SettingCategory::General,
             settings_search: String::new(),
             avatar_stats_open: None,
@@ -348,6 +355,35 @@ impl ScarletApp {
                 scarlet_core::identity::VERSION,
                 scarlet_core::identity::FORK_NOTE
             )
+        }
+    }
+
+    fn persist_window_bounds(&mut self, ctx: &egui::Context) {
+        if ctx.input(|input| input.viewport().minimized == Some(true)) {
+            return;
+        }
+        let Some(bounds) = ctx.input(|input| {
+            let viewport = input.viewport();
+            let outer = viewport.outer_rect?;
+            let inner = viewport.inner_rect?;
+            Some(Rectangle {
+                x: outer.min.x.round() as i32,
+                y: outer.min.y.round() as i32,
+                // ViewportBuilder accepts an inner size. Persisting the
+                // inner dimensions prevents the decoration border from
+                // being added again on every restart.
+                width: inner.width().round() as i32,
+                height: inner.height().round() as i32,
+            })
+        }) else {
+            return;
+        };
+        if bounds.width <= 0 || bounds.height <= 0 || self.last_window_bounds == Some(bounds) {
+            return;
+        }
+        if let Some(settings) = &self.settings {
+            settings.ui_bounds.set(Some(bounds));
+            self.last_window_bounds = Some(bounds);
         }
     }
 
@@ -1222,6 +1258,7 @@ impl ScarletApp {
 impl eframe::App for ScarletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+        self.persist_window_bounds(ctx);
 
         // The setup wizard, while running, replaces the entire window
         // (toolbar/tabs/table included) the same way a blocking Swing
@@ -1490,8 +1527,21 @@ pub fn run(
     runtime_handle: tokio::runtime::Handle,
     tts: Arc<crate::tts::TtsService>,
 ) -> eframe::Result<()> {
+    let bounds = shared.settings.ui_bounds.get_or_null().filter(|bounds| {
+        bounds.width > 0 && bounds.height > 0
+    });
+    let mut viewport = egui::ViewportBuilder::default().with_icon(app_icon());
+    if let Some(bounds) = bounds {
+        viewport = viewport
+            .with_position([bounds.x as f32, bounds.y as f32])
+            .with_inner_size([bounds.width as f32, bounds.height as f32]);
+    } else {
+        viewport = viewport
+            .with_position([100.0, 100.0])
+            .with_inner_size([600.0, 400.0]);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_icon(app_icon()),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
