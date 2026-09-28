@@ -1,6 +1,6 @@
 //! Port of `ScarletDiscordCommands.vrchatUserBan`.
 //!
-//! **Simplified**: takes a plain `vrchat-user-id` string instead of an
+//! Takes Java's `vrchat-user` option, with live user autocomplete, instead of
 //! autocomplete-resolved `io.github.vrchatapi.model.User` (see the
 //! `commands` module docs). The training-simulation branch is deliberately
 //! out of scope; the normal and immediate-tag ban paths are both real.
@@ -17,8 +17,9 @@ pub const NAME: &str = "vrchat-user-ban";
 
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME).description("Bans a VRChat user from the configured group").add_option(
-        CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...) to ban")
-            .required(true),
+        CreateCommandOption::new(CommandOptionType::String, "vrchat-user", "The VRChat user id (usr_...) to ban")
+            .required(true)
+            .set_autocomplete(true),
     ).add_option(CreateCommandOption::new(
         CommandOptionType::Boolean,
         "tag-immediately",
@@ -30,9 +31,9 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     super::defer(ctx, command).await?;
 
     let options = command.data.options();
-    let resolved = options.iter().find(|o| o.name == "vrchat-user-id").map(|o| o.value.clone());
+    let resolved = options.iter().find(|o| o.name == "vrchat-user").map(|o| o.value.clone());
     let Some(ResolvedValue::String(target_id)) = resolved else {
-        return super::reply_ephemeral(ctx, command, "A `vrchat-user-id` option is required.").await;
+        return super::reply_ephemeral(ctx, command, "A `vrchat-user` option is required.").await;
     };
     let tag_immediately = options.iter().find(|o| o.name == "tag-immediately")
         .and_then(|o| match o.value { ResolvedValue::Boolean(value) => Some(value), _ => None })

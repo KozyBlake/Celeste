@@ -4,8 +4,7 @@
 //! `scarlet_core::watched_entities::WatchedEntities`. See
 //! [`super::watched_user`]/[`super::watched_avatar`] for the thin
 //! per-entity-kind wrappers, and [`super::watched_group`]'s docs for the
-//! simplifications (no autocomplete,
-//! `entity-priority`'s `-100..=100` range not enforced at the Discord-option
+//! simplifications (`entity-priority`'s `-100..=100` range not enforced at the Discord-option
 //! level).
 //!
 //! Ported subcommands: `list`, `add`, `remove`, `view`, `set-critical`,
@@ -15,8 +14,9 @@
 //! `remove` here (unlike `watched-group`'s `delete-watched-group`).
 
 use serenity::builder::{
-    CreateActionRow, CreateAttachment, CreateCommand, CreateCommandOption, CreateInputText,
-    CreateInteractionResponse, CreateInteractionResponseFollowup, CreateModal,
+    CreateActionRow, CreateAttachment, CreateAutocompleteResponse, CreateCommand,
+    CreateCommandOption, CreateInputText, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, CreateModal,
 };
 use serenity::client::Context;
 use serenity::model::application::{
@@ -121,6 +121,7 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
             kind.id_option_description(),
         )
         .required(true)
+        .set_autocomplete(true)
     };
 
     CreateCommand::new(name)
@@ -319,6 +320,51 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
                     .required(true),
             ),
         )
+}
+
+pub(crate) async fn autocomplete(
+    ctx: &Context,
+    command: &CommandInteraction,
+    entities: std::sync::Arc<WatchedEntities>,
+    kind: EntityKind,
+) -> serenity::Result<()> {
+    let query = command.data.autocomplete().map(|option| option.value.trim().to_lowercase()).unwrap_or_default();
+    let client = {
+        let slot = ctx.data.read().await.get::<crate::data::VrChatClientKey>().cloned();
+        match slot { Some(slot) => slot.read().await.clone(), None => None }
+    };
+    let mut response = CreateAutocompleteResponse::new();
+    let mut choices = 0usize;
+    for entity in entities.get_all() {
+        if !query.is_empty() && !entity.id.to_lowercase().contains(&query) {
+            let name = match &client {
+                Some(client) => kind.fetch_name(client, &entity.id).await,
+                None => None,
+            };
+            if !name.as_deref().is_some_and(|name| name.to_lowercase().contains(&query)) {
+                continue;
+            }
+            let name = name.unwrap_or_else(|| entity.id.clone());
+            response = response.add_string_choice(
+                format!("{name} ({})", entity.id).chars().take(100).collect::<String>(),
+                entity.id,
+            );
+        } else {
+            let name = match &client {
+                Some(client) => kind.fetch_name(client, &entity.id).await,
+                None => None,
+            }.unwrap_or_else(|| entity.id.clone());
+            response = response.add_string_choice(
+                format!("{name} ({})", entity.id).chars().take(100).collect::<String>(),
+                entity.id,
+            );
+        }
+        choices += 1;
+        if choices >= 25 {
+            break;
+        }
+    }
+    command.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response)).await
 }
 
 fn find_string<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a str> {

@@ -31,7 +31,7 @@ pub fn register() -> CreateCommand {
             CommandOptionType::String,
             "vrchat-user",
             "The VRChat user id (usr_...) to unlink",
-        ))
+        ).set_autocomplete(true))
 }
 
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
@@ -94,4 +94,3 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 
     super::reply_ephemeral(ctx, command, &lines.join("\n")).await
 }
-

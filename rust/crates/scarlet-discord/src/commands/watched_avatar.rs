@@ -21,3 +21,13 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     };
     super::watched_entity::run_generic(ctx, command, entities, EntityKind::Avatar).await
 }
+
+pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
+    let entities = { ctx.data.read().await.get::<crate::data::WatchedAvatarsKey>().cloned() };
+    match entities {
+        Some(entities) => super::watched_entity::autocomplete(ctx, command, entities, EntityKind::Avatar).await,
+        None => command.create_response(&ctx.http, serenity::builder::CreateInteractionResponse::Autocomplete(
+            serenity::builder::CreateAutocompleteResponse::new(),
+        )).await,
+    }
+}

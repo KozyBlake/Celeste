@@ -14,8 +14,7 @@
 //! implementation parameterized by which [`scarlet_core::staff_list::StaffList`]
 //! and display name to use, rather than duplicating the command body.
 //!
-//! **Simplified**: `vrchat-user-id`/`vrchat-role-id` are plain string
-//! options rather than Java's autocomplete-resolved
+//! `vrchat-user`/`vrchat-role` use Java-compatible live autocomplete for
 //! `io.github.vrchatapi.model.User`/`GroupRole` (see the `commands` module
 //! docs). `list` renders each entry as one text line via
 //! [`super::paginate_on_lines`] instead of Java's paginated per-user embeds
@@ -57,8 +56,9 @@ pub(crate) fn register_generic(name: &str, description: &str) -> CreateCommand {
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "add", "Adds a user to this list")
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)")
-                        .required(true),
+                    CreateCommandOption::new(CommandOptionType::String, "vrchat-user", "The VRChat user id (usr_...)")
+                        .required(true)
+                        .set_autocomplete(true),
                 )
                 .add_sub_option(CreateCommandOption::new(
                     CommandOptionType::User,
@@ -67,21 +67,22 @@ pub(crate) fn register_generic(name: &str, description: &str) -> CreateCommand {
                 ))
                 .add_sub_option(CreateCommandOption::new(
                     CommandOptionType::String,
-                    "vrchat-role-id",
+                    "vrchat-role",
                     "Optional VRChat group role id (grol_...) to also grant",
-                )),
+                ).set_autocomplete(true)),
         )
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "delete", "Removes a user from this list")
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)")
-                        .required(true),
+                    CreateCommandOption::new(CommandOptionType::String, "vrchat-user", "The VRChat user id (usr_...)")
+                        .required(true)
+                        .set_autocomplete(true),
                 )
                 .add_sub_option(CreateCommandOption::new(
                     CommandOptionType::String,
-                    "vrchat-role-id",
+                    "vrchat-role",
                     "Optional VRChat group role id (grol_...) to also revoke",
-                )),
+                ).set_autocomplete(true)),
         )
 }
 
@@ -186,14 +187,14 @@ async fn run_add(
     list: &StaffList,
     info_name: &str,
 ) -> serenity::Result<()> {
-    let Some(user_id) = find_string(sub_options, "vrchat-user-id") else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-user-id` is required.").await;
+    let Some(user_id) = find_string(sub_options, "vrchat-user") else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-user` is required.").await;
     };
     let discord_user = sub_options.iter().find(|o| o.name == "discord-user").and_then(|o| match &o.value {
         ResolvedValue::User(user, _) => Some(*user),
         _ => None,
     });
-    let role_id = find_string(sub_options, "vrchat-role-id");
+    let role_id = find_string(sub_options, "vrchat-role");
 
     let context = match super::vrchat_context(ctx).await {
         Ok(context) => context,
@@ -248,10 +249,10 @@ async fn run_delete(
     list: &StaffList,
     info_name: &str,
 ) -> serenity::Result<()> {
-    let Some(user_id) = find_string(sub_options, "vrchat-user-id") else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-user-id` is required.").await;
+    let Some(user_id) = find_string(sub_options, "vrchat-user") else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-user` is required.").await;
     };
-    let role_id = find_string(sub_options, "vrchat-role-id");
+    let role_id = find_string(sub_options, "vrchat-role");
 
     let context = super::vrchat_context(ctx).await.ok();
 

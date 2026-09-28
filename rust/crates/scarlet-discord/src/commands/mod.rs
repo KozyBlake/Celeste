@@ -41,6 +41,7 @@ pub mod unlink_vrchat_account;
 pub mod unlink_vrchat_account_for;
 pub mod version;
 pub mod vrchat_group;
+pub mod vrchat_autocomplete;
 pub mod vrchat_search;
 pub mod vrchat_user_ban;
 pub mod vrchat_user_info;
@@ -397,6 +398,17 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
         moderation_tags::NAME => moderation_tags::autocomplete(ctx, command).await,
         config_set::NAME => config_set::autocomplete(ctx, command).await,
         discord_permissions::NAME => discord_permissions::autocomplete(ctx, command).await,
+        vrchat_user_ban::NAME | vrchat_user_unban::NAME | vrchat_user_info::NAME
+        | staff_list::NAME | secret_staff_list::NAME | watched_group::NAME
+        | vrchat_group::NAME | unlink_vrchat_account_for::NAME => {
+            vrchat_autocomplete::respond(ctx, command).await
+        }
+        moderation_history::MODERATION_LOG_NAME | moderation_history::QUERY_TARGET_NAME
+        | moderation_history::QUERY_ACTOR_NAME | moderation_history::ACTOR_SUMMARY_NAME => {
+            vrchat_autocomplete::respond(ctx, command).await
+        }
+        watched_user::NAME => watched_user::autocomplete(ctx, command).await,
+        watched_avatar::NAME => watched_avatar::autocomplete(ctx, command).await,
         _ => command
             .create_response(
                 &ctx.http,

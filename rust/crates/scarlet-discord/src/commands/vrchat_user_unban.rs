@@ -11,8 +11,9 @@ pub const NAME: &str = "vrchat-user-unban";
 
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME).description("Unbans a VRChat user from the configured group").add_option(
-        CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...) to unban")
-            .required(true),
+        CreateCommandOption::new(CommandOptionType::String, "vrchat-user", "The VRChat user id (usr_...) to unban")
+            .required(true)
+            .set_autocomplete(true),
     )
 }
 
@@ -20,9 +21,9 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     super::defer(ctx, command).await?;
 
     let options = command.data.options();
-    let resolved = options.iter().find(|o| o.name == "vrchat-user-id").map(|o| o.value.clone());
+    let resolved = options.iter().find(|o| o.name == "vrchat-user").map(|o| o.value.clone());
     let Some(ResolvedValue::String(target_id)) = resolved else {
-        return super::reply_ephemeral(ctx, command, "A `vrchat-user-id` option is required.").await;
+        return super::reply_ephemeral(ctx, command, "A `vrchat-user` option is required.").await;
     };
 
     // Same implementation as the ban path, with `ban: false` — see

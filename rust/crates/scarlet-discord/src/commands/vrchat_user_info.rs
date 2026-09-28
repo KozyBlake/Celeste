@@ -1,6 +1,6 @@
 //! Port of `ScarletDiscordCommands.vrchatUserInfo`.
 //!
-//! **Simplified**: takes a plain VRChat user id string (`vrchat-user-id`)
+//! Takes Java's VRChat user id string (`vrchat-user`) with live autocomplete
 //! rather than Java's autocomplete-resolved `io.github.vrchatapi.model.User`
 //! option — live-search-as-you-type autocomplete is a separate feature
 //! (interaction autocomplete handling) not wired up yet, see the
@@ -19,8 +19,9 @@ pub const NAME: &str = "vrchat-user-info";
 
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME).description("Shows Celeste's internal metadata for a VRChat user").add_option(
-        CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)")
-            .required(true),
+        CreateCommandOption::new(CommandOptionType::String, "vrchat-user", "The VRChat user id (usr_...)")
+            .required(true)
+            .set_autocomplete(true),
     )
 }
 
@@ -28,9 +29,9 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     super::defer(ctx, command).await?;
 
     let options = command.data.options();
-    let resolved = options.iter().find(|o| o.name == "vrchat-user-id").map(|o| o.value.clone());
+    let resolved = options.iter().find(|o| o.name == "vrchat-user").map(|o| o.value.clone());
     let Some(ResolvedValue::String(vrc_id)) = resolved else {
-        return super::reply_ephemeral(ctx, command, "A `vrchat-user-id` option is required.").await;
+        return super::reply_ephemeral(ctx, command, "A `vrchat-user` option is required.").await;
     };
     let vrc_id = vrc_id.to_string();
 

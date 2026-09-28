@@ -45,6 +45,7 @@ fn group_id_option() -> CreateCommandOption {
         "The VRChat group id (grp_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX)",
     )
     .required(true)
+    .set_autocomplete(true)
 }
 
 fn group_type_option(name: &str) -> CreateCommandOption {

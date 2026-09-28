@@ -25,6 +25,7 @@ fn user_option() -> CreateCommandOption {
         "The VRChat user id (usr_...)",
     )
     .required(true)
+    .set_autocomplete(true)
 }
 
 fn days_option() -> CreateCommandOption {

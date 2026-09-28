@@ -9,8 +9,8 @@
 //! access, roles, region, content flags, avatar gate, create/cancel buttons,
 //! and the additional-options modal.
 //!
-//! **Simplified**: `vrchat-user-id`/`vrchat-role-id`/`post-role-id` are
-//! plain string options rather than Java's autocomplete-resolved
+//! `vrchat-user`/`vrchat-role` use Java-compatible autocomplete;
+//! `post-role-id` remains a plain string rather than Java's autocomplete-resolved
 //! `io.github.vrchatapi.model.User`/`GroupRole` (see the `commands` module
 //! docs). `search-members`/`list-bans`/`list-invites`/`list-join-requests`/
 //! `list-posts` render each item as plain text instead of Java's paginated
@@ -59,16 +59,18 @@ pub fn register() -> CreateCommand {
     let user_and_role_options = [
         CreateCommandOption::new(
             CommandOptionType::String,
-            "vrchat-user-id",
+            "vrchat-user",
             "The VRChat user id (usr_...)",
         )
-        .required(true),
+        .required(true)
+        .set_autocomplete(true),
         CreateCommandOption::new(
             CommandOptionType::String,
-            "vrchat-role-id",
+            "vrchat-role",
             "The VRChat group role id (grol_...)",
         )
-        .required(true),
+        .required(true)
+        .set_autocomplete(true),
     ];
 
     let mut command = CreateCommand::new(NAME).description("Manages the configured VRChat group");
@@ -303,7 +305,7 @@ pub fn register() -> CreateCommand {
         .add_sub_option(
             CreateCommandOption::new(
                 CommandOptionType::String,
-                "vrchat-user-id",
+                "vrchat-user",
                 "The VRChat user id (usr_...)",
             )
             .required(true),
@@ -318,7 +320,7 @@ pub fn register() -> CreateCommand {
         .add_sub_option(
             CreateCommandOption::new(
                 CommandOptionType::String,
-                "vrchat-user-id",
+                "vrchat-user",
                 "The VRChat user id (usr_...)",
             )
             .required(true),
@@ -580,13 +582,13 @@ async fn role_change(
     add: bool,
 ) -> serenity::Result<()> {
     let (Some(user_id), Some(role_id)) = (
-        find_string(sub_options, "vrchat-user-id"),
-        find_string(sub_options, "vrchat-role-id"),
+        find_string(sub_options, "vrchat-user"),
+        find_string(sub_options, "vrchat-role"),
     ) else {
         return super::reply_ephemeral(
             ctx,
             command,
-            "`vrchat-user-id` and `vrchat-role-id` are both required.",
+            "`vrchat-user` and `vrchat-role` are both required.",
         )
         .await;
     };
@@ -1195,8 +1197,8 @@ async fn transfer_check(
     command: &CommandInteraction,
     sub_options: &[ResolvedOption<'_>],
 ) -> serenity::Result<()> {
-    let Some(user_id) = find_string(sub_options, "vrchat-user-id") else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-user-id` is required.").await;
+    let Some(user_id) = find_string(sub_options, "vrchat-user") else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-user` is required.").await;
     };
 
     let context = match super::moderation_context(ctx, command, PERMISSION_ALL).await {
@@ -1262,13 +1264,13 @@ async fn transfer_start(
     sub_options: &[ResolvedOption<'_>],
 ) -> serenity::Result<()> {
     let (Some(user_id), Some(confirm_group_id)) = (
-        find_string(sub_options, "vrchat-user-id"),
+        find_string(sub_options, "vrchat-user"),
         find_string(sub_options, "confirm-group-id"),
     ) else {
         return super::reply_ephemeral(
             ctx,
             command,
-            "`vrchat-user-id` and `confirm-group-id` are both required.",
+            "`vrchat-user` and `confirm-group-id` are both required.",
         )
         .await;
     };
