@@ -22,6 +22,7 @@ pub mod discord_member_action;
 pub mod export_log;
 pub mod set_event_channel;
 pub mod set_tts_voice;
+pub mod set_voice_channel;
 pub mod server_config;
 pub mod settings;
 pub mod ticket_config;
@@ -205,6 +206,7 @@ pub async fn register_global_commands(ctx: &Context) {
         set_event_channel::register(set_event_channel::RouteKind::SecretAudit),
         set_event_channel::register(set_event_channel::RouteKind::SecretExtended),
         set_tts_voice::register(),
+        set_voice_channel::register(),
         aux_webhooks::register(),
         aux_webhooks::register_assignment(),
         server_config::register_channel(server_config::ChannelSetting::Training),
@@ -266,6 +268,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         set_event_channel::SECRET_AUDIT_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::SecretAudit).await,
         set_event_channel::SECRET_EXTENDED_NAME => set_event_channel::run(ctx, command, set_event_channel::RouteKind::SecretExtended).await,
         set_tts_voice::NAME => set_tts_voice::run(ctx, command).await,
+        set_voice_channel::NAME => set_voice_channel::run(ctx, command).await,
         aux_webhooks::NAME => aux_webhooks::run(ctx, command).await,
         aux_webhooks::ASSIGN_NAME => aux_webhooks::run_assignment(ctx, command).await,
         server_config::TRAINING_NAME => server_config::run_channel(ctx, command, server_config::ChannelSetting::Training).await,
