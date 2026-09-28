@@ -874,6 +874,18 @@ async fn create_instance(
                 .as_deref()
                 .or(instance.id.as_deref())
                 .unwrap_or("unknown");
+            if let Some(target_id) = instance.id.as_deref().or(instance.instance_id.as_deref()) {
+                let pending = {
+                    ctx.data.read().await
+                        .get::<crate::data::PendingModerationKey>()
+                        .cloned()
+                };
+                if let Some(pending) = pending {
+                    if let Err(error) = pending.add_pending("group.instance.create", target_id, &actor_id) {
+                        tracing::warn!(%error, target_id, "Could not save instance-creation attribution");
+                    }
+                }
+            }
             format!("Created [new VRChat instance](https://vrchat.com/home/launch?worldId={world_id}&instanceId={instance_id}).")
         }
         Err(err) => format!("Failed to create new instance: {err}"),
