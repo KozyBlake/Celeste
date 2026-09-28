@@ -442,7 +442,14 @@ impl ScarletEventListener {
             join.trust_rank = outcome.trust_rank;
             join.account_age = outcome.account_age;
             join.age_verification_status = outcome.age_verification_status.clone();
-            self.roster.join(&user_id, &display_name, false, move || ui.player_join(false, join));
+            self.roster.join(&user_id, &display_name, false, move || {
+                ui.player_join(false, join);
+                // Java's `playerJoin` re-sorts the table for every live
+                // update (`if (visible && !initialPreamble) { fireSort();
+                // updateStatusBar(); }`). Without it the row lands wherever
+                // it was inserted and stays there.
+                ui.fire_sort();
+            });
         }
 
         if Some(&user_id) == self.client_user_id.as_ref() {
@@ -497,7 +504,15 @@ impl ScarletEventListener {
         // leave is ignored.
         let ui = Arc::clone(&self.deps.ui);
         let (id_for_ui, name_for_ui) = (user_id.clone(), display_name.clone());
-        self.roster.leave(&user_id, preamble, move || ui.player_leave(preamble, &id_for_ui, &name_for_ui, timestamp));
+        self.roster.leave(&user_id, preamble, move || {
+            ui.player_leave(preamble, &id_for_ui, &name_for_ui, timestamp);
+            if !preamble {
+                // Same as the join path: this is what moves someone who has
+                // just left down below everyone still present, which the
+                // sort order has always specified but nothing triggered.
+                ui.fire_sort();
+            }
+        });
 
         if !preamble && self.is_in_group_instance {
             let location = self.client_location.clone().unwrap_or_default();

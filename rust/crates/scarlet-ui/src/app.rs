@@ -182,6 +182,11 @@ pub struct ScarletApp {
     /// Moderation/Notifications/Discord/Integrations/System) instead of one
     /// long flat list of ~90 settings.
     settings_category: SettingCategory,
+    /// The "Import Groups (URL)" prompt — Java asks for the URL with a
+    /// modal input box; this is the same question as an egui window.
+    import_groups_url_open: bool,
+    import_groups_url: String,
+    import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
 }
 
 impl ScarletApp {
@@ -284,6 +289,9 @@ impl ScarletApp {
             settings_edit_buffers: std::collections::HashMap::new(),
             column_order: ColumnId::ALL.to_vec(),
             settings_category: SettingCategory::General,
+            import_groups_url_open: false,
+            import_groups_url: String::new(),
+            import_groups_rx: None,
         }
     }
 
@@ -310,11 +318,12 @@ impl ScarletApp {
             if ui.button("Create Instance").clicked() {
                 self.state.append_cli_output("Create Instance: not wired up yet (needs the VRChat instance-creation flow).");
             }
-            if ui.button("Import Groups (URL)").clicked() {
-                self.state.append_cli_output("Import Groups (URL): not wired up yet.");
+            if ui.button("Import Groups (URL)").on_hover_text("Import watched groups from a CSV or JSON URL").clicked() {
+                self.import_groups_url_open = true;
+                self.import_groups_url.clear();
             }
-            if ui.button("Import Groups (File)").clicked() {
-                self.state.append_cli_output("Import Groups (File): not wired up yet.");
+            if ui.button("Import Groups (File)").on_hover_text("Import watched groups from a CSV or JSON file").clicked() {
+                self.import_groups_from_file();
             }
             if ui.button("Sync Discord").clicked() {
                 self.state.append_cli_output("Sync Discord: not wired up yet.");
@@ -464,6 +473,7 @@ impl ScarletApp {
                 .body(|mut body| {
                     for player in &players {
                         body.row(20.0, |mut row| {
+                            let departed = player.left.is_some();
                             for column in &column_order {
                                 row.col(|ui| {
                                     // One line per row: anything too long is
@@ -471,6 +481,15 @@ impl ScarletApp {
                                     // in full on hover, instead of wrapping
                                     // and pushing the row's height out.
                                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                    if departed {
+                                        // Someone who has left stays listed
+                                        // (their history is the point) but
+                                        // reads as past tense: sorted below
+                                        // everyone present, and faded so the
+                                        // live roster is what the eye lands
+                                        // on.
+                                        ui.set_opacity(0.45);
+                                    }
                                     self.render_cell(ui, player, *column);
                                 });
                             }
@@ -482,6 +501,122 @@ impl ScarletApp {
         if let Some((from, to)) = swap {
             if from != to && from < self.column_order.len() && to < self.column_order.len() {
                 self.column_order.swap(from, to);
+            }
+        }
+    }
+
+    /// Port of `ScarletUI.importWG(true)`: pick a `.csv` or `.json` file
+    /// and import it over the current watched groups.
+    fn import_groups_from_file(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Import watched groups")
+            .add_filter("CSV or JSON", &["csv", "json"])
+            .pick_file()
+        else {
+            self.state.append_cli_output("Import groups: canceled.");
+            return;
+        };
+        let contents = match std::fs::read(&path) {
+            Ok(contents) => contents,
+            Err(err) => {
+                self.state.append_cli_output(format!("Import groups: could not read {}: {err}", path.display()));
+                return;
+            }
+        };
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        self.apply_group_import(&extension, &contents, &path.display().to_string());
+    }
+
+    /// Port of `ScarletUI.importWG(false)`: fetch the CSV/JSON from a URL
+    /// and import it. The fetch goes through the same public-only guard as
+    /// every other user-supplied URL (Java's `HttpURLInputStream.PUBLIC_ONLY`),
+    /// so it can't be pointed at something on the local network.
+    fn import_groups_from_url(&mut self, url: String) {
+        // Java's own branch picks the format from the URL text.
+        let lower = url.to_ascii_lowercase();
+        let extension = if lower.contains(".csv") {
+            "csv"
+        } else if lower.contains(".json") {
+            "json"
+        } else {
+            self.state.append_cli_output("Import groups: unrecognized file type (expected .csv or .json in the URL).");
+            return;
+        };
+
+        self.state.append_cli_output(format!("Import groups: fetching {url}..."));
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.runtime_handle.spawn(async move {
+            // 8 MiB is far beyond any real watched-group list and keeps a
+            // hostile response from exhausting memory.
+            let result = scarlet_discord::url_guard::download_public_text(&url, 8 * 1024 * 1024).await;
+            let _ = tx.send(result);
+        });
+        self.import_groups_rx = Some((extension.to_string(), rx));
+    }
+
+    /// Applies a fetched or read import, whichever format it is.
+    fn apply_group_import(&mut self, extension: &str, contents: &[u8], source: &str) {
+        let result = match extension {
+            // Java imports with overwrite = true from both paths.
+            "csv" => self.watched_groups.import_legacy_csv(contents, true),
+            "json" => self.watched_groups.import_json(contents, true),
+            other => {
+                self.state.append_cli_output(format!("Import groups: unrecognized file type \"{other}\"."));
+                return;
+            }
+        };
+        match result {
+            Ok(count) => self.state.append_cli_output(format!("Imported {count} watched group(s) from {source}.")),
+            Err(err) => self.state.append_cli_output(format!("Import groups failed ({source}): {err}")),
+        }
+    }
+
+    /// The URL question, and the result of a fetch started by it.
+    fn import_groups_windows(&mut self, ctx: &egui::Context) {
+        if self.import_groups_url_open {
+            let mut open = true;
+            let mut submit = false;
+            egui::Window::new("Import watched groups from a URL")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label("URL of a CSV or JSON watched-group list:");
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut self.import_groups_url).desired_width(420.0).hint_text("https://..."),
+                    );
+                    ui.horizontal(|ui| {
+                        submit = ui.button("Import").clicked()
+                            || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if ui.button("Cancel").clicked() {
+                            self.import_groups_url.clear();
+                            self.import_groups_url_open = false;
+                        }
+                    });
+                });
+            if !open {
+                self.import_groups_url_open = false;
+            }
+            if submit {
+                let url = self.import_groups_url.trim().to_string();
+                self.import_groups_url_open = false;
+                self.import_groups_url.clear();
+                if url.is_empty() {
+                    self.state.append_cli_output("Import groups: canceled.");
+                } else {
+                    self.import_groups_from_url(url);
+                }
+            }
+        }
+
+        if let Some((extension, rx)) = &self.import_groups_rx {
+            if let Ok(result) = rx.try_recv() {
+                let extension = extension.clone();
+                self.import_groups_rx = None;
+                match result {
+                    Ok(text) => self.apply_group_import(&extension, text.as_bytes(), "the URL"),
+                    Err(err) => self.state.append_cli_output(format!("Import groups failed: {err}")),
+                }
             }
         }
     }
@@ -779,6 +914,8 @@ impl eframe::App for ScarletApp {
                 }
             });
         });
+
+        self.import_groups_windows(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Instance => self.instance_tab(ui),

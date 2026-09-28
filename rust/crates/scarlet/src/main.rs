@@ -29,15 +29,31 @@ use std::sync::Arc;
 use scarlet_core::settings::Settings;
 
 fn main() -> anyhow::Result<()> {
-    let data_dir = std::env::var_os("SCARLET_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // Where Scarlet's data lives. This used to fall back to the process's
+    // working directory, which is why running the binary from a checkout
+    // scattered settings.json, secure-prefs.json, logs/ and backups/ into
+    // it — and why a run from a different directory started blank. Java
+    // resolves a per-user data directory instead; `scarlet_core::paths`
+    // ports that, and adds the "ask on a first run" step.
+    let resolved = scarlet_core::paths::resolve_data_dir();
+    let headless = scarlet_ui::platform::is_headless();
+    let data_dir = match (&resolved.source, headless) {
+        (scarlet_core::paths::DataDirSource::FirstRun, false) => {
+            scarlet_ui::data_dir_prompt::ask_where_to_store_data(&resolved.path)
+        }
+        _ => resolved.path.clone(),
+    };
     std::fs::create_dir_all(&data_dir)?;
 
     let _log_guard = scarlet_core::log::init(&data_dir)?;
 
     tracing::info!("App: {} {}", scarlet_core::identity::APP_NAME, scarlet_core::identity::VERSION);
-    tracing::info!("Data folder resolved to: {}", data_dir.display());
+    tracing::info!("Data folder resolved to: {} ({:?})", data_dir.display(), resolved.source);
+    for other in &resolved.other_candidates {
+        // Java prompts when a config exists in more than one known
+        // location; at minimum, say so rather than silently preferring one.
+        tracing::warn!("Another Scarlet config also exists at {} - it is not being used", other.display());
+    }
 
     let settings = Arc::new(Settings::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(scarlet_core::identity::VERSION) {
@@ -201,7 +217,7 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    if scarlet_ui::platform::is_headless() {
+    if headless {
         tracing::info!("No display detected; running headless. Ctrl+C to exit.");
         // Headless can't run the interactive setup wizard (no window to show
         // it in), so — matching a scheduled/unattended Java run — connect

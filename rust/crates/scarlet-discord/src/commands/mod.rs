@@ -169,6 +169,45 @@ pub(crate) async fn watched_remove_menu(
 /// registration can take up to an hour to propagate on Discord's side;
 /// swap to per-guild registration during development if faster iteration
 /// is needed (not done here to keep this skeleton simple).
+/// Removes any guild-scoped copies of Scarlet's commands from the
+/// configured guild.
+///
+/// Both Java (`jda.upsertCommand`) and this port register commands
+/// **globally**, so a guild-scoped copy can only be a leftover from an
+/// older build that registered them per-guild. Discord lists guild and
+/// global commands side by side, which is why the server showed two of
+/// everything — two `/config-info`, two `/discord-ban`, and so on.
+///
+/// This runs on every connect and is a no-op once the guild is clean.
+pub async fn clear_stale_guild_commands(ctx: &Context) {
+    let guild_id = {
+        let data = ctx.data.read().await;
+        let Some(settings) = data.get::<crate::data::SettingsKey>().cloned() else { return };
+        drop(data);
+        scarlet_core::settings::registry::registry_string_encrypted(settings.encrypted.clone(), "discord.guild_id")
+            .get_or_null()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .map(serenity::model::id::GuildId::new)
+    };
+    let Some(guild_id) = guild_id else { return };
+
+    match guild_id.get_commands(&ctx.http).await {
+        Ok(existing) if existing.is_empty() => {}
+        Ok(existing) => {
+            let names: Vec<&str> = existing.iter().map(|command| command.name.as_str()).collect();
+            tracing::info!(
+                "Removing {} stale guild-scoped command(s) duplicating the global set: {}",
+                existing.len(),
+                names.join(", ")
+            );
+            if let Err(err) = guild_id.set_commands(&ctx.http, Vec::new()).await {
+                tracing::warn!("Could not clear guild-scoped commands: {err}");
+            }
+        }
+        Err(err) => tracing::debug!("Could not list guild-scoped commands: {err}"),
+    }
+}
+
 pub async fn register_global_commands(ctx: &Context) {
     let mut commands = vec![
         version::register(),

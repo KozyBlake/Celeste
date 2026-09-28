@@ -18,4 +18,5 @@ pub mod events;
 pub mod handler;
 pub mod interactions;
 pub mod token;
+pub mod url_guard;
 pub mod voice_tts;

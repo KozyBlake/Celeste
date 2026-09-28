@@ -20,6 +20,7 @@
 //! sync).
 
 pub mod app;
+pub mod data_dir_prompt;
 pub mod platform;
 pub mod setup;
 pub mod state;

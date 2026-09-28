@@ -313,13 +313,29 @@ impl TtsSinkAdapter {
         TtsSinkAdapter { service, settings, discord }
     }
 
+    /// Port of `TtsService.playPreparedAudio`'s routing decision.
+    ///
+    /// `tts_use_default_audio_device` is a *route* switch, not a volume
+    /// knob: on, the announcement plays on this machine's default output
+    /// device; off, it goes to the Discord voice channel instead. This used
+    /// to do both at once regardless of the setting, so turning it off
+    /// changed nothing audible — which is what made the setting look
+    /// broken.
     fn speak_now(&self, marker: &str, text: &str) {
         let voice = self.settings.tts_voice_name.get();
-        if let Err(err) = self.service.submit(text, voice) {
-            tracing::debug!("TTS({marker}): {err}");
+        if self.settings.tts_use_default_audio_device.get() {
+            if let Err(err) = self.service.submit(text, voice) {
+                tracing::debug!("TTS({marker}): {err}");
+            }
+            return;
         }
-        if let Some(discord) = &self.discord {
-            discord.submit(text, &self.settings.tts_voice_name.get());
+        match &self.discord {
+            Some(discord) => discord.submit(text, &voice),
+            // Java logs exactly this and drops the utterance rather than
+            // falling back to the speakers, because "not the local device"
+            // is the thing the user asked for.
+            None => tracing::warn!("TTS({marker}): No audio output route available (Discord voice is not connected, and \
+                 \"use default audio device\" is off)"),
         }
     }
 }

@@ -17,6 +17,7 @@ pub mod meta;
 pub mod moderation_tags;
 pub mod names;
 pub mod pacer;
+pub mod paths;
 pub mod permission;
 pub mod pronoun_lists;
 pub mod pronoun_validator;

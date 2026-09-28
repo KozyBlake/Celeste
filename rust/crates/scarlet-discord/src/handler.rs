@@ -23,6 +23,7 @@ impl EventHandler for Handler {
             ready.user.id
         );
         commands::register_global_commands(&ctx).await;
+        commands::clear_stale_guild_commands(&ctx).await;
         reconnect_voice_channel(&ctx).await;
     }
 
