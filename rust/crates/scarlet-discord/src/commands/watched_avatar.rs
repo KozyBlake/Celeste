@@ -1,11 +1,6 @@
 //! Port of `ScarletDiscordCommands.WatchedAvatar_` (`@SlashCmd("watched-avatar")`).
 //! See [`super::watched_entity`] for the shared implementation.
-//!
-//! **Not ported**: Java gates this whole command behind
-//! `@FeatureGate("watched.avatars.enabled")` (registered only when that
-//! feature flag is on). No command-registration-time feature gating exists
-//! in this crate yet (every ported command registers unconditionally), so
-//! this always registers -- a minor parity gap, not a functional one.
+//! Registration is gated by Java's `watched.avatars.enabled` feature flag.
 
 use serenity::builder::CreateCommand;
 use serenity::client::Context;

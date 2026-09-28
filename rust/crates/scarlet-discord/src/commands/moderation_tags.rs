@@ -6,11 +6,12 @@
 //!
 //! **Simplified**: `list` renders as plain text via
 //! [`super::paginate_on_lines`] instead of Java's paginated per-tag embeds.
-//! `delete`'s `value` option is a plain string rather than Java's
-//! autocomplete-resolved choice list (see the `commands` module docs).
 //! Not gated (matches Java's `@DefaultPerms`-only `ModerationTags`).
 
-use serenity::builder::{CreateCommand, CreateCommandOption, CreateInteractionResponseFollowup};
+use serenity::builder::{
+    CreateAutocompleteResponse, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+    CreateInteractionResponseFollowup,
+};
 use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue};
 
@@ -49,9 +50,27 @@ pub fn register() -> CreateCommand {
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "delete", "Removes a custom moderation tag")
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::String, "value", "The internal id of the tag").required(true),
+                    CreateCommandOption::new(CommandOptionType::String, "value", "The internal id of the tag")
+                        .required(true)
+                        .set_autocomplete(true),
                 ),
         )
+}
+
+pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
+    let query = command.data.autocomplete().map(|option| option.value).unwrap_or_default();
+    let tags = { ctx.data.read().await.get::<ModerationTagsKey>().cloned() };
+    let mut response = CreateAutocompleteResponse::new();
+    if let Some(tags) = tags {
+        for tag in tags.search_tags(query, 25) {
+            let label = if tag.label.is_empty() { &tag.value } else { &tag.label };
+            response = response.add_string_choice(
+                format!("{label} ({})", tag.value).chars().take(100).collect::<String>(),
+                tag.value,
+            );
+        }
+    }
+    command.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response)).await
 }
 
 fn find_string<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a str> {

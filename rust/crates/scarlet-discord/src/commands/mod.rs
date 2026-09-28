@@ -242,12 +242,8 @@ pub fn all_commands() -> Vec<serenity::builder::CreateCommand> {
         link_vrchat_account::register(),
         watched_group::register(),
         watched_user::register(),
-        watched_avatar::register(),
         unlink_vrchat_account::register(),
         unlink_vrchat_account_for::register(),
-        discord_warn::register(),
-        discord_member_action::register(discord_member_action::MemberAction::Ban),
-        discord_member_action::register(discord_member_action::MemberAction::Kick),
         export_log::register(),
         set_event_channel::register(set_event_channel::RouteKind::Audit),
         set_event_channel::register(set_event_channel::RouteKind::Extended),
@@ -255,8 +251,6 @@ pub fn all_commands() -> Vec<serenity::builder::CreateCommand> {
         set_event_channel::register(set_event_channel::RouteKind::SecretExtended),
         set_tts_voice::register(),
         set_voice_channel::register(),
-        aux_webhooks::register(),
-        aux_webhooks::register_assignment(),
         server_config::register_channel(server_config::ChannelSetting::Training),
         server_config::register_channel(server_config::ChannelSetting::OpsAlert),
         server_config::register_channel(server_config::ChannelSetting::ActionLog),
@@ -268,6 +262,18 @@ pub fn all_commands() -> Vec<serenity::builder::CreateCommand> {
         ticket_config::register_message(),
         discord_permissions::register(),
     ];
+    if scarlet_core::features::watched_avatars_enabled() {
+        commands.push(watched_avatar::register());
+    }
+    if scarlet_core::features::discord_kick_ban_enabled() {
+        commands.push(discord_warn::register());
+        commands.push(discord_member_action::register(discord_member_action::MemberAction::Ban));
+        commands.push(discord_member_action::register(discord_member_action::MemberAction::Kick));
+    }
+    if scarlet_core::features::aux_webhooks_enabled() {
+        commands.push(aux_webhooks::register());
+        commands.push(aux_webhooks::register_assignment());
+    }
     if scarlet_core::features::animated_emoji_enabled() {
         commands.push(animated_emoji::register());
         commands.push(animated_emoji::register_message());
@@ -388,6 +394,7 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
     let result = match command.data.name.as_str() {
         settings::NAME => settings::autocomplete(ctx, command).await,
         tag::NAME => tag::autocomplete(ctx, command).await,
+        moderation_tags::NAME => moderation_tags::autocomplete(ctx, command).await,
         config_set::NAME => config_set::autocomplete(ctx, command).await,
         discord_permissions::NAME => discord_permissions::autocomplete(ctx, command).await,
         _ => command
