@@ -40,6 +40,11 @@ impl TypeMapKey for SettingsKey {
     type Value = Arc<scarlet_core::settings::Settings>;
 }
 
+pub struct AvatarSearchKey;
+impl TypeMapKey for AvatarSearchKey {
+    type Value = Arc<crate::avatar_search::AvatarSearch>;
+}
+
 /// Port of `Scarlet.staffList` (`staff_list.json`).
 pub struct StaffListKey;
 impl TypeMapKey for StaffListKey {
@@ -333,6 +338,7 @@ impl SharedState {
         data.insert::<HttpKey>(self.http);
         data.insert::<ScarletDataKey>(self.scarlet_data);
         data.insert::<SettingsKey>(self.settings);
+        data.insert::<AvatarSearchKey>(Arc::new(crate::avatar_search::AvatarSearch::default()));
         data.insert::<DiscordConfigKey>(self.discord_config);
         data.insert::<StaffListKey>(self.staff_list);
         data.insert::<SecretStaffListKey>(self.secret_staff_list);

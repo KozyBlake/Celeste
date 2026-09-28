@@ -558,6 +558,7 @@ impl Settings {
                 SettingCategory::Integrations,
                 vec![
                     "https://api.avtrdb.com/v2/avatar/search/vrcx".to_string(),
+                    "https://vrcavatarsearch.nekosunevr.co.uk/vrcx_search".to_string(),
                     "https://vrcx.vrcdb.com/avatars/Avatar/VRCX".to_string(),
                     "https://avatarwbvrcxsearch.worldbalancer.com/vrcx_search".to_string(),
                     "https://paw-api.amelia.fun/vrcx_search".to_string(),

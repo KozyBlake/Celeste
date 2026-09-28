@@ -3849,6 +3849,7 @@ dependencies = [
  "serenity",
  "sha2",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "uuid",
