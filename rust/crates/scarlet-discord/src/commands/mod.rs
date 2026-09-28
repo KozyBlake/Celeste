@@ -208,7 +208,14 @@ pub async fn clear_stale_guild_commands(ctx: &Context) {
     }
 }
 
-pub async fn register_global_commands(ctx: &Context) {
+/// Every slash command this build registers.
+///
+/// Split out from [`register_global_commands`] so the command surface
+/// can be inspected without a Discord connection — `command_surface_matches_java`
+/// below checks it against the Java build's own inventory, so a missing
+/// command is something the test names rather than something you notice
+/// in the client.
+pub fn all_commands() -> Vec<serenity::builder::CreateCommand> {
     let mut commands = vec![
         version::register(),
         config_info::register(),
@@ -263,6 +270,12 @@ pub async fn register_global_commands(ctx: &Context) {
         commands.push(animated_emoji::register());
         commands.push(animated_emoji::register_message());
     }
+    commands
+}
+
+pub async fn register_global_commands(ctx: &Context) {
+    let commands = all_commands();
+
     if let Err(err) =
         serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
     {
@@ -557,5 +570,164 @@ mod tests {
     #[test]
     fn empty_input_produces_no_pages() {
         assert!(paginate_on_lines("", 2000).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod command_surface_tests {
+    use super::*;
+
+    /// Every invocable command this build registers, as `"name sub group"`
+    /// paths — the same shape as `java_commands.txt`.
+    fn rust_command_leaves() -> std::collections::BTreeSet<String> {
+        let mut leaves = std::collections::BTreeSet::new();
+        for command in all_commands() {
+            let value = serde_json::to_value(&command).expect("a command serializes");
+            let Some(name) = value.get("name").and_then(|name| name.as_str()) else { continue };
+            // Message/user context commands (`type` 2 or 3) aren't slash
+            // commands and have no counterpart in the Java inventory.
+            if value.get("type").and_then(|kind| kind.as_u64()).is_some_and(|kind| kind != 1) {
+                continue;
+            }
+            collect(&mut leaves, name, value.get("options"));
+        }
+        leaves
+    }
+
+    /// Walks an options tree, recording a path for every leaf. Discord's
+    /// option types: 1 = sub-command, 2 = sub-command group.
+    fn collect(out: &mut std::collections::BTreeSet<String>, prefix: &str, options: Option<&serde_json::Value>) {
+        let children: Vec<&serde_json::Value> = options
+            .and_then(|options| options.as_array())
+            .map(|options| {
+                options
+                    .iter()
+                    .filter(|option| {
+                        matches!(option.get("type").and_then(serde_json::Value::as_u64), Some(1) | Some(2))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if children.is_empty() {
+            out.insert(prefix.to_string());
+            return;
+        }
+        for child in children {
+            let Some(name) = child.get("name").and_then(|name| name.as_str()) else { continue };
+            collect(out, &format!("{prefix} {name}"), child.get("options"));
+        }
+    }
+
+    fn java_command_leaves() -> std::collections::BTreeSet<String> {
+        include_str!("../../java_commands.txt")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Java commands this port deliberately does not have, each tied to a
+    /// subsystem that is out of scope (see PORTING.md's scope section). Any
+    /// *other* missing command is a gap, and the test below names it.
+    const DELIBERATELY_ABSENT: &[&str] = &[
+        // Report templates.
+        "config-set report-template download-report-template",
+        "config-set report-template edit-report-template",
+        "config-set report-template upload-report-template",
+        "config-set report-template view-report-template",
+        "config-set report-template view-report-template-format",
+        // Evidence submission.
+        "submit-evidence",
+        // Scheduling / calendar events, in full.
+        "schedule add",
+        "schedule cancel",
+        "schedule list",
+        "schedule new",
+        "schedule remove",
+        "schedule set-access",
+        "schedule set-active",
+        "schedule set-category",
+        "schedule set-close-after",
+        "schedule set-date",
+        "schedule set-description",
+        "schedule set-duration",
+        "schedule set-featured",
+        "schedule set-frequency",
+        "schedule set-guest-join-early",
+        "schedule set-host-join-early",
+        "schedule set-image",
+        "schedule set-languages",
+        "schedule set-max-pending",
+        "schedule set-mirror-on-discord",
+        "schedule set-notify-create",
+        "schedule set-overflow",
+        "schedule set-platforms",
+        "schedule set-roles",
+        "schedule set-tags",
+        "schedule set-time",
+        "schedule set-title",
+    ];
+
+    /// Java commands that *should* exist here and don't yet — a gap, not a
+    /// decision. Kept separate from the list above so "we chose not to" and
+    /// "we haven't got there" never blur together.
+    const NOT_YET_PORTED: &[(&str, &str)] = &[(
+        "server-restart update-now",
+        "Java writes the target version to scarlet.version and restarts into it, \
+         which works because its launcher fetches that version's jar. A native \
+         binary has no equivalent; an in-place self-updater would be a new \
+         subsystem rather than a port.",
+    )];
+
+    /// The one test that answers "what's still missing?" with a list instead
+    /// of a feeling. It fails when a Java command has no Rust counterpart
+    /// and isn't on the deliberately-absent list, and prints exactly which.
+    #[test]
+    fn command_surface_matches_java() {
+        let rust = rust_command_leaves();
+        let java = java_command_leaves();
+        let absent: std::collections::BTreeSet<&str> = DELIBERATELY_ABSENT.iter().copied().collect();
+
+        let known_gap: std::collections::BTreeSet<&str> =
+            NOT_YET_PORTED.iter().map(|(leaf, _)| *leaf).collect();
+
+        let missing: Vec<&String> = java
+            .iter()
+            .filter(|leaf| !rust.contains(*leaf) && !absent.contains(leaf.as_str()) && !known_gap.contains(leaf.as_str()))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "{} Java command(s) have no Rust counterpart and aren't accounted for:\n  {}\n\n\
+             (Ported {} of {} invocable Java commands; {} deliberately absent, {} known gaps.)",
+            missing.len(),
+            missing.iter().map(|leaf| leaf.as_str()).collect::<Vec<_>>().join("\n  "),
+            java.len() - absent.len() - known_gap.len(),
+            java.len(),
+            absent.len(),
+            known_gap.len(),
+        );
+
+        // A gap that has since been filled should be taken off the list,
+        // otherwise it stays "known" forever and nobody notices it landed.
+        let stale: Vec<&str> = known_gap.iter().copied().filter(|leaf| rust.contains(*leaf)).collect();
+        assert!(stale.is_empty(), "these are listed as not-yet-ported but are registered: {stale:?}");
+    }
+
+    /// The reverse direction: something registered here that Java has no
+    /// command for is either a deliberate addition or a typo in a command
+    /// name, and a typo is worth catching.
+    #[test]
+    fn no_unexpected_commands_beyond_javas_surface() {
+        let rust = rust_command_leaves();
+        let java = java_command_leaves();
+        // Java's `/scarlet-version` is this build's `/celeste-version`
+        // after the rename; nothing else should be new.
+        const EXPECTED_ADDITIONS: &[&str] = &["celeste-version", "scarlet-version"];
+        let extra: Vec<&String> =
+            rust.iter().filter(|leaf| !java.contains(*leaf) && !EXPECTED_ADDITIONS.contains(&leaf.as_str())).collect();
+        assert!(extra.is_empty(), "commands registered that Java doesn't have: {extra:?}");
     }
 }

@@ -7,7 +7,7 @@ use serenity::builder::{CreateCommand, CreateInteractionResponse, CreateInteract
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
 
-pub const NAME: &str = "scarlet-version";
+pub const NAME: &str = "celeste-version";
 
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME).description("Show the running Celeste version")

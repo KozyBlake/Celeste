@@ -1,0 +1,166 @@
+# Every invocable slash command in the Java build, generated from
+# ScarletDiscordCommands.java's @SlashCmd annotations (leaves only -
+# a group like `vrchat-group` is not itself invocable).
+#
+# `command_surface_matches_java` in commands/mod.rs checks the Rust
+# registration against this list, so anything missing is named rather
+# than felt.
+actor-moderation-summary
+aux-webhooks add
+aux-webhooks list
+aux-webhooks remove
+config-info
+config-set moderation-summary time-of-day
+config-set outstanding-moderation period-days
+config-set outstanding-moderation time-of-day
+config-set report-template download-report-template
+config-set report-template edit-report-template
+config-set report-template upload-report-template
+config-set report-template view-report-template
+config-set report-template view-report-template-format
+config-set suggested-moderation kick-count
+config-set suggested-moderation period-days
+discord-ban
+discord-kick
+discord-user-info
+discord-warn
+export-log
+link-vrchat-account
+moderation-log
+moderation-summary
+moderation-tags add
+moderation-tags delete
+moderation-tags list
+outstanding-moderation
+query-actor-history
+query-target-history
+schedule add
+schedule list
+schedule remove
+schedule set-access
+schedule set-active
+schedule set-category
+schedule set-close-after
+schedule set-date
+schedule set-description
+schedule set-duration
+schedule set-featured
+schedule set-frequency
+schedule set-guest-join-early
+schedule set-host-join-early
+schedule set-image
+schedule set-languages
+schedule set-max-pending
+schedule set-mirror-on-discord
+schedule set-notify-create
+schedule set-overflow
+schedule set-platforms
+schedule set-roles
+schedule set-tags
+schedule set-time
+schedule set-title
+secret-staff-list add
+secret-staff-list delete
+secret-staff-list list
+server-restart restart-now
+server-restart update-now
+set-audit-aux-webhooks
+set-audit-channel
+set-audit-ex-channel
+set-audit-secret-channel
+set-audit-secret-ex-channel
+set-discord-account-age-alert
+set-discord-action-log-channel
+set-ops-alert-channel
+set-ticket-age-verify-message
+set-ticket-tool-auto-response
+set-training-channel
+set-tts-voice
+set-verification-auto-invite
+set-voice-channel
+settings edit
+staff-list add
+staff-list delete
+staff-list list
+submit-evidence
+tag add
+tag remove
+unlink-vrchat-account
+unlink-vrchat-account-for
+vrchat-animated-emoji from-file
+vrchat-animated-emoji from-url
+vrchat-group add-role
+vrchat-group audit-types
+vrchat-group close-instance
+vrchat-group create-announcement
+vrchat-group create-post
+vrchat-group delete-announcement
+vrchat-group delete-post
+vrchat-group list-bans
+vrchat-group list-invites
+vrchat-group list-join-requests
+vrchat-group list-posts
+vrchat-group open-instance
+vrchat-group remove-role
+vrchat-group search-members
+vrchat-group transfer-cancel
+vrchat-group transfer-check
+vrchat-group transfer-start
+vrchat-group view-announcement
+vrchat-search avatar
+vrchat-search group
+vrchat-search user
+vrchat-search world
+vrchat-user-ban
+vrchat-user-ban-multi
+vrchat-user-info
+vrchat-user-unban
+vrchat-user-unban-multi
+watched-avatar add
+watched-avatar add-tag
+watched-avatar export
+watched-avatar import
+watched-avatar list
+watched-avatar remove
+watched-avatar remove-menu
+watched-avatar remove-tag
+watched-avatar set-critical
+watched-avatar set-message
+watched-avatar set-notes
+watched-avatar set-priority
+watched-avatar set-silent
+watched-avatar set-tags
+watched-avatar set-type
+watched-avatar view
+watched-group add
+watched-group add-tag
+watched-group delete-watched-group
+watched-group export
+watched-group import
+watched-group list
+watched-group remove-menu
+watched-group remove-tag
+watched-group set-critical
+watched-group set-message
+watched-group set-notes
+watched-group set-priority
+watched-group set-silent
+watched-group set-tags
+watched-group set-type
+watched-group view
+watched-user add
+watched-user add-tag
+watched-user export
+watched-user import
+watched-user list
+watched-user remove
+watched-user remove-menu
+watched-user remove-tag
+watched-user set-critical
+watched-user set-message
+watched-user set-notes
+watched-user set-priority
+watched-user set-silent
+watched-user set-tags
+watched-user set-type
+watched-user view
