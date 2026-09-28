@@ -59,6 +59,7 @@ fn main() -> anyhow::Result<()> {
     let shared = scarlet_discord::data::SharedState {
         vrchat_client: Arc::new(tokio::sync::RwLock::new(None)),
         http: discord_http.clone(),
+        discord_config: discord_config.clone(),
         scarlet_data: Arc::new(scarlet_core::data::ScarletData::open(&data_dir)),
         settings: settings.clone(),
         staff_list: Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json")),

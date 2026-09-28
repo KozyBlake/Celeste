@@ -304,6 +304,10 @@ pub struct SharedState {
     /// Filled in by `connect_and_serve` once the client exists; see
     /// [`SharedHttp`].
     pub http: SharedHttp,
+    /// One shared, live view of `discord_bot.json`. Commands mutate this
+    /// same instance that background emitters read, so routing changes take
+    /// effect immediately instead of only after a restart.
+    pub discord_config: Arc<DiscordConfigStore>,
     pub scarlet_data: Arc<scarlet_core::data::ScarletData>,
     pub settings: Arc<scarlet_core::settings::Settings>,
     pub staff_list: Arc<scarlet_core::staff_list::StaffList>,
@@ -316,12 +320,11 @@ pub struct SharedState {
 
 impl SharedState {
     pub fn insert_into(self, data: &mut TypeMap) {
-        let discord_config = Arc::new(DiscordConfigStore::open(&self.settings.data_dir));
         data.insert::<VrChatClientKey>(self.vrchat_client);
         data.insert::<HttpKey>(self.http);
         data.insert::<ScarletDataKey>(self.scarlet_data);
         data.insert::<SettingsKey>(self.settings);
-        data.insert::<DiscordConfigKey>(discord_config);
+        data.insert::<DiscordConfigKey>(self.discord_config);
         data.insert::<StaffListKey>(self.staff_list);
         data.insert::<SecretStaffListKey>(self.secret_staff_list);
         data.insert::<ModerationTagsKey>(self.moderation_tags);

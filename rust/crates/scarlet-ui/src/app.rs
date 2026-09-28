@@ -153,6 +153,7 @@ pub struct ScarletApp {
     /// See `scarlet_discord::data::SharedHttp` — shared with the event
     /// listener's audit emitter so both see the same connection.
     discord_http: scarlet_discord::data::SharedHttp,
+    discord_config: Arc<scarlet_discord::data::DiscordConfigStore>,
     /// Set when a background VRChat login stopped to ask for a two-factor
     /// code; drained in `update` to open the code prompt.
     two_factor_rx: Option<std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>>,
@@ -204,6 +205,7 @@ impl ScarletApp {
         let watched_avatars = shared.watched_avatars.clone();
         let vrchat_slot = shared.vrchat_client.clone();
         let discord_http = shared.http.clone();
+        let discord_config = shared.discord_config.clone();
         let settings = Some(shared.settings.clone());
 
         let mut pending_two_factor = None;
@@ -232,6 +234,7 @@ impl ScarletApp {
                     scarlet_discord::data::SharedState {
                         vrchat_client: vrchat_slot.clone(),
                         http: discord_http.clone(),
+                        discord_config: discord_config.clone(),
                         scarlet_data: scarlet_data.clone(),
                         settings: settings.clone(),
                         staff_list: staff_list.clone(),
@@ -258,6 +261,7 @@ impl ScarletApp {
             wizard,
             vrchat_slot,
             discord_http,
+            discord_config,
             two_factor_rx: pending_two_factor.take(),
             scarlet_data,
             staff_list,
@@ -688,6 +692,7 @@ impl eframe::App for ScarletApp {
                         scarlet_discord::data::SharedState {
                             vrchat_client: self.vrchat_slot.clone(),
                             http: self.discord_http.clone(),
+                            discord_config: self.discord_config.clone(),
                             scarlet_data: self.scarlet_data.clone(),
                             settings,
                             staff_list: self.staff_list.clone(),
