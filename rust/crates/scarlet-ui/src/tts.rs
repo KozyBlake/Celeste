@@ -48,7 +48,87 @@ impl Engine {
         }
     }
 
+    /// Port of `TtsService.playPreparedAudio` + `playViaSubprocess`
+    /// (`util/tts/TtsService.java:345-358`, `:400-415`).
+    ///
+    /// Java never lets the synthesizer play its own audio on Linux. It
+    /// writes a WAV and hands that to `pw-play`/`paplay`/`aplay`, because
+    /// those route through PipeWire/PulseAudio — so the announcement shows
+    /// up in the volume mixer and follows whichever output device the user
+    /// selected. eSpeak left to itself opens a backend of its own choosing
+    /// and ignores both, which is why TTS came out of the wrong device.
+    ///
+    /// Overridable with `CELESTE_TTS_PLAYER` (or `SCARLET_TTS_PLAYER`,
+    /// Java's name), which may include arguments. Returns `None` when no
+    /// player is available, and the caller then falls back to letting the
+    /// engine play directly, as Java falls back to Java Sound.
+    #[cfg(target_os = "linux")]
+    fn play_via_player(&self, text: &str, voice: &str) -> Option<std::io::Result<Child>> {
+        let Self::Espeak(engine) = self else {
+            // Only eSpeak can render to a file; spd-say and flite are
+            // handed the text and do their own playback.
+            return None;
+        };
+        let prefix = resolve_player_prefix()?;
+        let wav = std::env::temp_dir().join(format!(
+            "celeste-tts-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let mut synth = Command::new(engine);
+        synth.arg("-w").arg(&wav);
+        if !voice.trim().is_empty() {
+            let voice = voice.rsplit(['/', ':']).next().unwrap_or(voice);
+            synth.args(["-v", voice]);
+        }
+        let synthesized = synth
+            .arg(text)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match synthesized {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                tracing::warn!("TTS: the speech synthesizer exited with {status}");
+                let _ = std::fs::remove_file(&wav);
+                return None;
+            }
+            Err(err) => {
+                tracing::warn!("TTS: could not run the speech synthesizer: {err}");
+                return None;
+            }
+        }
+        if std::fs::metadata(&wav).map(|meta| meta.len()).unwrap_or(0) == 0 {
+            tracing::warn!("TTS: the speech synthesizer produced no audio");
+            let _ = std::fs::remove_file(&wav);
+            return None;
+        }
+        let (player, args) = prefix.split_first()?;
+        let mut command = Command::new(player);
+        command.args(args).arg(&wav);
+        let spawned = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        // The player reads the file as it goes, so cleanup waits for the
+        // clip to finish rather than racing it; the playback loop is serial
+        // so at most one of these is ever outstanding.
+        if spawned.is_err() {
+            let _ = std::fs::remove_file(&wav);
+        }
+        Some(spawned)
+    }
+
     fn spawn(&self, text: &str, voice: &str) -> std::io::Result<Child> {
+        #[cfg(target_os = "linux")]
+        if let Some(result) = self.play_via_player(text, voice) {
+            return result;
+        }
         let mut command = match self {
             Self::Espeak(path) => {
                 let mut command = Command::new(path);
@@ -98,6 +178,36 @@ impl Engine {
             .stderr(Stdio::null())
             .spawn()
     }
+}
+
+/// Port of `TtsService.resolvePlayerPrefix`. Java tries the
+/// `scarlet.tts.player` system property, then `SCARLET_TTS_PLAYER`, then
+/// `pw-play`, `paplay`, `aplay` in order. A Rust binary has no system
+/// properties, so the environment variable is the override — under Celeste's
+/// name first, with Java's still honoured so an existing launcher keeps
+/// working.
+#[cfg(target_os = "linux")]
+fn resolve_player_prefix() -> Option<Vec<String>> {
+    for name in ["CELESTE_TTS_PLAYER", "SCARLET_TTS_PLAYER"] {
+        if let Ok(value) = std::env::var(name) {
+            let parts: Vec<String> =
+                value.split_whitespace().map(str::to_string).collect();
+            if !parts.is_empty() {
+                return Some(parts);
+            }
+        }
+    }
+    for player in ["pw-play", "paplay", "aplay"] {
+        if let Some(path) = find_on_path(player) {
+            return Some(vec![path.to_string_lossy().into_owned()]);
+        }
+    }
+    tracing::warn!(
+        "TTS: no external audio player (pw-play/paplay/aplay) on PATH, so announcements \
+         will play on whatever device the synthesizer picks rather than your selected \
+         output (on Arch: `pacman -S libpipewire` for pw-play, or `libpulse` for paplay)"
+    );
+    None
 }
 
 enum Request {
@@ -262,6 +372,41 @@ fn is_executable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Java lets `scarlet.tts.player` / `SCARLET_TTS_PLAYER` override the
+    /// player, arguments included. Celeste's own variable wins, and Java's
+    /// is still honoured so an existing launcher keeps working.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_player_override_is_read_from_either_variable() {
+        // These run in-process, so keep the mutation tight and restore it.
+        let saved = (
+            std::env::var("CELESTE_TTS_PLAYER").ok(),
+            std::env::var("SCARLET_TTS_PLAYER").ok(),
+        );
+        std::env::remove_var("CELESTE_TTS_PLAYER");
+        std::env::set_var("SCARLET_TTS_PLAYER", "legacy-player --arg");
+        assert_eq!(
+            resolve_player_prefix(),
+            Some(vec!["legacy-player".to_string(), "--arg".to_string()])
+        );
+        std::env::set_var("CELESTE_TTS_PLAYER", "new-player");
+        assert_eq!(resolve_player_prefix(), Some(vec!["new-player".to_string()]));
+        // A blank value is not an override.
+        std::env::set_var("CELESTE_TTS_PLAYER", "   ");
+        std::env::remove_var("SCARLET_TTS_PLAYER");
+        let resolved = resolve_player_prefix();
+        assert_ne!(resolved, Some(vec!["   ".to_string()]));
+
+        std::env::remove_var("CELESTE_TTS_PLAYER");
+        std::env::remove_var("SCARLET_TTS_PLAYER");
+        if let Some(value) = saved.0 {
+            std::env::set_var("CELESTE_TTS_PLAYER", value);
+        }
+        if let Some(value) = saved.1 {
+            std::env::set_var("SCARLET_TTS_PLAYER", value);
+        }
+    }
+
     use super::*;
 
     #[test]
