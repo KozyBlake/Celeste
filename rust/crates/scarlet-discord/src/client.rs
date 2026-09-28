@@ -1,12 +1,11 @@
 //! Port target: the `JDABuilder` setup in `ScarletDiscordJDA`'s constructor
-//! (intents, event listener, cache flags, audio module config). DAVE voice
-//! E2EE (`LDaveSessionFactory`/`AudioModuleConfig.withDaveSessionFactory`)
-//! and voice support generally are not wired up yet — see
-//! `scarlet-dave`'s docs and PORTING.md; this only stands up the gateway
-//! connection and slash-command plumbing.
+//! (intents, event listener, cache flags, and audio module config). Discord
+//! voice uses Songbird 0.6's native DAVE E2EE implementation, replacing the
+//! Java fork's JNI-backed `LDaveSessionFactory` integration.
 
 use serenity::client::Client;
 use serenity::model::gateway::GatewayIntents;
+use songbird::SerenityInit;
 
 use crate::data::SharedState;
 use crate::handler::Handler;
@@ -20,6 +19,7 @@ fn intents() -> GatewayIntents {
     GatewayIntents::GUILDS
         | GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::GUILD_MEMBERS
+        | GatewayIntents::GUILD_VOICE_STATES
         | GatewayIntents::MESSAGE_CONTENT
 }
 
@@ -29,7 +29,20 @@ fn intents() -> GatewayIntents {
 /// ever constructing a `JDABuilder`.
 pub async fn build_client(raw_token: Option<&str>) -> Option<serenity::Result<Client>> {
     let token = normalize_discord_bot_token(raw_token)?;
-    Some(Client::builder(&token, intents()).event_handler(Handler).await)
+    Some(Client::builder(&token, intents()).event_handler(Handler).register_songbird().await)
+}
+
+async fn build_client_with_voice(
+    raw_token: Option<&str>,
+    voice: std::sync::Arc<songbird::Songbird>,
+) -> Option<serenity::Result<Client>> {
+    let token = normalize_discord_bot_token(raw_token)?;
+    Some(
+        Client::builder(&token, intents())
+            .event_handler(Handler)
+            .register_songbird_with(voice)
+            .await,
+    )
 }
 
 /// Builds and runs the Discord client to completion (i.e. until it errors
@@ -56,7 +69,7 @@ pub async fn connect_and_serve(token: Option<String>, state: SharedState) {
                 "Discord bot token configured (fingerprint {}); connecting...",
                 crate::token::fingerprint_discord_token(Some(&token))
             );
-            match build_client(Some(&token)).await {
+            match build_client_with_voice(Some(&token), state.voice_manager.clone()).await {
                 Some(Ok(mut client)) => {
                     // Publish the HTTP handle before starting, so the event
                     // listener's audit emitter can post as soon as the

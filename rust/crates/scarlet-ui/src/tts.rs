@@ -301,20 +301,25 @@ mod tests {
 pub struct TtsSinkAdapter {
     service: std::sync::Arc<TtsService>,
     settings: std::sync::Arc<scarlet_core::settings::Settings>,
+    discord: Option<scarlet_discord::voice_tts::DiscordVoiceTts>,
 }
 
 impl TtsSinkAdapter {
     pub fn new(
         service: std::sync::Arc<TtsService>,
         settings: std::sync::Arc<scarlet_core::settings::Settings>,
+        discord: Option<scarlet_discord::voice_tts::DiscordVoiceTts>,
     ) -> Self {
-        TtsSinkAdapter { service, settings }
+        TtsSinkAdapter { service, settings, discord }
     }
 
     fn speak_now(&self, marker: &str, text: &str) {
         let voice = self.settings.tts_voice_name.get();
         if let Err(err) = self.service.submit(text, voice) {
             tracing::debug!("TTS({marker}): {err}");
+        }
+        if let Some(discord) = &self.discord {
+            discord.submit(text, &self.settings.tts_voice_name.get());
         }
     }
 }

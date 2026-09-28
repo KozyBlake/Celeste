@@ -18,3 +18,4 @@ pub mod events;
 pub mod handler;
 pub mod interactions;
 pub mod token;
+pub mod voice_tts;

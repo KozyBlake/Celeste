@@ -14,8 +14,8 @@
 //!    with no display, connect Discord headlessly.
 //!
 //! Not yet ported from `Scarlet.java`'s own startup: data-dir resolution
-//! beyond `SCARLET_HOME`, the executor pool, and restart/update exit-code
-//! handling. See ../../PORTING.md.
+//! beyond `SCARLET_HOME`, the executor pool, and updater exit-code handling.
+//! Application restart/self-relaunch is ported. See ../../PORTING.md.
 //!
 //! ## Why this isn't `#[tokio::main] async fn main()`
 //!
@@ -55,12 +55,14 @@ fn main() -> anyhow::Result<()> {
     // the event listener's audit emitter can post without a `Context`.
     let discord_http: scarlet_discord::data::SharedHttp = Arc::new(tokio::sync::RwLock::new(None));
     let discord_config = Arc::new(scarlet_discord::data::DiscordConfigStore::open(&data_dir));
+    let voice_manager = songbird::Songbird::serenity();
     let (process_controller, mut process_requests) = scarlet_discord::data::ProcessController::new();
 
     let shared = scarlet_discord::data::SharedState {
         vrchat_client: Arc::new(tokio::sync::RwLock::new(None)),
         http: discord_http.clone(),
         discord_config: discord_config.clone(),
+        voice_manager: voice_manager.clone(),
         process_controller,
         scarlet_data: Arc::new(scarlet_core::data::ScarletData::open(&data_dir)),
         settings: settings.clone(),
@@ -122,7 +124,15 @@ fn main() -> anyhow::Result<()> {
         watched_avatars: shared.watched_avatars.clone(),
         watched_groups: shared.watched_groups.clone(),
         pronoun_lists,
-        tts: Arc::new(scarlet_ui::tts::TtsSinkAdapter::new(tts.clone(), settings.clone())),
+        tts: Arc::new(scarlet_ui::tts::TtsSinkAdapter::new(
+            tts.clone(),
+            settings.clone(),
+            Some(scarlet_discord::voice_tts::DiscordVoiceTts::new(
+                voice_manager,
+                shared.discord_config.clone(),
+                runtime.handle().clone(),
+            )),
+        )),
         emitter: Arc::new(scarlet_discord::events::audit_emitter::DiscordAuditEmitter::new(
             discord_http,
             discord_config,

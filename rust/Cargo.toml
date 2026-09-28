@@ -39,6 +39,8 @@ serenity = { version = "0.12", default-features = false, features = [
     "model",
     "cache",
 ] }
+songbird = { version = "0.6", features = ["builtin-queue"] }
+symphonia = { version = "0.5", default-features = false, features = ["pcm", "wav"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }

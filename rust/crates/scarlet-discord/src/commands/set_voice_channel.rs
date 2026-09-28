@@ -62,8 +62,22 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         return super::reply_ephemeral(ctx, command, "Failed to save the voice channel.").await;
     }
 
-    match channel_id {
-        Some(channel_id) => {
+    let Some(guild_id) = command.guild_id else {
+        return super::reply_ephemeral(ctx, command, "This command must be used in a server.").await;
+    };
+    let Some(manager) = songbird::get(ctx).await else {
+        return super::reply_ephemeral(ctx, command, "Discord voice support is unavailable.").await;
+    };
+    match (selected, channel_id) {
+        (Some(channel), Some(channel_id)) => {
+            if let Err(error) = manager.join(guild_id, channel.id).await {
+                tracing::error!(%error, %channel_id, "Failed to connect to Discord voice");
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    &format!("Saved <#{channel_id}>, but could not connect to it: {error}"),
+                ).await;
+            }
             tracing::info!(%channel_id, "Configured Discord TTS voice channel");
             super::reply_ephemeral(
                 ctx,
@@ -72,7 +86,10 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             )
             .await
         }
-        None => {
+        _ => {
+            if let Err(error) = manager.remove(guild_id).await {
+                tracing::warn!(%error, "Failed to disconnect Discord voice");
+            }
             tracing::info!("Disabled Discord TTS voice channel");
             super::reply_ephemeral(ctx, command, "Disabling/disconnecting from voice channel").await
         }

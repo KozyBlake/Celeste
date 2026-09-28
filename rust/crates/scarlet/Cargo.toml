@@ -13,6 +13,7 @@ path = "src/main.rs"
 scarlet-core.workspace = true
 scarlet-gif.workspace = true
 scarlet-discord.workspace = true
+songbird.workspace = true
 scarlet-vrchat.workspace = true
 scarlet-dave.workspace = true
 scarlet-ui.workspace = true

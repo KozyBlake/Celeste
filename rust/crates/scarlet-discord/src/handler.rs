@@ -8,6 +8,7 @@ use serenity::client::{Context, EventHandler};
 use serenity::model::application::Interaction;
 use serenity::model::channel::{GuildChannel, Message};
 use serenity::model::gateway::Ready;
+use serenity::model::id::{ChannelId, GuildId};
 
 use crate::commands;
 
@@ -22,6 +23,7 @@ impl EventHandler for Handler {
             ready.user.id
         );
         commands::register_global_commands(&ctx).await;
+        reconnect_voice_channel(&ctx).await;
     }
 
     /// Port of `JDAEvents.onChannelCreate`. A new Ticket Tool channel is
@@ -47,5 +49,27 @@ impl EventHandler for Handler {
             Interaction::Modal(modal) => crate::interactions::dispatch_modal(&ctx, &modal).await,
             _ => {}
         }
+    }
+}
+
+async fn reconnect_voice_channel(ctx: &Context) {
+    let config = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::DiscordConfigKey>()
+            .cloned()
+    };
+    let Some(config) = config else { return };
+    let Some(guild_id) = config.string("guildSf").and_then(|id| id.parse::<u64>().ok()) else {
+        return;
+    };
+    let Some(channel_id) = config.string("audioChannelSf").and_then(|id| id.parse::<u64>().ok()) else {
+        return;
+    };
+    let Some(manager) = songbird::get(ctx).await else { return };
+    match manager.join(GuildId::new(guild_id), ChannelId::new(channel_id)).await {
+        Ok(_) => tracing::info!(guild_id, channel_id, "Reconnected Discord TTS voice channel"),
+        Err(error) => tracing::error!(%error, guild_id, channel_id, "Failed to reconnect Discord TTS voice channel"),
     }
 }

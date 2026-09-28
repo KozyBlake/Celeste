@@ -360,6 +360,7 @@ pub struct SharedState {
     /// same instance that background emitters read, so routing changes take
     /// effect immediately instead of only after a restart.
     pub discord_config: Arc<DiscordConfigStore>,
+    pub voice_manager: Arc<songbird::Songbird>,
     pub process_controller: Arc<ProcessController>,
     pub scarlet_data: Arc<scarlet_core::data::ScarletData>,
     pub settings: Arc<scarlet_core::settings::Settings>,
