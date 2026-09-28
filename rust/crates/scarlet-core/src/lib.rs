@@ -26,5 +26,6 @@ pub mod staff_list;
 pub mod trust_rank;
 pub mod ui;
 pub mod unique_strings;
+pub mod versioned_file;
 pub mod watched_entities;
 pub mod watched_groups;
