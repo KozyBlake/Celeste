@@ -275,12 +275,19 @@ impl scarlet_events::AuditEmitter for DiscordAuditEmitter {
                 false,
             );
         }
+        let mut components = Vec::new();
+        if !potential_avatar_ids.is_empty() && scarlet_core::features::avatar_search_enabled() {
+            components.push(CreateActionRow::Buttons(vec![
+                CreateButton::new("view-potential-avatar-matches").label("View avatars"),
+            ]));
+        }
+        components.push(Self::moderation_buttons(user_id));
         self.cond_emit_ex(
             audit_type::USER_AVATAR,
             false,
             false,
             Some(location),
-            CreateMessage::new().embed(embed).components(vec![Self::moderation_buttons(user_id)]),
+            CreateMessage::new().embed(embed).components(components),
         )
         .await;
     }

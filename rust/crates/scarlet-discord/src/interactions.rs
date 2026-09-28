@@ -2,9 +2,9 @@
 //! stateful `new-instance-*` picker from `ScarletDiscordUI`.
 
 use serenity::builder::{
-    CreateActionRow, CreateInputText, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, CreateModal, CreateSelectMenu, CreateSelectMenuKind,
-    CreateSelectMenuOption,
+    CreateActionRow, CreateEmbed, CreateEmbedAuthor, CreateInputText, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, CreateInteractionResponseMessage, CreateModal,
+    CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption,
 };
 use serenity::client::Context;
 use serenity::model::application::ActionRowComponent;
@@ -232,6 +232,12 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if interaction.data.custom_id.starts_with("vrchat-user-edit-manager-notes:") {
         if let Err(err) = handle_manager_notes_button(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error opening VRChat manager notes: {err}");
+        }
+        return;
+    }
+    if interaction.data.custom_id == "view-potential-avatar-matches" {
+        if let Err(err) = handle_potential_avatar_matches(ctx, interaction).await {
+            tracing::error!("Error showing potential avatar matches: {err}");
         }
         return;
     }
@@ -619,6 +625,86 @@ async fn handle_manager_notes_button(
                 .components(vec![CreateActionRow::InputText(input)]),
         ),
     ).await
+}
+
+fn potential_avatar_ids(interaction: &ComponentInteraction) -> Vec<String> {
+    extract_potential_avatar_ids(interaction.message.embeds.iter().flat_map(|embed| {
+        embed.description.iter().map(String::as_str)
+            .chain(embed.fields.iter().map(|field| field.value.as_str()))
+    }))
+}
+
+fn extract_potential_avatar_ids<'a>(texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let pattern = regex::Regex::new(r"avtr_[0-9A-Za-z-]+").expect("static avatar id regex");
+    let mut ids = Vec::new();
+    for id in texts.flat_map(|text| pattern.find_iter(text).map(|found| found.as_str())) {
+        if !ids.iter().any(|known| known == id) {
+            ids.push(id.to_string());
+            if ids.len() == 32 { break; }
+        }
+    }
+    ids
+}
+
+async fn handle_potential_avatar_matches(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    if !scarlet_core::features::avatar_search_enabled() {
+        return ephemeral_component(ctx, interaction, "Avatar search is disabled.").await;
+    }
+    let ids = potential_avatar_ids(interaction);
+    if ids.is_empty() {
+        return ephemeral_component(ctx, interaction, "No potential avatar IDs were found in this message.").await;
+    }
+    let shared = { ctx.data.read().await.get::<crate::data::VrChatClientKey>().cloned() };
+    let client = match shared {
+        Some(shared) => shared.read().await.clone(),
+        None => None,
+    };
+    let Some(client) = client else {
+        return ephemeral_component(ctx, interaction, "VRChat is not logged in.").await;
+    };
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+    ).await?;
+    let mut embeds = Vec::new();
+    for id in ids {
+        let Ok(avatar) = client.get_avatar(&id).await else { continue };
+        let mut embed = CreateEmbed::new()
+            .title(avatar.name)
+            .url(format!("https://vrchat.com/home/avatar/{}", avatar.id));
+        if let Some(description) = avatar.description.filter(|value| !value.is_empty()) {
+            embed = embed.description(description);
+        }
+        if let Some(image) = avatar.image_url.filter(|value| !value.is_empty()) {
+            embed = embed.thumbnail(image);
+        }
+        if let Some(author) = avatar.author_name.as_deref().or(avatar.author_id.as_deref()) {
+            let mut builder = CreateEmbedAuthor::new(author);
+            if let Some(author_id) = avatar.author_id.as_deref() {
+                builder = builder.url(format!("https://vrchat.com/home/user/{author_id}"));
+            }
+            embed = embed.author(builder);
+        }
+        embeds.push(embed);
+    }
+    if embeds.is_empty() {
+        return interaction.create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new()
+                .content("VRChat did not return any of the potential avatars.")
+                .ephemeral(true),
+        ).await.map(|_| ());
+    }
+    for page in embeds.chunks(4) {
+        interaction.create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new().embeds(page.to_vec()).ephemeral(true),
+        ).await?;
+    }
+    Ok(())
 }
 
 async fn ephemeral_component_with_rows(
@@ -1908,6 +1994,18 @@ mod tests {
             Some((MemberAction::Kick, 456, None))
         );
         assert_eq!(parse_legacy_discord_member_action("discord-ban-confirm:not-a-user"), None);
+    }
+
+    #[test]
+    fn extracts_unique_avatar_ids_from_java_descriptions_and_rust_fields() {
+        let texts = [
+            "Potential ids:\n`avtr_12345678-1234-1234-1234-123456789abc`",
+            "`avtr_abcdefab-abcd-abcd-abcd-abcdefabcdef`\navtr_12345678-1234-1234-1234-123456789abc",
+        ];
+        assert_eq!(extract_potential_avatar_ids(texts.into_iter()), vec![
+            "avtr_12345678-1234-1234-1234-123456789abc",
+            "avtr_abcdefab-abcd-abcd-abcd-abcdefabcdef",
+        ]);
     }
 }
 
