@@ -100,7 +100,9 @@ pub fn register() -> CreateCommand {
                 "member-search",
                 "Name or user id to search within this group",
             )
-            .required(true),
+            .required(true)
+            .min_length(1)
+            .max_length(100),
         )
         .add_sub_option(
             CreateCommandOption::new(
@@ -188,7 +190,9 @@ pub fn register() -> CreateCommand {
                 "announcement-title",
                 "Announcement title",
             )
-            .required(true),
+            .required(true)
+            .min_length(1)
+            .max_length(100),
         )
         .add_sub_option(
             CreateCommandOption::new(
@@ -196,7 +200,9 @@ pub fn register() -> CreateCommand {
                 "announcement-text",
                 "Announcement text",
             )
-            .required(true),
+            .required(true)
+            .min_length(1)
+            .max_length(1000),
         )
         .add_sub_option(CreateCommandOption::new(
             CommandOptionType::Boolean,
@@ -625,6 +631,15 @@ async fn role_change(
             .await;
         }
     };
+    let role_name = role_names(&context.client, &context.group_id)
+        .await
+        .remove(role_id)
+        .unwrap_or_else(|| role_id.to_string());
+    let user_link = format!("https://vrchat.com/home/user/{user_id}");
+    let role_link = format!(
+        "https://vrchat.com/home/group/{}/settings/roles/{role_id}",
+        context.group_id
+    );
 
     if let Ok(Some(member)) = context
         .client
@@ -636,7 +651,9 @@ async fn role_change(
             return super::reply_ephemeral(
                 ctx,
                 command,
-                &format!("{display_name} already has that role."),
+                &format!(
+                    "VRChat user [{display_name}]({user_link}) already has the role [{role_name}]({role_link})"
+                ),
             )
             .await;
         }
@@ -644,7 +661,9 @@ async fn role_change(
             return super::reply_ephemeral(
                 ctx,
                 command,
-                &format!("{display_name} already lacks that role."),
+                &format!(
+                    "VRChat user [{display_name}]({user_link}) already lacks the role [{role_name}]({role_link})"
+                ),
             )
             .await;
         }
@@ -664,13 +683,15 @@ async fn role_change(
 
     match result {
         Ok(_) => {
-            let verb = if add { "Added" } else { "Removed" };
+            let verb = if add { "Adding" } else { "Removing" };
             let prep = if add { "to" } else { "from" };
             command
                 .create_followup(
                     &ctx.http,
                     CreateInteractionResponseFollowup::new()
-                        .content(format!("{verb} the role `{role_id}` {prep} {display_name}"))
+                        .content(format!(
+                            "{verb} the role [{role_name}]({role_link}) {prep} [{display_name}]({user_link})"
+                        ))
                         .ephemeral(true),
                 )
                 .await
@@ -1780,5 +1801,29 @@ mod tests {
         );
         assert_eq!(audit_type_title("group.user.ban"), "User Ban");
         assert_eq!(audit_type_title("group.future.action"), "Future Action");
+    }
+
+    #[test]
+    fn java_string_length_limits_are_registered() {
+        let value = serde_json::to_value(register()).unwrap();
+        let options = value["options"].as_array().unwrap();
+        let option = |subcommand: &str, name: &str| {
+            options
+                .iter()
+                .find(|option| option["name"] == subcommand)
+                .and_then(|subcommand| subcommand["options"].as_array())
+                .and_then(|options| options.iter().find(|option| option["name"] == name))
+                .cloned()
+                .unwrap()
+        };
+        let search = option("search-members", "member-search");
+        assert_eq!(search["min_length"], 1);
+        assert_eq!(search["max_length"], 100);
+        let title = option("create-announcement", "announcement-title");
+        assert_eq!(title["min_length"], 1);
+        assert_eq!(title["max_length"], 100);
+        let text = option("create-announcement", "announcement-text");
+        assert_eq!(text["min_length"], 1);
+        assert_eq!(text["max_length"], 1000);
     }
 }

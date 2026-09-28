@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use serenity::builder::{
-    CreateAttachment, CreateCommand, CreateCommandOption, CreateInteractionResponseFollowup,
+    CreateAttachment, CreateAutocompleteResponse, CreateCommand, CreateCommandOption,
+    CreateInteractionResponse, CreateInteractionResponseFollowup,
 };
 use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedValue};
@@ -20,7 +21,22 @@ pub fn register() -> CreateCommand {
             CommandOptionType::String,
             "file-name",
             "The name of the log file",
-        ))
+        ).set_autocomplete(true))
+}
+
+pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
+    let settings = { ctx.data.read().await.get::<SettingsKey>().cloned() };
+    let mut response = CreateAutocompleteResponse::new();
+    if let Some(settings) = settings {
+        for path in available_logs(&settings.data_dir.join("logs")).unwrap_or_default() {
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                response = response.add_string_choice(name, name);
+            }
+        }
+    }
+    command
+        .create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response))
+        .await
 }
 
 fn valid_log_filename(name: &str) -> bool {
@@ -120,6 +136,12 @@ mod tests {
             "../scarlet_log_2026-09-27_16-30-00.txt"
         ));
         assert!(!valid_log_filename("settings.json"));
+    }
+
+    #[test]
+    fn file_name_option_uses_javas_autocomplete() {
+        let value = serde_json::to_value(register()).unwrap();
+        assert_eq!(value["options"][0]["autocomplete"], true);
     }
 
     #[test]
