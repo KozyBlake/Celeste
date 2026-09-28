@@ -737,6 +737,22 @@ impl VrChatClient {
             .map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
     }
 
+    /// Port of `updateGroupMembershipNotes`: `PUT
+    /// /groups/{groupId}/members/{userId}` with an `UpdateGroupMemberRequest`.
+    pub async fn update_group_member_notes(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        manager_notes: &str,
+    ) -> Result<crate::models::GroupMember, VrChatError> {
+        let response = self.http
+            .put(self.url(&format!("/groups/{group_id}/members/{user_id}")))
+            .json(&serde_json::json!({ "managerNotes": manager_notes }))
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     /// Port of `searchGroupMembers(String groupId, String query, int limit)`:
     /// `GET /groups/{groupId}/members/search?query=...`. VRChat requires
     /// `query` to be at least 3 characters (a spec-documented constraint,
@@ -2008,6 +2024,24 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(member.role_ids, vec!["grol_1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn update_group_member_notes_uses_the_generated_java_clients_request_shape() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/groups/grp_1/members/usr_2"))
+            .and(body_json(serde_json::json!({"managerNotes": "Known alt"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gmem_1", "groupId": "grp_1", "userId": "usr_2",
+                "roleIds": [], "managerNotes": "Known alt"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let member = client.update_group_member_notes("grp_1", "usr_2", "Known alt").await.unwrap();
+        assert_eq!(member.manager_notes.as_deref(), Some("Known alt"));
     }
 
     #[tokio::test]

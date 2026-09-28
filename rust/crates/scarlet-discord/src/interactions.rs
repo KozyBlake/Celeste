@@ -229,6 +229,12 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
         }
         return;
     }
+    if interaction.data.custom_id.starts_with("vrchat-user-edit-manager-notes:") {
+        if let Err(err) = handle_manager_notes_button(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error opening VRChat manager notes: {err}");
+        }
+        return;
+    }
     // The Ban/Unban buttons Celeste attaches to its instance-event embeds
     // (port of `ScarletDiscordUI.vrchatUserBan`/`vrchatUserUnban`). Without
     // these the buttons on every emitted embed would do nothing.
@@ -571,6 +577,48 @@ async fn handle_audit_snapshot(
         ).await?;
     }
     Ok(())
+}
+
+async fn handle_manager_notes_button(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let Some((_, target_id)) = split_custom_id(&interaction.data.custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid VRChat user id.").await;
+    };
+    let context = match crate::commands::moderation_context_for_snowflake_with_override(
+        ctx,
+        &interaction.user.id.to_string(),
+        interaction.member.as_ref(),
+        scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+        Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+    ).await {
+        Ok(context) => context,
+        Err(message) => return ephemeral_component(ctx, interaction, message).await,
+    };
+    let user = match context.client.get_user(target_id).await {
+        Ok(user) => user,
+        Err(_) => return ephemeral_component(ctx, interaction, format!("No VRChat user found with id {target_id}")).await,
+    };
+    let notes = context.client.get_group_member(&context.group_id, target_id).await
+        .ok().flatten().and_then(|member| member.manager_notes).unwrap_or_default();
+    let display_name = user.display_name.as_deref().unwrap_or(target_id);
+    let title = format!("Manager notes for {}", display_name.chars().take(25).collect::<String>());
+    let mut input = CreateInputText::new(
+        InputTextStyle::Paragraph,
+        "Notes",
+        format!("manager-notes:{target_id}"),
+    ).required(false);
+    if !notes.is_empty() {
+        input = input.value(notes);
+    }
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Modal(
+            CreateModal::new(format!("vrchat-user-edit-manager-notes:{target_id}"), title)
+                .components(vec![CreateActionRow::InputText(input)]),
+        ),
+    ).await
 }
 
 async fn ephemeral_component_with_rows(
@@ -1181,6 +1229,12 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
         }
         return;
     }
+    if interaction.data.custom_id.starts_with("vrchat-user-edit-manager-notes:") {
+        if let Err(err) = handle_manager_notes_modal(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error updating VRChat manager notes: {err}");
+        }
+        return;
+    }
     if interaction
         .data
         .custom_id
@@ -1648,6 +1702,48 @@ fn modal_text(interaction: &ModalInteraction, custom_id: &str) -> String {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+async fn handle_manager_notes_modal(
+    ctx: &Context,
+    interaction: &ModalInteraction,
+) -> serenity::Result<()> {
+    let target_id = interaction.data.custom_id
+        .strip_prefix("vrchat-user-edit-manager-notes:")
+        .unwrap_or_default();
+    if target_id.is_empty() {
+        return ephemeral_modal(ctx, interaction, "Invalid VRChat user id.").await;
+    }
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+    ).await?;
+    let context = crate::commands::moderation_context_for_snowflake_with_override(
+        ctx,
+        &interaction.user.id.to_string(),
+        interaction.member.as_ref(),
+        scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+        Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+    ).await;
+    let message = match context {
+        Ok(context) => {
+            match context.client.get_user(target_id).await {
+                Ok(_) => {
+                    let notes = modal_text(interaction, &format!("manager-notes:{target_id}"));
+                    match context.client.update_group_member_notes(&context.group_id, target_id, &notes).await {
+                        Ok(_) => "Updated manager notes.".to_string(),
+                        Err(error) => format!("Failed to update manager notes: {error}"),
+                    }
+                }
+                Err(_) => format!("No VRChat user found with id {target_id}"),
+            }
+        }
+        Err(message) => message,
+    };
+    interaction.create_followup(
+        &ctx.http,
+        CreateInteractionResponseFollowup::new().content(message).ephemeral(true),
+    ).await.map(|_| ())
 }
 
 async fn handle_watched_notes_modal(
