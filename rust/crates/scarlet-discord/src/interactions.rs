@@ -899,10 +899,40 @@ fn parse_legacy_discord_member_action(
     Some((action, target_id, reason))
 }
 
+/// Port of `ScarletDiscordUI.checkConfigAccess`: MANAGE_SERVER or
+/// ADMINISTRATOR, else an ephemeral refusal naming the action and a warning
+/// in the log. Java applies this to every interaction that *writes*
+/// configuration — audit auxiliary webhooks, watched-group notes,
+/// watched-entity notes and the report template — and all of those were
+/// reachable here by any member, because the generic component gate
+/// default-allows their custom ids.
+fn config_access_denial(
+    member: Option<&serenity::model::guild::Member>,
+    action: &str,
+) -> Option<String> {
+    let Some(member) = member else {
+        return Some("Could not determine your guild permissions.".to_string());
+    };
+    let permissions = member.permissions.unwrap_or_else(Permissions::empty);
+    if permissions.intersects(Permissions::MANAGE_GUILD | Permissions::ADMINISTRATOR) {
+        return None;
+    }
+    tracing::warn!(
+        "Rejected unauthorized configuration interaction by {} while trying to {action}",
+        member.user.id
+    );
+    Some(format!("You do not have permission to {action}."))
+}
+
 async fn handle_audit_aux_webhooks(
     ctx: &Context,
     interaction: &ComponentInteraction,
 ) -> serenity::Result<()> {
+    if let Some(denial) =
+        config_access_denial(interaction.member.as_ref(), "set audit auxiliary webhooks")
+    {
+        return ephemeral_component(ctx, interaction, denial).await;
+    }
     let Some((_, event_type)) = split_custom_id(&interaction.data.custom_id) else {
         return ephemeral_component(ctx, interaction, "Invalid audit event type.").await;
     };
@@ -1851,6 +1881,14 @@ async fn handle_watched_notes_modal(
     interaction: &ModalInteraction,
 ) -> serenity::Result<()> {
     let parts: Vec<_> = interaction.data.custom_id.split(':').collect();
+    let action = if parts.first() == Some(&"watched-group-set-notes") {
+        "edit watched group notes"
+    } else {
+        "edit watched entity notes"
+    };
+    if let Some(denial) = config_access_denial(interaction.member.as_ref(), action) {
+        return ephemeral_modal(ctx, interaction, denial).await;
+    }
     let notes = modal_text(interaction, "notes");
     let updated = match parts.as_slice() {
         ["watched-group-set-notes", group_id] => {
@@ -1955,6 +1993,43 @@ async fn handle_instance_modal(
 
 #[cfg(test)]
 mod tests {
+    /// Java gates every configuration-writing interaction on MANAGE_SERVER
+    /// or ADMINISTRATOR (`ScarletDiscordUI.checkConfigAccess`). These
+    /// handlers had no gate at all, and their custom ids are default-allowed
+    /// by the generic component check, so any member could rewrite audit
+    /// routing.
+    #[test]
+    fn config_writes_require_manage_server_or_administrator() {
+        fn member_with(permissions: Permissions) -> serenity::model::guild::Member {
+            let mut member = serenity::model::guild::Member::default();
+            member.permissions = Some(permissions);
+            member
+        }
+
+        assert!(config_access_denial(None, "do the thing").is_some());
+        assert!(
+            config_access_denial(Some(&member_with(Permissions::empty())), "do the thing")
+                .is_some()
+        );
+        // A plain "can talk here" permission is not enough.
+        assert!(
+            config_access_denial(Some(&member_with(Permissions::SEND_MESSAGES)), "do the thing")
+                .is_some()
+        );
+        assert!(
+            config_access_denial(Some(&member_with(Permissions::MANAGE_GUILD)), "do the thing")
+                .is_none()
+        );
+        assert!(
+            config_access_denial(Some(&member_with(Permissions::ADMINISTRATOR)), "do the thing")
+                .is_none()
+        );
+        assert_eq!(
+            config_access_denial(Some(&member_with(Permissions::empty())), "set audit auxiliary webhooks"),
+            Some("You do not have permission to set audit auxiliary webhooks.".to_string())
+        );
+    }
+
     use super::*;
 
     #[test]

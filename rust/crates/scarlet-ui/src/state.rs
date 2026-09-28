@@ -132,12 +132,40 @@ impl UiState {
 
     /// Port of `playerUpdate`, including its pending-update queue for rows
     /// that don't exist yet.
-    pub fn player_update(&self, _initial_preamble: bool, id: &str, update: impl FnMut(&mut ConnectedPlayer) + Send + 'static) {
+    /// Port of `ScarletUI.playerUpdate`. Java re-sorts after applying a live
+    /// update:
+    ///
+    /// ```java
+    /// update.invoke(player);
+    /// if (visible) { propstable.updateEntry(player);
+    ///                if (!initialPreamble) this.fireSort(); }
+    /// ```
+    ///
+    /// (`ScarletUI.java:305-312`). Without that, an update that changes a
+    /// player's sort priority — switching into a watched avatar being the
+    /// one that matters — leaves them sitting wherever they were when they
+    /// joined, instead of rising to the top where the advisory is visible.
+    /// The preamble is exempt in Java because it sorts once at the end
+    /// rather than per catch-up line.
+    pub fn player_update(&self, initial_preamble: bool, id: &str, update: impl FnMut(&mut ConnectedPlayer) + Send + 'static) {
         let mut update = update;
-        let mut inner = self.0.lock().unwrap();
-        match inner.players.get_mut(id) {
-            Some(player) => update(player),
-            None => inner.pending_updates.entry(id.to_string()).or_default().push(Box::new(update)),
+        let applied = {
+            let mut inner = self.0.lock().unwrap();
+            match inner.players.get_mut(id) {
+                Some(player) => {
+                    update(player);
+                    true
+                }
+                None => {
+                    // Still queued for when the player does appear; the
+                    // join path sorts after draining these.
+                    inner.pending_updates.entry(id.to_string()).or_default().push(Box::new(update));
+                    false
+                }
+            }
+        };
+        if applied && !initial_preamble {
+            self.fire_sort();
         }
     }
 
@@ -350,6 +378,43 @@ mod tests {
         let mut j = PlayerJoin::new(id, id, at(1_000));
         j.priority = priority;
         j
+    }
+
+    /// Java re-sorts after every live `playerUpdate`. Without it, a
+    /// player who switches into a watched avatar mid-session keeps the row
+    /// position they joined at, so the advisory they just triggered stays
+    /// buried down the list.
+    #[test]
+    fn a_live_update_that_changes_priority_re_sorts_the_table() {
+        let state = UiState::new();
+        state.player_join(false, join("usr_plain", 0));
+        state.player_join(false, join("usr_switcher", 0));
+        let before: Vec<String> =
+            state.ordered_players().into_iter().map(|p| p.id).collect();
+
+        // The switcher picks up a watched-avatar advisory.
+        state.player_update(false, "usr_switcher", |p| {
+            p.set_avatar_advisory(Some("watched avatar".to_string()), Some((255, 0, 0)), 100);
+        });
+
+        let after: Vec<String> = state.ordered_players().into_iter().map(|p| p.id).collect();
+        assert_eq!(after.first().map(String::as_str), Some("usr_switcher"));
+        assert_ne!(before, after, "the table should have re-sorted");
+    }
+
+    /// The preamble is exempt in Java: it sorts once at the end rather than
+    /// per caught-up line.
+    #[test]
+    fn a_preamble_update_does_not_re_sort() {
+        let state = UiState::new();
+        state.player_join(true, join("usr_a", 0));
+        state.player_join(true, join("usr_b", 0));
+        let before: Vec<String> = state.ordered_players().into_iter().map(|p| p.id).collect();
+        state.player_update(true, "usr_b", |p| {
+            p.set_avatar_advisory(Some("watched".to_string()), None, 100);
+        });
+        let after: Vec<String> = state.ordered_players().into_iter().map(|p| p.id).collect();
+        assert_eq!(before, after);
     }
 
     #[test]

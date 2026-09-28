@@ -185,14 +185,24 @@ pub struct ScarletApp {
     watched_avatars: Arc<scarlet_core::watched_entities::WatchedEntities>,
     tts: Arc<crate::tts::TtsService>,
     tab: Tab,
+    /// Java uses `DO_NOTHING_ON_CLOSE` and asks before quitting
+    /// (`ScarletUI.java:1281-1288`, `uiModalExit` at `:1391-1401`), so the
+    /// window's X can't kill a live moderation session by accident. `true`
+    /// while that prompt is up; `exit_confirmed` lets the second close
+    /// request through.
+    exit_prompt_open: bool,
+    exit_confirmed: bool,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
     /// Current left-to-right order of the Instance tab's columns. Starts as
     /// `ColumnId::ALL` (matching `propstable`'s declared order) and can be
     /// changed by dragging a header, matching the original Swing
-    /// `JTable`'s column-reordering behavior (`JTableHeader` lets you drag
-    /// columns; there's no persisted-order file in the Java version to
-    /// match either, so this resets on restart there too).
+    /// `JTable`'s column-reordering behavior. NOTE: Java *does* persist the
+    /// layout (`ScarletUI.java:1338-1372` writes each column's display
+    /// index, width and enabled flag to `ui_instance_columns` every 10s and
+    /// restores it at startup); this resets on restart. Tracked as B6 in
+    /// AUDIT-2026-09-28.md — the claim that Java doesn't persist it was
+    /// simply wrong.
     column_order: Vec<ColumnId>,
     /// Which sidebar category the Settings tab currently shows, matching
     /// the reference screenshots' left-hand category list (General/
@@ -312,6 +322,8 @@ impl ScarletApp {
             watched_avatars,
             tts,
             tab: Tab::Instance,
+            exit_prompt_open: false,
+            exit_confirmed: false,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
             column_order: ColumnId::ALL.to_vec(),
@@ -374,11 +386,89 @@ impl ScarletApp {
         });
     }
 
+    /// Whether the CLI tab is shown, per `ui_show_cli_tab`. Java's View menu
+    /// toggles this live (`ScarletUI.setCliTabVisible`, `:1374-1385`); the
+    /// setting existed here but nothing read it, so the toggle did nothing.
+    fn cli_tab_visible(&self) -> bool {
+        self.settings.as_ref().is_none_or(|settings| settings.show_cli_tab.get())
+    }
+
+    /// Port of `ScarletUI`'s `DO_NOTHING_ON_CLOSE` + `uiModalExit`
+    /// (`:1281-1288`, `:1391-1401`). eframe's equivalent is to cancel the
+    /// close, ask, and only then let a second close request through — so the
+    /// X can't end a live session by accident, and shutdown is ordered
+    /// rather than a kill.
+    fn exit_confirm_window(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.exit_prompt_open = true;
+        }
+        if !self.exit_prompt_open {
+            return;
+        }
+        let mut quit = false;
+        let mut stay = false;
+        egui::Window::new(scarlet_core::i18n::tr("dialog.exit.title", &[]))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(scarlet_core::i18n::tr("dialog.exit.message", &[]));
+                // A session with people still in the instance is the case
+                // this prompt is really for; say so rather than making the
+                // user remember.
+                let (present, _, _) = self.state.status_counts();
+                if present > 0 {
+                    ui.add_space(4.0);
+                    ui.weak(format!(
+                        "{present} player{} still in the instance.",
+                        if present == 1 { "" } else { "s" }
+                    ));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Quit").clicked() {
+                        quit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        stay = true;
+                    }
+                });
+            });
+        if quit {
+            self.exit_prompt_open = false;
+            self.exit_confirmed = true;
+            self.shutdown();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if stay {
+            self.exit_prompt_open = false;
+        }
+    }
+
+    /// Java's `scarlet.stop()`: flush what a crash would lose before the
+    /// process goes away. The settings and data stores write through on
+    /// every change, so this is about the in-memory UI state Java persists
+    /// on the way out.
+    fn shutdown(&mut self) {
+        if let Some(settings) = self.settings.as_ref() {
+            settings.store.save();
+        }
+        tracing::info!("Celeste is shutting down");
+    }
+
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        let show_cli = self.cli_tab_visible();
+        // Java hides the tab and falls back to the first one rather than
+        // leaving a selected-but-invisible tab behind.
+        if !show_cli && self.tab == Tab::Cli {
+            self.tab = Tab::Instance;
+        }
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.tab, Tab::Instance, "  Instance  ");
             ui.selectable_value(&mut self.tab, Tab::Settings, "  Settings  ");
-            ui.selectable_value(&mut self.tab, Tab::Cli, "  CLI  ");
+            if show_cli {
+                ui.selectable_value(&mut self.tab, Tab::Cli, "  CLI  ");
+            }
         });
     }
 
@@ -529,6 +619,21 @@ impl ScarletApp {
                                     // in full on hover, instead of wrapping
                                     // and pushing the row's height out.
                                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                    // Java repaints the whole row from the
+                                    // advisory (`ScarletUI.java:762-813`):
+                                    // amber background for flagged pronouns,
+                                    // and the advisory's own colour — or
+                                    // amber — as the foreground. Both were
+                                    // being computed in core and then never
+                                    // read, so a watched user looked exactly
+                                    // like everyone else.
+                                    if let Some(background) = row_background(player) {
+                                        let rect = ui.available_rect_before_wrap();
+                                        ui.painter().rect_filled(rect, 0.0, background);
+                                    }
+                                    if let Some(foreground) = row_foreground(player) {
+                                        ui.visuals_mut().override_text_color = Some(foreground);
+                                    }
                                     if departed {
                                         // Someone who has left stays listed
                                         // (their history is the point) but
@@ -1299,6 +1404,7 @@ impl eframe::App for ScarletApp {
             });
         });
 
+        self.exit_confirm_window(ctx);
         self.import_groups_windows(ctx);
         self.avatar_stats_window(ctx);
         self.ban_confirm_window(ctx);
@@ -1331,6 +1437,28 @@ impl eframe::App for ScarletApp {
 /// deliberately not added: this starts in well under a second, so a splash
 /// would be a delay rather than a progress indicator — the reason Java
 /// needed one (JVM start plus dependency loading) doesn't exist here.
+/// Port of `getOverrideBackgroundColor` in `ScarletUI.java:762-781`, minus
+/// the alternating stripe (egui's `TableBuilder::striped` already draws it)
+/// and the selection case (the port's table has no row selection).
+///
+/// Java's condition is deliberately narrow: amber only when the pronouns are
+/// flagged, the player is still present, and no advisory colour already
+/// applies — so the background never competes with a watched-entity colour.
+fn row_background(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Color32> {
+    (player.pronouns_flagged && player.left.is_none() && player.text_color.is_none())
+        .then(|| egui::Color32::from_rgb(80, 55, 10))
+}
+
+/// Port of `getOverrideForegroundColor` in `ScarletUI.java:787-813`. The
+/// "player has left" dimming Java does here is applied in the table body
+/// instead, via `ui.set_opacity`, because egui composites the whole cell.
+fn row_foreground(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Color32> {
+    if let Some((r, g, b)) = player.text_color {
+        return Some(egui::Color32::from_rgb(r, g, b));
+    }
+    player.pronouns_flagged.then(|| egui::Color32::from_rgb(235, 190, 80))
+}
+
 fn app_icon() -> std::sync::Arc<egui::IconData> {
     const ICON_PNG: &[u8] = include_bytes!("../../../assets/celeste.png");
     // A failure here must never stop the window opening, so fall back to an
@@ -1406,6 +1534,43 @@ fn spawn_unattended_vrchat_login(
 
 #[cfg(test)]
 mod tests {
+    /// These two were computed in core and never read by the renderer, so
+    /// watched users, groups and avatars didn't stand out at all — the
+    /// advisory pipeline's whole visible output was missing.
+    #[test]
+    fn a_watched_players_advisory_colour_reaches_the_renderer() {
+        let mut player = scarlet_core::ui::ConnectedPlayer::new("usr_1", "Someone", chrono::Utc::now().naive_utc());
+        assert_eq!(row_foreground(&player), None);
+        assert_eq!(row_background(&player), None);
+
+        player.text_color = Some((200, 30, 30));
+        assert_eq!(row_foreground(&player), Some(egui::Color32::from_rgb(200, 30, 30)));
+    }
+
+    #[test]
+    fn flagged_pronouns_get_javas_amber_pair() {
+        let mut player = scarlet_core::ui::ConnectedPlayer::new("usr_1", "Someone", chrono::Utc::now().naive_utc());
+        player.pronouns_flagged = true;
+        assert_eq!(row_foreground(&player), Some(egui::Color32::from_rgb(235, 190, 80)));
+        assert_eq!(row_background(&player), Some(egui::Color32::from_rgb(80, 55, 10)));
+    }
+
+    /// Java's background condition is narrow on purpose: an advisory colour
+    /// wins, and a departed player never gets the amber highlight.
+    #[test]
+    fn an_advisory_colour_or_a_departure_suppresses_the_amber_background() {
+        let mut player = scarlet_core::ui::ConnectedPlayer::new("usr_1", "Someone", chrono::Utc::now().naive_utc());
+        player.pronouns_flagged = true;
+        player.text_color = Some((200, 30, 30));
+        assert_eq!(row_background(&player), None);
+        assert_eq!(row_foreground(&player), Some(egui::Color32::from_rgb(200, 30, 30)));
+
+        let mut departed = scarlet_core::ui::ConnectedPlayer::new("usr_2", "Gone", chrono::Utc::now().naive_utc());
+        departed.pronouns_flagged = true;
+        departed.left = Some(chrono::Utc::now().naive_utc());
+        assert_eq!(row_background(&departed), None);
+    }
+
     use super::*;
 
     #[test]

@@ -164,6 +164,20 @@ pub async fn run_query_target(ctx: &Context, command: &CommandInteraction) -> se
     {
         lines.push(format!("### Linked Discord id:\n`{snowflake}`"));
     }
+    // Java substitutes the *bot's own* VRChat display name
+    // (`vrc.currentUser.getDisplayName()`), falling back to "a moderator"
+    // only when there is no session — so a reader can still tell the action
+    // was attributed to the Celeste account. Resolved once for the whole
+    // listing rather than per entry.
+    let redaction_name = context
+        .client
+        .get_current_user()
+        .await
+        .ok()
+        .and_then(|user| user.display_name)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "a moderator".to_string());
+
     lines.push("### Audit target events:".to_string());
     for entry in entries {
         let actor_redacted = match entry.actor_id.as_deref() {
@@ -174,12 +188,19 @@ pub async fn run_query_target(ctx: &Context, command: &CommandInteraction) -> se
             .description
             .unwrap_or_else(|| entry.event_type.clone());
         if actor_redacted {
-            let replacement = "a moderator";
-            if let Some(actor_name) = entry.actor_display_name.as_deref() {
-                description = description.replace(actor_name, replacement);
-            } else {
-                description = format!("User {display_name} was moderated by {replacement}.");
-            }
+            // Java substitutes only when the description actually contains
+            // the actor's name, and otherwise **discards the description
+            // entirely** for a canned sentence
+            // (`ScarletDiscordCommands.java:3205-3212`). An unconditional
+            // `replace` is a no-op when the name isn't literally present,
+            // which printed the original unredacted text — the exact thing
+            // this branch exists to prevent.
+            description = redacted_description(
+                &description,
+                entry.actor_display_name.as_deref(),
+                &redaction_name,
+                &display_name,
+            );
         }
         let linked = if actor_redacted {
             None
@@ -631,8 +652,71 @@ fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
+/// Port of the redaction branch in `ScarletDiscordCommands.queryTargetHistory`
+/// (`:3205-3212`).
+///
+/// Java substitutes the moderator's name only when the description actually
+/// contains it, and otherwise **throws the description away** in favour of a
+/// canned sentence. Doing an unconditional `String::replace` instead looks
+/// equivalent but isn't: when the name doesn't appear, the replace is a
+/// no-op and the original, unredacted description is published — which is
+/// precisely what this command's redaction gate exists to prevent.
+fn redacted_description(
+    description: &str,
+    actor_display_name: Option<&str>,
+    redaction_name: &str,
+    target_display_name: &str,
+) -> String {
+    match actor_display_name {
+        Some(actor_name) if !actor_name.is_empty() && description.contains(actor_name) => {
+            description.replace(actor_name, redaction_name)
+        }
+        _ => format!("User {target_display_name} was banned by {redaction_name}."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// The leak this guards: an unconditional `replace` silently publishes
+    /// the original description whenever the moderator's name isn't
+    /// literally in it.
+    #[test]
+    fn a_description_without_the_actors_name_is_discarded_not_published() {
+        let leaked = redacted_description(
+            "Banned for ban evasion after a report from staff",
+            Some("SomeModerator"),
+            "Celeste",
+            "Target",
+        );
+        assert_eq!(leaked, "User Target was banned by Celeste.");
+        assert!(!leaked.contains("ban evasion"));
+    }
+
+    #[test]
+    fn a_description_containing_the_actors_name_is_substituted() {
+        assert_eq!(
+            redacted_description(
+                "SomeModerator banned this user",
+                Some("SomeModerator"),
+                "Celeste",
+                "Target",
+            ),
+            "Celeste banned this user"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_empty_actor_name_falls_back_to_javas_sentence() {
+        assert_eq!(
+            redacted_description("anything at all", None, "Celeste", "Target"),
+            "User Target was banned by Celeste."
+        );
+        assert_eq!(
+            redacted_description("anything at all", Some(""), "Celeste", "Target"),
+            "User Target was banned by Celeste."
+        );
+    }
+
     use super::*;
 
     #[test]
