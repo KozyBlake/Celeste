@@ -65,7 +65,7 @@ pub fn register() -> CreateCommand {
             CommandOptionType::SubCommand,
             "list",
             "Lists all watched groups",
-        ))
+        ).add_sub_option(super::pagination_option()))
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
             "remove-menu",
@@ -318,7 +318,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     super::defer(ctx, command).await?;
 
     match subcommand.name {
-        "list" => run_list(ctx, command, &watched).await,
+        "list" => run_list(ctx, command, sub_options, &watched).await,
         "remove-menu" => run_remove_menu(ctx, command, &watched).await,
         "export" => run_export(ctx, command, &watched).await,
         "import" => run_import(ctx, command, sub_options, &watched).await,
@@ -505,13 +505,14 @@ fn tags_joined(group: &WatchedGroup) -> String {
 async fn run_list(
     ctx: &Context,
     command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
     watched: &scarlet_core::watched_groups::WatchedGroups,
 ) -> serenity::Result<()> {
     let all = watched.get_all();
     if all.is_empty() {
         return super::reply_ephemeral(ctx, command, "No groups are watched.").await;
     }
-    let mut lines = vec!["### Watched groups".to_string()];
+    let mut lines = Vec::new();
     for group in &all {
         lines.push(format!(
             "[`{}`](<https://vrchat.com/home/group/{}>) — type: {}, priority: {}, critical: {}, silent: {}",
@@ -526,7 +527,12 @@ async fn run_list(
     super::send_pages(
         ctx,
         command,
-        super::paginate_on_lines(&lines.join("\n"), 2000),
+        super::paginate_entries(
+            &lines,
+            super::entries_per_page(sub_options),
+            "\n",
+            Some("### Watched groups"),
+        ),
     )
     .await
 }

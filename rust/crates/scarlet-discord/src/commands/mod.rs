@@ -4,15 +4,10 @@
 //! ported incrementally, one command at a time, not all at once; see
 //! PORTING.md for the running inventory of what's real vs. not started).
 //!
-//! Simplifications shared by every command ported here so far, tracked
-//! rather than hidden: no autocomplete-resolved option types (Java's
-//! `@SlashOpt` on a `io.github.vrchatapi.model.User`/`GroupRole`/etc. runs a
-//! live VRChat lookup as you type in Discord's UI; these commands take a
-//! plain string id/snowflake option instead, since wiring autocomplete
-//! interactions is a separate feature not built yet), and no button-based
-//! paginated embeds (Java's `discord.interactions.Pagination`; long output
-//! here is split into multiple plain messages via [`paginate_on_lines`]
-//! instead, a direct port of `MiscUtils.paginateOnLines`).
+//! The Rust port resolves VRChat autocomplete choices live. Java's
+//! button-based paginated embeds are represented as multiple plain Discord
+//! messages here; list commands still honor Java's `entries-per-page`
+//! option, and oversized messages are split with [`paginate_on_lines`].
 
 pub mod config_info;
 pub mod config_set;
@@ -61,6 +56,50 @@ use serenity::builder::{
 };
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
+
+pub(crate) fn pagination_option() -> serenity::builder::CreateCommandOption {
+    serenity::builder::CreateCommandOption::new(
+        serenity::model::application::CommandOptionType::Integer,
+        "entries-per-page",
+        "The number of entries to show per page",
+    )
+    .min_int_value(1)
+    .max_int_value(10)
+}
+
+pub(crate) fn entries_per_page(
+    options: &[serenity::model::application::ResolvedOption<'_>],
+) -> usize {
+    options
+        .iter()
+        .find(|option| option.name == "entries-per-page")
+        .and_then(|option| match option.value {
+            serenity::model::application::ResolvedValue::Integer(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(4)
+        .clamp(1, 10) as usize
+}
+
+/// Groups logical result entries the same way Java's paginator does, while
+/// retaining the plain-message presentation used by the Rust port.
+pub(crate) fn paginate_entries(
+    entries: &[String],
+    entries_per_page: usize,
+    separator: &str,
+    heading: Option<&str>,
+) -> Vec<String> {
+    let mut pages = Vec::new();
+    for chunk in entries.chunks(entries_per_page.clamp(1, 10)) {
+        let body = chunk.join(separator);
+        let text = match heading {
+            Some(heading) => format!("{heading}\n{body}"),
+            None => body,
+        };
+        pages.extend(paginate_on_lines(&text, 2000));
+    }
+    pages
+}
 
 /// Acks the interaction immediately without a visible message yet ("Celeste
 /// is thinking..."), then lets the handler take as long as it needs (a
@@ -611,6 +650,19 @@ mod tests {
         assert_eq!(
             paginate_on_lines("hello world", 2000),
             vec!["hello world".to_string()]
+        );
+    }
+
+    #[test]
+    fn logical_entries_are_grouped_by_requested_page_size() {
+        let entries = (1..=5).map(|n| format!("entry {n}")).collect::<Vec<_>>();
+        assert_eq!(
+            paginate_entries(&entries, 2, "\n", Some("### Results")),
+            vec![
+                "### Results\nentry 1\nentry 2",
+                "### Results\nentry 3\nentry 4",
+                "### Results\nentry 5",
+            ]
         );
     }
 

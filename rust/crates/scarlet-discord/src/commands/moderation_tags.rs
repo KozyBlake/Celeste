@@ -24,7 +24,8 @@ pub const NAME: &str = "moderation-tags";
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME)
         .description("Configures custom moderation tags")
-        .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "list", "Lists all custom moderation tags"))
+        .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "list", "Lists all custom moderation tags")
+            .add_sub_option(super::pagination_option()))
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "add", "Adds a custom moderation tag")
                 .add_sub_option(
@@ -96,7 +97,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     };
 
     match subcommand.name {
-        "list" => run_list(ctx, command, &tags).await,
+        "list" => run_list(ctx, command, sub_options, &tags).await,
         "add" => run_add(ctx, command, sub_options, &tags).await,
         "delete" => run_delete(ctx, command, sub_options, &tags).await,
         other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
@@ -106,13 +107,14 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 async fn run_list(
     ctx: &Context,
     command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
     tags: &scarlet_core::moderation_tags::ModerationTags,
 ) -> serenity::Result<()> {
     let all = tags.get_tags();
     if all.is_empty() {
         return super::reply_ephemeral(ctx, command, "No custom moderation tags exist yet.").await;
     }
-    let mut lines = vec!["### Moderation tags".to_string()];
+    let mut lines = Vec::new();
     for tag in &all {
         let label = if tag.label.is_empty() { tag.value.as_str() } else { tag.label.as_str() };
         let mut line = format!("`{}` — {label}", tag.value);
@@ -121,7 +123,16 @@ async fn run_list(
         }
         lines.push(line);
     }
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_entries(
+            &lines,
+            super::entries_per_page(sub_options),
+            "\n",
+            Some("### Moderation tags"),
+        ),
+    ).await
 }
 
 async fn run_add(

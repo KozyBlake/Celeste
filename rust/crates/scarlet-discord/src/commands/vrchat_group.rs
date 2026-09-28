@@ -10,7 +10,7 @@
 //! and the additional-options modal.
 //!
 //! `vrchat-user`/`vrchat-role` use Java-compatible autocomplete;
-//! `post-role-id` remains a plain string rather than Java's autocomplete-resolved
+//! `post-role` uses the configured group's roles, matching Java's autocomplete-resolved
 //! `io.github.vrchatapi.model.User`/`GroupRole` (see the `commands` module
 //! docs). `search-members`/`list-bans`/`list-invites`/`list-join-requests`/
 //! `list-posts` render each item as plain text instead of Java's paginated
@@ -112,7 +112,8 @@ pub fn register() -> CreateCommand {
             )
             .min_int_value(1)
             .max_int_value(100),
-        ),
+        )
+        .add_sub_option(super::pagination_option()),
     );
     command = command.add_option(
         CreateCommandOption::new(
@@ -128,7 +129,8 @@ pub fn register() -> CreateCommand {
             )
             .min_int_value(1)
             .max_int_value(100),
-        ),
+        )
+        .add_sub_option(super::pagination_option()),
     );
 
     command = command.add_option(
@@ -145,7 +147,8 @@ pub fn register() -> CreateCommand {
             )
             .min_int_value(1)
             .max_int_value(100),
-        ),
+        )
+        .add_sub_option(super::pagination_option()),
     );
     command = command.add_option(
         CreateCommandOption::new(
@@ -166,7 +169,8 @@ pub fn register() -> CreateCommand {
             )
             .min_int_value(1)
             .max_int_value(100),
-        ),
+        )
+        .add_sub_option(super::pagination_option()),
     );
 
     command = command.add_option(CreateCommandOption::new(
@@ -200,6 +204,11 @@ pub fn register() -> CreateCommand {
             CommandOptionType::Boolean,
             "send-notification",
             "Send a notification to group members",
+        ))
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::String,
+            "image-file-id",
+            "Optional VRChat file id for the announcement image",
         )),
     );
     command = command.add_option(
@@ -237,7 +246,8 @@ pub fn register() -> CreateCommand {
             )
             .min_int_value(1)
             .max_int_value(100),
-        ),
+        )
+        .add_sub_option(super::pagination_option()),
     );
     command = command.add_option(
         CreateCommandOption::new(
@@ -272,9 +282,14 @@ pub fn register() -> CreateCommand {
         ))
         .add_sub_option(CreateCommandOption::new(
             CommandOptionType::String,
-            "post-role-id",
+            "image-file-id",
+            "Optional VRChat file id for the post image",
+        ))
+        .add_sub_option(CreateCommandOption::new(
+            CommandOptionType::String,
+            "post-role",
             "Optional VRChat group role id (grol_...) that can see a group-only post",
-        )),
+        ).set_autocomplete(true)),
     );
     command = command.add_option(
         CreateCommandOption::new(
@@ -308,7 +323,8 @@ pub fn register() -> CreateCommand {
                 "vrchat-user",
                 "The VRChat user id (usr_...)",
             )
-            .required(true),
+            .required(true)
+            .set_autocomplete(true),
         ),
     );
     command = command.add_option(
@@ -323,7 +339,8 @@ pub fn register() -> CreateCommand {
                 "vrchat-user",
                 "The VRChat user id (usr_...)",
             )
-            .required(true),
+            .required(true)
+            .set_autocomplete(true),
         )
         .add_sub_option(
             CreateCommandOption::new(
@@ -359,10 +376,11 @@ pub fn register() -> CreateCommand {
         .add_sub_option(
             CreateCommandOption::new(
                 CommandOptionType::String,
-                "vrchat-world-id",
+                "vrchat-world",
                 "The VRChat world id (wrld_...)",
             )
-            .required(true),
+            .required(true)
+            .set_autocomplete(true),
         ),
     );
 
@@ -744,13 +762,18 @@ async fn search_members(
     }
 
     let roles_by_id = role_names(&context.client, &context.group_id).await;
-    let mut lines = vec!["### Group Member search results".to_string()];
+    let mut lines = Vec::new();
     lines.extend(result.results.iter().map(|m| member_line(m, &roles_by_id)));
 
     super::send_pages(
         ctx,
         command,
-        super::paginate_on_lines(&lines.join("\n"), 2000),
+        super::paginate_entries(
+            &lines,
+            super::entries_per_page(sub_options),
+            "\n",
+            Some("### Group Member search results"),
+        ),
     )
     .await
 }
@@ -790,13 +813,13 @@ async fn list_bans(
     }
 
     let roles_by_id = role_names(&context.client, &context.group_id).await;
-    let mut lines = vec!["### Group Ban list".to_string()];
+    let mut lines = Vec::new();
     lines.extend(bans.iter().map(|m| member_line(m, &roles_by_id)));
 
     super::send_pages(
         ctx,
         command,
-        super::paginate_on_lines(&lines.join("\n"), 2000),
+        super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", Some("### Group Ban list")),
     )
     .await
 }
@@ -837,13 +860,13 @@ async fn list_invites(
     }
 
     let roles_by_id = role_names(&context.client, &context.group_id).await;
-    let mut lines = vec!["### Group Invite list".to_string()];
+    let mut lines = Vec::new();
     lines.extend(invites.iter().map(|m| member_line(m, &roles_by_id)));
 
     super::send_pages(
         ctx,
         command,
-        super::paginate_on_lines(&lines.join("\n"), 2000),
+        super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", Some("### Group Invite list")),
     )
     .await
 }
@@ -894,13 +917,13 @@ async fn list_join_requests(
     } else {
         "### Join Request list"
     };
-    let mut lines = vec![heading.to_string()];
+    let mut lines = Vec::new();
     lines.extend(requests.iter().map(|m| member_line(m, &roles_by_id)));
 
     super::send_pages(
         ctx,
         command,
-        super::paginate_on_lines(&lines.join("\n"), 2000),
+        super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", Some(heading)),
     )
     .await
 }
@@ -948,6 +971,7 @@ async fn create_announcement(
         .await;
     };
     let send_notification = find_bool(sub_options, "send-notification").unwrap_or(false);
+    let image_id = find_string(sub_options, "image-file-id");
 
     let context =
         match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
@@ -957,7 +981,7 @@ async fn create_announcement(
 
     match context
         .client
-        .create_group_announcement(&context.group_id, title, text, send_notification)
+        .create_group_announcement(&context.group_id, title, text, send_notification, image_id)
         .await
     {
         Ok(announcement) => command
@@ -1076,7 +1100,7 @@ async fn list_posts(
     super::send_pages(
         ctx,
         command,
-        super::paginate_on_lines(&lines.join("\n\n"), 2000),
+        super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n\n", None),
     )
     .await
 }
@@ -1099,7 +1123,8 @@ async fn create_post(
         .await;
     };
     let send_notification = find_bool(sub_options, "send-notification").unwrap_or(false);
-    let role_id = find_string(sub_options, "post-role-id");
+    let image_id = find_string(sub_options, "image-file-id");
+    let role_id = find_string(sub_options, "post-role");
 
     let context =
         match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
@@ -1115,6 +1140,7 @@ async fn create_post(
             text,
             visibility,
             send_notification,
+            image_id,
             role_id,
         )
         .await
@@ -1398,8 +1424,8 @@ async fn open_instance(
     command: &CommandInteraction,
     sub_options: &[ResolvedOption<'_>],
 ) -> serenity::Result<()> {
-    let Some(world_id) = find_string(sub_options, "vrchat-world-id") else {
-        return super::reply_ephemeral(ctx, command, "`vrchat-world-id` is required.").await;
+    let Some(world_id) = find_string(sub_options, "vrchat-world") else {
+        return super::reply_ephemeral(ctx, command, "`vrchat-world` is required.").await;
     };
     let scarlet_data = {
         ctx.data

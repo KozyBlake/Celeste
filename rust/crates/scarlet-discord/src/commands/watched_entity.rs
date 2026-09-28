@@ -130,7 +130,7 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
             CommandOptionType::SubCommand,
             "list",
             format!("Lists all watched {}s", kind.singular()),
-        ))
+        ).add_sub_option(super::pagination_option()))
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
             "export",
@@ -440,7 +440,7 @@ pub(crate) async fn run_generic(
     super::defer(ctx, command).await?;
 
     match subcommand.name {
-        "list" => run_list(ctx, command, &entities, kind).await,
+        "list" => run_list(ctx, command, sub_options, &entities, kind).await,
         "remove-menu" => run_remove_menu(ctx, command, &entities, kind).await,
         "export" => run_export(ctx, command, &entities, kind).await,
         "import" => run_import(ctx, command, sub_options, &entities, kind).await,
@@ -628,6 +628,7 @@ async fn run_set_notes_modal(
 async fn run_list(
     ctx: &Context,
     command: &CommandInteraction,
+    sub_options: &[ResolvedOption<'_>],
     entities: &WatchedEntities,
     kind: EntityKind,
 ) -> serenity::Result<()> {
@@ -640,7 +641,7 @@ async fn run_list(
         )
         .await;
     }
-    let mut lines = vec![format!("### Watched {}s", kind.singular())];
+    let mut lines = Vec::new();
     for entity in &all {
         lines.push(format!(
             "[`{}`](<{}>) — type: {}, priority: {}, critical: {}, silent: {}",
@@ -652,10 +653,11 @@ async fn run_list(
             entity.silent
         ));
     }
+    let heading = format!("### Watched {}s", kind.singular());
     super::send_pages(
         ctx,
         command,
-        super::paginate_on_lines(&lines.join("\n"), 2000),
+        super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", Some(&heading)),
     )
     .await
 }

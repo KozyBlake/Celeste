@@ -51,7 +51,7 @@ pub async fn respond(ctx: &Context, command: &CommandInteraction) -> serenity::R
                 response = response.add_string_choice(choice_label(&group.name, &group.id), group.id);
             }
         }
-        "vrchat-role" | "vrchat-role-id" => {
+        "vrchat-role" | "vrchat-role-id" | "post-role" => {
             let group_id = {
                 let data = ctx.data.read().await;
                 data.get::<crate::data::SettingsKey>()
@@ -66,6 +66,18 @@ pub async fn respond(ctx: &Context, command: &CommandInteraction) -> serenity::R
                 for role in roles.into_iter().take(25) {
                     response = response.add_string_choice(choice_label(&role.name, &role.id), role.id);
                 }
+            }
+        }
+        "vrchat-world" => {
+            let worlds = if query.starts_with("wrld_") {
+                client.get_world(query).await.ok().into_iter().collect()
+            } else if query.is_empty() {
+                Vec::new()
+            } else {
+                client.search_worlds(query, 25, 0).await.unwrap_or_default()
+            };
+            for world in worlds.into_iter().take(25) {
+                response = response.add_string_choice(choice_label(&world.name, &world.id), world.id);
             }
         }
         _ => {}

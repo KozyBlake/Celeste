@@ -794,11 +794,16 @@ impl VrChatClient {
         title: &str,
         text: &str,
         send_notification: bool,
+        image_id: Option<&str>,
     ) -> Result<crate::models::GroupAnnouncement, VrChatError> {
+        let mut body = serde_json::json!({ "title": title, "text": text, "sendNotification": send_notification });
+        if let Some(image_id) = image_id {
+            body["imageId"] = serde_json::json!(image_id);
+        }
         let response = self
             .http
             .post(self.url(&format!("/groups/{group_id}/announcement")))
-            .json(&serde_json::json!({ "title": title, "text": text, "sendNotification": send_notification }))
+            .json(&body)
             .send()
             .await?;
         Self::parse_response(response).await
@@ -857,6 +862,7 @@ impl VrChatClient {
         text: &str,
         visibility: &str,
         send_notification: bool,
+        image_id: Option<&str>,
         role_id: Option<&str>,
     ) -> Result<crate::models::GroupPost, VrChatError> {
         let mut body = serde_json::json!({
@@ -867,6 +873,9 @@ impl VrChatClient {
         });
         if let Some(role_id) = role_id {
             body["roleIds"] = serde_json::json!([role_id]);
+        }
+        if let Some(image_id) = image_id {
+            body["imageId"] = serde_json::json!(image_id);
         }
         let response = self
             .http
@@ -2169,6 +2178,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/groups/grp_1/announcement"))
+            .and(body_json(serde_json::json!({
+                "title": "Hello", "text": "World", "sendNotification": false,
+                "imageId": "file_1"
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": "gann_1", "title": "Hello", "text": "World"
             })))
@@ -2184,7 +2197,7 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let created = client
-            .create_group_announcement("grp_1", "Hello", "World", false)
+            .create_group_announcement("grp_1", "Hello", "World", false, Some("file_1"))
             .await
             .unwrap();
         assert!(!created.is_empty());
@@ -2280,10 +2293,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_group_post_sends_role_ids_only_when_given() {
+    async fn create_group_post_sends_optional_image_and_role_ids() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/groups/grp_1/posts"))
+            .and(body_json(serde_json::json!({
+                "title": "Hello", "text": "World", "visibility": "group",
+                "sendNotification": false, "roleIds": ["grol_1"],
+                "imageId": "file_1"
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": "not_1", "title": "Hello", "text": "World", "visibility": "group"
             })))
@@ -2292,7 +2310,10 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let post = client
-            .create_group_post("grp_1", "Hello", "World", "group", false, None)
+            .create_group_post(
+                "grp_1", "Hello", "World", "group", false,
+                Some("file_1"), Some("grol_1")
+            )
             .await
             .unwrap();
         assert_eq!(post.id.as_deref(), Some("not_1"));

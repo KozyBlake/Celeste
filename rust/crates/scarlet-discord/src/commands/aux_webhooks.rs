@@ -22,7 +22,7 @@ pub fn register() -> CreateCommand {
             CommandOptionType::SubCommand,
             "list",
             "Lists all auxiliary webhooks",
-        ))
+        ).add_sub_option(super::pagination_option()))
         .add_option(
             CreateCommandOption::new(
                 CommandOptionType::SubCommand,
@@ -122,12 +122,16 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             let lines = entries
                 .into_iter()
                 .map(|(id, url)| format!("- **{id}** — `{url}`"))
-                .collect::<Vec<_>>()
-                .join("\n");
+                .collect::<Vec<_>>();
             super::send_pages(
                 ctx,
                 command,
-                super::paginate_on_lines(&format!("### Auxiliary webhooks\n{lines}"), 2000),
+                super::paginate_entries(
+                    &lines,
+                    super::entries_per_page(sub_options),
+                    "\n",
+                    Some("### Auxiliary webhooks"),
+                ),
             )
             .await
         }

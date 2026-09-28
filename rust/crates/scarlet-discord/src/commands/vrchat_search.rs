@@ -5,9 +5,8 @@
 //! **Simplified**: Java fetches a fixed batch of 50 results per search and
 //! renders them as paginated per-result embeds (author/thumbnail/"Report"
 //! link via `VRChatHelpDeskURLs`) using `discord.interactions.Pagination`
-//! with an `entries-per-page` option. This drops `entries-per-page` (the
-//! same established simplification as every other list-rendering command
-//! in this crate) and renders one text line per result via
+//! with an `entries-per-page` option. The Rust port honors that page size
+//! and renders one text line per result via
 //! [`super::paginate_on_lines`] instead of embeds. The "Report ___" link
 //! on each result is also dropped: it's built by `VRChatHelpDeskURLs`, a
 //! large, VRChat-Zendesk-specific URL-builder (per-category form field ids,
@@ -53,11 +52,13 @@ pub fn register() -> CreateCommand {
                 "world",
                 "Searches for worlds",
             )
-            .add_sub_option(query_option()),
+            .add_sub_option(query_option())
+            .add_sub_option(super::pagination_option()),
         )
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "user", "Searches for users")
-                .add_sub_option(query_option()),
+                .add_sub_option(query_option())
+                .add_sub_option(super::pagination_option()),
         )
         .add_option(
             CreateCommandOption::new(
@@ -65,7 +66,8 @@ pub fn register() -> CreateCommand {
                 "group",
                 "Searches for groups",
             )
-            .add_sub_option(query_option()),
+            .add_sub_option(query_option())
+            .add_sub_option(super::pagination_option()),
         );
     if scarlet_core::features::avatar_search_enabled() {
         command.add_option(
@@ -74,7 +76,8 @@ pub fn register() -> CreateCommand {
                 "avatar",
                 "Searches for avatars",
             )
-            .add_sub_option(query_option()),
+            .add_sub_option(query_option())
+            .add_sub_option(super::pagination_option()),
         )
     } else {
         command
@@ -130,7 +133,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             super::send_pages(
                 ctx,
                 command,
-                super::paginate_on_lines(&lines.join("\n"), 2000),
+                super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", None),
             )
             .await
         }
@@ -157,7 +160,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             super::send_pages(
                 ctx,
                 command,
-                super::paginate_on_lines(&lines.join("\n"), 2000),
+                super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", None),
             )
             .await
         }
@@ -185,7 +188,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             super::send_pages(
                 ctx,
                 command,
-                super::paginate_on_lines(&lines.join("\n"), 2000),
+                super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", None),
             )
             .await
         }
@@ -224,7 +227,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             super::send_pages(
                 ctx,
                 command,
-                super::paginate_on_lines(&lines.join("\n"), 2000),
+                super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", None),
             )
             .await
         }

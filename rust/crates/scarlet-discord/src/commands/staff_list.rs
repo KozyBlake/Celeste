@@ -52,7 +52,8 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 pub(crate) fn register_generic(name: &str, description: &str) -> CreateCommand {
     CreateCommand::new(name)
         .description(description)
-        .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "list", "Lists all users on this list"))
+        .add_option(CreateCommandOption::new(CommandOptionType::SubCommand, "list", "Lists all users on this list")
+            .add_sub_option(super::pagination_option()))
         .add_option(
             CreateCommandOption::new(CommandOptionType::SubCommand, "add", "Adds a user to this list")
                 .add_sub_option(
@@ -110,7 +111,7 @@ pub(crate) async fn run_generic(
     };
 
     match subcommand.name {
-        "list" => run_list(ctx, command, &list, info_name).await,
+        "list" => run_list(ctx, command, sub_options, &list, info_name).await,
         "add" => run_add(ctx, command, sub_options, &list, info_name).await,
         "delete" => run_delete(ctx, command, sub_options, &list, info_name).await,
         other => super::reply_ephemeral(ctx, command, &format!("Unknown subcommand: {other}")).await,
@@ -142,7 +143,7 @@ fn staff_entry_line(
     line
 }
 
-async fn run_list(ctx: &Context, command: &CommandInteraction, list: &StaffList, info_name: &str) -> serenity::Result<()> {
+async fn run_list(ctx: &Context, command: &CommandInteraction, sub_options: &[ResolvedOption<'_>], list: &StaffList, info_name: &str) -> serenity::Result<()> {
     let ids = list.get_ids();
     if ids.is_empty() {
         return super::reply_ephemeral(ctx, command, &format!("No users are on the {info_name} list.")).await;
@@ -155,7 +156,7 @@ async fn run_list(ctx: &Context, command: &CommandInteraction, list: &StaffList,
         None => std::collections::HashMap::new(),
     };
 
-    let mut lines = vec![format!("### {info_name} list", info_name = capitalize(info_name))];
+    let mut lines = Vec::new();
     for id in &ids {
         let (display_name, member) = match &context {
             Some(context) => {
@@ -169,7 +170,12 @@ async fn run_list(ctx: &Context, command: &CommandInteraction, list: &StaffList,
         lines.push(staff_entry_line(id, display_name.as_deref(), member.as_ref(), &roles_by_id, linked_snowflake.as_deref()));
     }
 
-    super::send_pages(ctx, command, super::paginate_on_lines(&lines.join("\n"), 2000)).await
+    let heading = format!("### {info_name} list", info_name = capitalize(info_name));
+    super::send_pages(
+        ctx,
+        command,
+        super::paginate_entries(&lines, super::entries_per_page(sub_options), "\n", Some(&heading)),
+    ).await
 }
 
 fn capitalize(s: &str) -> String {
