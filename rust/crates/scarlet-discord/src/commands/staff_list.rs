@@ -1,6 +1,6 @@
 //! Port of `ScarletDiscordCommands.StaffList` (`@SlashCmd("staff-list")`,
 //! backed by `Scarlet.staffList`/`staff_list.json`). This is also where
-//! Discord<->VRChat account linking happens (`_add`'s optional
+//! Discord<->VRChat account linking happens (`_add`'s required
 //! `discord-user` option calls `ScarletData.linkIdToSnowflake`) — the same
 //! flow every other moderation command's "you must have linked ids" error
 //! message points users at (see `super::linkedIdsReply`/
@@ -61,11 +61,14 @@ pub(crate) fn register_generic(name: &str, description: &str) -> CreateCommand {
                         .required(true)
                         .set_autocomplete(true),
                 )
-                .add_sub_option(CreateCommandOption::new(
-                    CommandOptionType::User,
-                    "discord-user",
-                    "Optional Discord user to link to this VRChat user id",
-                ))
+                // Java registers `_discordUser` as `SlashOption.ofMember("discord-user", ..., true)`
+                // and `StaffList.add`/`SecretStaffList.add` do not carry `@Required(false)`,
+                // so the option is required on this subcommand (unlike, say, `vrchat-role`,
+                // which `_vrchatRoleOpt` registers with `required = false`).
+                .add_sub_option(
+                    CreateCommandOption::new(CommandOptionType::User, "discord-user", "The Discord user")
+                        .required(true),
+                )
                 .add_sub_option(CreateCommandOption::new(
                     CommandOptionType::String,
                     "vrchat-role",
@@ -231,7 +234,7 @@ async fn run_add(
 
     if let Some(role_id) = role_id {
         let member = context.client.get_group_member(&context.group_id, user_id).await.ok().flatten();
-        let already_has_role = member.map(|m| m.role_ids.contains(&role_id.to_string())).unwrap_or(false);
+        let already_has_role = member_already_has_role(member.as_ref().map(|m| m.role_ids.as_slice()), role_id);
         if already_has_role {
             lines.push(format!("VRChat user [{display_name}](<https://vrchat.com/home/user/{user_id}>) already has the role `{role_id}`"));
         } else {
@@ -246,6 +249,20 @@ async fn run_add(
         .create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(lines.join("\n")).ephemeral(true))
         .await
         .map(|_| ())
+}
+
+/// Java (`ScarletDiscordCommands._StaffList._add`) only reports "already has the role" when
+/// the membership lookup returned a member carrying it; a failed/absent lookup falls through
+/// to `addGroupRole`.
+fn member_already_has_role(member_role_ids: Option<&[String]>, role_id: &str) -> bool {
+    member_role_ids.map(|ids| ids.iter().any(|id| id == role_id)).unwrap_or(false)
+}
+
+/// Java (`ScarletDiscordCommands._StaffList._remove`) mirrors the above: only a member that
+/// was actually found and lacks the role short-circuits; a null lookup still calls
+/// `removeGroupRole`.
+fn member_already_lacks_role(member_role_ids: Option<&[String]>, role_id: &str) -> bool {
+    member_role_ids.map(|ids| !ids.iter().any(|id| id == role_id)).unwrap_or(false)
 }
 
 async fn run_delete(
@@ -280,9 +297,19 @@ async fn run_delete(
         lines.push(format!("Removing VRChat user [{display_name}](<https://vrchat.com/home/user/{user_id}>) from the {info_name} list"));
     }
 
-    if let (Some(role_id), Some(context)) = (role_id, &context) {
+    if let Some(role_id) = role_id {
+        let Some(context) = &context else {
+            lines.push(format!("Cannot remove the role `{role_id}`: no VRChat session is available."));
+            return command
+                .create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(lines.join("\n")).ephemeral(true))
+                .await
+                .map(|_| ());
+        };
+        // Java (ScarletDiscordCommands._StaffList._remove) only short-circuits when the
+        // membership lookup actually returns a member that lacks the role; a null lookup
+        // still falls through to removeGroupRole.
         let member = context.client.get_group_member(&context.group_id, user_id).await.ok().flatten();
-        let already_lacks_role = member.map(|m| !m.role_ids.contains(&role_id.to_string())).unwrap_or(true);
+        let already_lacks_role = member_already_lacks_role(member.as_ref().map(|m| m.role_ids.as_slice()), role_id);
         if already_lacks_role {
             lines.push(format!("VRChat user [{display_name}](<https://vrchat.com/home/user/{user_id}>) already lacks the role `{role_id}`"));
         } else {
@@ -302,6 +329,23 @@ async fn run_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_membership_lookup_still_attempts_the_role_change() {
+        // Java falls through to add/removeGroupRole when getGroupMembership returns null.
+        assert!(!member_already_has_role(None, "grol_1"));
+        assert!(!member_already_lacks_role(None, "grol_1"));
+    }
+
+    #[test]
+    fn present_membership_short_circuits_like_java() {
+        let with = ["grol_1".to_string()];
+        let without: [String; 0] = [];
+        assert!(member_already_has_role(Some(&with), "grol_1"));
+        assert!(!member_already_has_role(Some(&without), "grol_1"));
+        assert!(member_already_lacks_role(Some(&without), "grol_1"));
+        assert!(!member_already_lacks_role(Some(&with), "grol_1"));
+    }
 
     #[test]
     fn capitalize_uppercases_first_char_only() {

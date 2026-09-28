@@ -164,12 +164,13 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             super::discord_member_action::emit_action_log(
                 ctx,
                 "Discord Warning",
-                &actor_name,
+                Some(actor_member),
                 &target_name,
                 target_user.id,
-                reason_text,
+                reason,
                 true,
                 "Warning DM delivered.",
+                super::discord_member_action::WARNING_COLOUR,
             )
             .await;
             super::reply_ephemeral(ctx, command, &format!("Warned **{target_name}**.")).await
@@ -178,12 +179,13 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             super::discord_member_action::emit_action_log(
                 ctx,
                 "Discord Warning",
-                &actor_name,
+                Some(actor_member),
                 &target_name,
                 target_user.id,
-                reason_text,
+                reason,
                 false,
                 &format!("Failed to deliver warning DM: {err}"),
+                super::discord_member_action::FAILURE_COLOUR,
             )
             .await;
             super::reply_ephemeral(

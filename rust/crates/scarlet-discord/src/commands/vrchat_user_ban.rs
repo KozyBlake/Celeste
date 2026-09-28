@@ -63,6 +63,7 @@ async fn begin_immediate(
         command.member.as_deref(),
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        Some("ban users"),
     ).await {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
@@ -161,6 +162,7 @@ pub(crate) async fn execute(
         member,
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        Some(if ban { "ban users" } else { "unban users" }),
     )
     .await?;
 

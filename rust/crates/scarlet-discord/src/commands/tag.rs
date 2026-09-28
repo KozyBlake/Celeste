@@ -146,7 +146,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     let (Some(data), Some(tags)) = (data, tags) else {
         return super::reply_ephemeral(ctx, command, "Moderation tag data is unavailable.").await;
     };
-    if let Some(denial) = tag_access_denial(command, &data, &audit_id) {
+    if let Some(denial) = tag_access_denial(ctx, command, &data, &audit_id).await {
         return super::reply_ephemeral(ctx, command, &denial).await;
     }
 
@@ -254,33 +254,95 @@ fn audit_id_from_messages(messages: &[serenity::model::channel::Message]) -> Opt
         .map(str::to_string)
 }
 
-fn tag_access_denial(
+async fn tag_access_denial(
+    ctx: &Context,
     command: &CommandInteraction,
     data: &scarlet_core::data::ScarletData,
     audit_id: &str,
 ) -> Option<String> {
-    tag_access_denial_for(command.member.as_deref(), &command.user.id.to_string(), data, audit_id)
+    tag_access_denial_for(
+        ctx,
+        command.member.as_deref(),
+        &command.user.id.to_string(),
+        command.channel.as_ref().map(|channel| channel.kind),
+        data,
+        audit_id,
+    )
+    .await
 }
 
-pub(crate) fn tag_access_denial_for(
+/// Java checks the channel-scoped "can you post here" permission with
+/// `MESSAGE_SEND_IN_THREADS` for a thread and `MESSAGE_SEND` otherwise.
+fn post_permission(kind: Option<ChannelType>) -> Permissions {
+    match kind {
+        Some(ChannelType::PublicThread | ChannelType::PrivateThread | ChannelType::NewsThread)
+        | None => Permissions::SEND_MESSAGES_IN_THREADS,
+        Some(_) => Permissions::SEND_MESSAGES,
+    }
+}
+
+/// Port of `ScarletDiscordUI.auditEntryTagDenial(Member, MessageChannel, String)`.
+/// Returns `None` when the member may tag the entry, or the exact denial
+/// message Java would have replied with.
+pub(crate) async fn tag_access_denial_for(
+    ctx: &Context,
     member: Option<&serenity::model::guild::Member>,
     snowflake: &str,
+    channel_kind: Option<ChannelType>,
     data: &scarlet_core::data::ScarletData,
     audit_id: &str,
 ) -> Option<String> {
     let Some(member) = member else {
         return Some("Could not determine your guild permissions.".to_string());
     };
+    // Staff are whoever the server lets post in its moderation threads.
+    // `member.permissions` on an interaction is already channel-scoped, so
+    // this is Java's `member.hasPermission(guildChannel, VIEW_CHANNEL, post)`.
     let permissions = member.permissions.unwrap_or_else(Permissions::empty);
-    if permissions.contains(Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES_IN_THREADS)
-        || permissions.intersects(
-            Permissions::MODERATE_MEMBERS | Permissions::MANAGE_GUILD | Permissions::ADMINISTRATOR,
+    if permissions.contains(Permissions::VIEW_CHANNEL | post_permission(channel_kind))
+        || permissions.contains(Permissions::ADMINISTRATOR)
+    {
+        return None;
+    }
+    if permissions.intersects(Permissions::MODERATE_MEMBERS | Permissions::MANAGE_GUILD) {
+        return None;
+    }
+    if super::member_has_vrchat_permission(
+        ctx,
+        member,
+        scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+    )
+    .await
+        || super::member_has_celeste_permission(
+            ctx,
+            member,
+            scarlet_core::permission::ScarletPermission::GroupexBansManage,
+            false,
         )
+        .await
+        || super::member_has_celeste_permission(
+            ctx,
+            member,
+            scarlet_core::permission::ScarletPermission::GroupexTagsEdit,
+            false,
+        )
+        .await
     {
         return None;
     }
     let linked = data.global_get_snowflake_id(snowflake);
     if let Some(linked) = linked {
+        // Java re-checks a VRChat permission here (not just at the top), so an
+        // instance moderator can tag any event once their account is linked.
+        if super::member_has_vrchat_permission(
+            ctx,
+            member,
+            scarlet_vrchat::client::PERMISSION_GROUP_INSTANCE_MODERATE,
+        )
+        .await
+        {
+            return None;
+        }
         let metadata = data.audit_entry_metadata(audit_id);
         let actor = metadata
             .entry
@@ -292,8 +354,16 @@ pub(crate) fn tag_access_denial_for(
         {
             return None;
         }
+        tracing::warn!(
+            "Rejected tag/description edit by {} for audit entry {audit_id}",
+            member.user.id
+        );
         Some("You can't tag this event: your role can't post in this moderation thread, and it isn't an action you took. Ask an admin to give your role permission to send messages here.".to_string())
     } else {
+        tracing::warn!(
+            "Rejected tag/description edit by {} for audit entry {audit_id}",
+            member.user.id
+        );
         Some("You can't tag this event: your role can't post in this moderation thread. Ask an admin to give your role permission to send messages here, or link your VRChat account with `/link-vrchat-account` to tag actions you took yourself.".to_string())
     }
 }

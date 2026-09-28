@@ -14,6 +14,7 @@ pub mod json_cache;
 pub mod log;
 pub mod maths;
 pub mod meta;
+pub mod misc_utils;
 pub mod moderation_tags;
 pub mod names;
 pub mod pacer;

@@ -73,6 +73,7 @@ pub const PERMISSION_GROUP_INSTANCE_PLUS_CREATE: &str = "group-instance-plus-cre
 pub const PERMISSION_GROUP_INSTANCE_OPEN_CREATE: &str = "group-instance-open-create";
 pub const PERMISSION_GROUP_INSTANCE_RESTRICTED_CREATE: &str = "group-instance-restricted-create";
 pub const PERMISSION_GROUP_INSTANCE_AGE_GATED_CREATE: &str = "group-instance-age-gated-create";
+pub const PERMISSION_GROUP_INSTANCE_MODERATE: &str = "group-instance-moderate";
 
 #[derive(Debug, thiserror::Error)]
 pub enum VrChatError {
@@ -1184,14 +1185,46 @@ impl VrChatClient {
     /// this always does a fresh `get_group`/`get_group_member` fetch
     /// instead, which is correct, just uncached (an extra round trip per
     /// check rather than a cache hit).
+    /// Port of `checkUserHasVRChatPermission`: does this *member* hold the
+    /// permission through one of their group roles?
+    ///
+    /// **Group ownership is deliberately not a grant here.** Java's owner
+    /// fallback lives only in `checkSelfUserHasVRChatPermission` — the check
+    /// against Celeste's *own* account — and this port used to apply it to
+    /// everyone, which quietly let a group owner past member-level
+    /// moderation gates their roles didn't grant. Use
+    /// [`VrChatClient::self_has_group_permission`] for the bot's own check.
     pub async fn user_has_group_permission(
         &self,
         group_id: &str,
         user_id: &str,
         permission: &str,
     ) -> Result<bool, VrChatError> {
+        self.has_group_permission(group_id, user_id, permission, false).await
+    }
+
+    /// Port of `checkSelfUserHasVRChatPermission`: as above, plus Java's
+    /// explicit group-owner fallback, which exists so an owner-run bot
+    /// isn't blocked by its own role configuration.
+    pub async fn self_has_group_permission(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        permission: &str,
+    ) -> Result<bool, VrChatError> {
+        self.has_group_permission(group_id, user_id, permission, true).await
+    }
+
+    async fn has_group_permission(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        permission: &str,
+        owner_is_a_grant: bool,
+    ) -> Result<bool, VrChatError> {
         let group = self.get_group(group_id, true).await?;
-        if group.owner_id.as_deref() == Some(user_id) {
+        if owner_is_a_grant && group.owner_id.as_deref() == Some(user_id) {
+            tracing::debug!("VRChat permission `{permission}` granted by group owner fallback for `{user_id}`");
             return Ok(true);
         }
         let Some(member) = self.get_group_member(group_id, user_id).await? else {
@@ -2208,16 +2241,30 @@ mod tests {
             .await;
     }
 
+    /// Java's owner fallback is in `checkSelfUserHasVRChatPermission` only,
+    /// so it applies to Celeste's own account and to nobody else.
     #[tokio::test]
-    async fn group_owner_always_has_permission() {
+    async fn group_ownership_grants_permission_only_for_the_bots_own_check() {
         let server = MockServer::start().await;
         mock_group_with_roles(&server, "usr_owner").await;
+        // The owner holds no role carrying the permission.
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/members/usr_owner"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "gmem_owner", "groupId": "grp_1", "userId": "usr_owner", "roleIds": ["grol_member"]
+            })))
+            .mount(&server)
+            .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        assert!(client
-            .user_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE)
-            .await
-            .unwrap());
+        assert!(
+            client.self_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE).await.unwrap(),
+            "the bot's own check keeps Java's owner fallback"
+        );
+        assert!(
+            !client.user_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE).await.unwrap(),
+            "a member check must not be satisfied by ownership alone"
+        );
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction, ban: bool) -> sere
         command.member.as_deref(),
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        Some(if ban { "ban users" } else { "unban users" }),
     )
     .await
     {

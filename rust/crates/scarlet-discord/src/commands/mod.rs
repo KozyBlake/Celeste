@@ -502,6 +502,50 @@ pub(crate) struct ModerationContext {
 /// `checkMemberHasVRChatPermission` either, relying solely on Discord's own
 /// per-command permission settings (`@DefaultPerms`). Faithfully porting
 /// "no extra in-code gate" means not inventing one here.
+/// Port of `ScarletDiscordJDA.checkMemberHasVRChatPermission(GroupPermissions, Member)`:
+/// resolve the member's linked VRChat id and ask the group whether that user
+/// holds the permission. A null permission is a pass in Java; an unlinked
+/// member, an unavailable VRChat session or a failed lookup is a fail.
+pub(crate) async fn member_has_vrchat_permission(
+    ctx: &Context,
+    member: &serenity::model::guild::Member,
+    permission: &str,
+) -> bool {
+    let Some(data) = ({ ctx.data.read().await.get::<crate::data::ScarletDataKey>().cloned() }) else {
+        return false;
+    };
+    let Some(user_id) = data.global_get_snowflake_id(&member.user.id.to_string()) else {
+        return false;
+    };
+    let Ok(context) = vrchat_context(ctx).await else {
+        return false;
+    };
+    context
+        .client
+        .user_has_group_permission(&context.group_id, &user_id, permission)
+        .await
+        .unwrap_or(false)
+}
+
+/// Port of `ScarletDiscordJDA.checkMemberHasScarletPermission(ScarletPermission, Member, boolean)`.
+pub(crate) async fn member_has_celeste_permission(
+    ctx: &Context,
+    member: &serenity::model::guild::Member,
+    permission: scarlet_core::permission::ScarletPermission,
+    fallback: bool,
+) -> bool {
+    let permissions = { ctx.data.read().await.get::<crate::data::DiscordPermissionsKey>().cloned() };
+    match permissions {
+        Some(permissions) => permissions.check(
+            crate::permissions::PermissionType::Other,
+            member,
+            permission.id(),
+            fallback,
+        ),
+        None => fallback,
+    }
+}
+
 pub(crate) async fn vrchat_context(ctx: &Context) -> Result<ModerationContext, String> {
     let settings = {
         ctx.data
@@ -550,7 +594,19 @@ pub(crate) async fn moderation_context_for_snowflake(
     snowflake: &str,
     permission: &str,
 ) -> Result<ModerationContext, String> {
-    moderation_context_for_snowflake_with_override(ctx, snowflake, None, permission, None).await
+    moderation_context_for_snowflake_with_override(ctx, snowflake, None, permission, None, None).await
+}
+
+/// Java spells the ban/unban denial out in full, naming the exact override
+/// command an admin would run. `action` is the verb phrase Java uses
+/// ("ban users", "unban users").
+fn permission_denial(action: Option<&str>, override_permission: Option<&str>) -> String {
+    match (action, override_permission) {
+        (Some(action), Some(override_permission)) => format!(
+            "You do not have permission to {action}.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/scarlet-discord-permissions type:Other name:{override_permission} value:Allow`)||"
+        ),
+        _ => "You do not have permission to perform this action.\n||(Your admin can grant your linked VRChat account the relevant group permission.)||".to_string(),
+    }
 }
 
 /// Ban/unban's Java implementation permits the Discord-side
@@ -563,6 +619,7 @@ pub(crate) async fn moderation_context_for_snowflake_with_override(
     member: Option<&serenity::model::guild::Member>,
     permission: &str,
     override_permission: Option<&str>,
+    denial_action: Option<&str>,
 ) -> Result<ModerationContext, String> {
     let scarlet_data = {
         ctx.data
@@ -599,14 +656,14 @@ pub(crate) async fn moderation_context_for_snowflake_with_override(
         false
     };
     if !has_override {
-        return Err("You do not have permission to perform this action.\n||(Your admin can grant your linked VRChat account the relevant group permission.)||"
-            .to_string());
+        return Err(permission_denial(denial_action, override_permission));
     }
 
     let current_user = context.client.get_current_user().await
         .map_err(|err| format!("Could not verify Celeste's VRChat group permissions: {err}"))?;
     let self_has_permission = context.client
-        .user_has_group_permission(&context.group_id, &current_user.id, permission)
+        // Celeste's own check keeps Java's group-owner fallback.
+        .self_has_group_permission(&context.group_id, &current_user.id, permission)
         .await
         .map_err(|err| format!("Could not verify Celeste's VRChat group permissions: {err}"))?;
     if !self_has_permission {
@@ -674,6 +731,30 @@ pub fn paginate_on_lines(input: &str, max_component_len: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ban_denial_names_the_override_command_like_java() {
+        let message = super::permission_denial(
+            Some("ban users"),
+            Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        );
+        assert_eq!(
+            message,
+            "You do not have permission to ban users.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/scarlet-discord-permissions type:Other name:groupex-bans-manage value:Allow`)||"
+        );
+    }
+
+    #[test]
+    fn commands_without_an_override_keep_the_generic_denial() {
+        assert!(super::permission_denial(None, None).starts_with("You do not have permission to perform this action."));
+        assert!(super::permission_denial(Some("ban users"), None).starts_with("You do not have permission to perform this action."));
+    }
+
+    #[test]
+    fn entries_per_page_matches_javas_default_and_range() {
+        // Java: `SlashOption.ofInt("entries-per-page", ..., false, 4).setRequiredRange(1, 10)`.
+        assert_eq!(entries_per_page(&[]), 4);
+    }
+
     use super::*;
 
     #[test]

@@ -141,6 +141,7 @@ impl AuditPoller {
                 Err(error) => tracing::warn!(%error, target_id, "Could not consume pending moderation action"),
             }
         }
+        let mut pending_claimed = false;
         if entry.event_type == "group.user.ban" {
             if let Some(target_id) = entry.target_id.as_deref() {
                 match crate::pending_moderation::PendingModeration::take_from_dir(
@@ -148,6 +149,10 @@ impl AuditPoller {
                     target_id,
                 ) {
                     Ok(Some(info)) => {
+                        // Java clears `contentExtra` here, before looking at
+                        // the record's contents, so a Celeste-issued ban is
+                        // never labelled "Unclaimed".
+                        pending_claimed = true;
                         if let Some(tags) = info.tags {
                             metadata.entry_tags.add_all(tags);
                         }
@@ -200,7 +205,7 @@ impl AuditPoller {
                             Ok(thread) => {
                                 metadata.thread_snowflake = Some(thread.id.get().to_string());
                                 let aux = CreateMessage::new()
-                                    .content(moderation_aux_content(&metadata, &self.moderation_tags))
+                                    .content(moderation_aux_content(&metadata, &self.moderation_tags, pending_claimed))
                                     .components(moderation_controls(
                                         &entry,
                                         self.settings.timed_bans_enabled.get(),
@@ -263,11 +268,27 @@ impl AuditPoller {
 
 }
 
+/// Port of the `contentExtra` half of
+/// `ScarletDiscordJDA.emitUserModeration_auxMessage`.
+///
+/// Java starts from `"\nUnclaimed"` and clears it *only* when a
+/// `group.user.ban` entry consumed a pending ban record — i.e. when the ban
+/// was issued through Celeste, so a moderator is already attached to it, even
+/// if they supplied neither tags nor a description. `pending_claimed` carries
+/// that "we consumed a pending record" signal.
+///
+/// Deviation: Java renders the tags/description from the *pending record*
+/// only, so re-creating an aux message later (`/fix-audit-thread`) always
+/// prints a bare "Unclaimed" and drops any tags the entry has since gained.
+/// This reads them back off the entry metadata instead, which for a freshly
+/// polled entry is the same text Java would print and for a re-created
+/// message is strictly more accurate.
 pub(crate) fn moderation_aux_content(
     metadata: &AuditEntryMetadata,
     moderation_tags: &ModerationTags,
+    pending_claimed: bool,
 ) -> String {
-    let claimed = metadata.has_tags() || metadata.has_description();
+    let claimed = pending_claimed || metadata.has_tags() || metadata.has_description();
     let mut content = if claimed { String::new() } else { "Unclaimed".to_string() };
     if metadata.has_tags() {
         content.push_str("\n### Tags:\n");
@@ -441,6 +462,18 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_consumed_pending_ban_is_never_labelled_unclaimed() {
+        // Java sets `contentExtra = ""` the moment `pollBanInfo` returns a
+        // record, before it looks at that record's tags or description.
+        let dir = std::env::temp_dir().join("celeste-aux-content-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tags = ModerationTags::open(&dir, "moderation_tags_absent.json");
+        let metadata = AuditEntryMetadata::default();
+        assert_eq!(moderation_aux_content(&metadata, &tags, true), "");
+        assert_eq!(moderation_aux_content(&metadata, &tags, false), "Unclaimed");
+    }
 
     #[test]
     fn overlap_does_not_rewind_the_persisted_cursor() {

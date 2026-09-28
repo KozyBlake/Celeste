@@ -105,7 +105,10 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         let aux = thread_id.send_message(
             &ctx.http,
             CreateMessage::new()
-                .content(crate::events::audit_poller::moderation_aux_content(&metadata, &tags))
+                .content(// Java re-enters `emitUserModeration_auxMessage`, where `pollBanInfo`
+                // has already been consumed by the original poll, so no pending
+                // record is claimed on a re-fix.
+                crate::events::audit_poller::moderation_aux_content(&metadata, &tags, false))
                 .components(crate::events::audit_poller::moderation_controls(
                     &entry,
                     settings.is_some_and(|settings| settings.timed_bans_enabled.get()),

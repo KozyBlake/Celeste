@@ -13,10 +13,17 @@ use serenity::model::id::{GuildId, RoleId, UserId};
 use serenity::model::permissions::Permissions;
 use serenity::model::prelude::ButtonStyle;
 
+use scarlet_core::misc_utils::maybe_ellipsis;
+
 use crate::data::{DiscordConfigKey, DiscordModerationDraftsKey, SettingsKey};
 
 pub const BAN_NAME: &str = "discord-ban";
 pub const KICK_NAME: &str = "discord-kick";
+
+/// Discord red (`0xED4245`), the colour Java passes for bans and every failure.
+pub(crate) const FAILURE_COLOUR: u32 = 0xED4245;
+/// Discord yellow (`0xFEE75C`), Java's colour for a successful kick or warning.
+pub(crate) const WARNING_COLOUR: u32 = 0xFEE75C;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberAction {
@@ -50,6 +57,24 @@ impl MemberAction {
             "banned"
         } else {
             "kicked"
+        }
+    }
+    /// The capitalised past participle Java uses to open the audit-log reason
+    /// ("Banned via Scarlet by ...", "Kicked via Scarlet by ...").
+    fn past_title(self) -> &'static str {
+        if self == Self::Ban {
+            "Banned"
+        } else {
+            "Kicked"
+        }
+    }
+    /// Java passes the colour per call site: a successful kick is yellow,
+    /// a successful ban red, and every failure red.
+    fn success_colour(self) -> u32 {
+        if self == Self::Ban {
+            FAILURE_COLOUR
+        } else {
+            WARNING_COLOUR
         }
     }
     pub(crate) fn permission(self) -> Permissions {
@@ -122,15 +147,22 @@ pub(crate) async fn bot_can_interact(
     Ok(can_interact(&roles, &bot.roles, target_roles, false))
 }
 
+/// Port of `ScarletDiscordJDA.emitDiscordActionLog(String, Member, String,
+/// String, String, boolean, String, int)`. The field set, ordering,
+/// inline-ness and the "No reason provided" fallback are Java's; `colour` is
+/// the caller-supplied colour Java passes per call site rather than something
+/// derived from the title.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_action_log(
     ctx: &Context,
     title: &str,
-    actor: &str,
+    actor: Option<&Member>,
     target_name: &str,
     target_id: UserId,
-    reason: &str,
+    reason: Option<&str>,
     success: bool,
     detail: &str,
+    colour: u32,
 ) {
     let config = { ctx.data.read().await.get::<DiscordConfigKey>().cloned() };
     let Some(channel_id) = config
@@ -139,24 +171,56 @@ pub(crate) async fn emit_action_log(
     else {
         return;
     };
-    let success_colour = if title == "Discord Ban" {
-        0xED4245
-    } else {
-        0xFEE75C
+    // Java: `actor == null ? "Unknown" : escape(effectiveName) + " (" + mention + ", `id`)"`.
+    let actor_text = match actor {
+        None => "Unknown".to_string(),
+        Some(actor) => format!(
+            "{} (<@{}>, `{}`)",
+            escape_markdown(actor.display_name()),
+            actor.user.id,
+            actor.user.id
+        ),
     };
-    let embed = CreateEmbed::new()
+    // Java falls back to just the id when the display name is blank.
+    let target_text = if target_name.trim().is_empty() {
+        format!("`{target_id}`")
+    } else {
+        format!("{} (`{target_id}`)", escape_markdown(target_name))
+    };
+    let reason_text = match reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        Some(reason) => maybe_ellipsis(1024, reason),
+        None => "No reason provided".to_string(),
+    };
+    let mut embed = CreateEmbed::new()
         .title(title)
-        .colour(if success { success_colour } else { 0xED4245 })
-        .field("Actor", actor, true)
-        .field("Target", format!("{target_name} (`{target_id}`)"), true)
-        .field("Reason", reason, false)
-        .field("Result", detail, false);
+        .colour(colour)
+        .timestamp(serenity::model::Timestamp::now())
+        .field("Status", if success { "Completed" } else { "Failed" }, true)
+        .field("Moderator", actor_text, false)
+        .field("Target", target_text, false)
+        .field("Reason", reason_text, false);
+    // Java only adds "Details" when the detail string is non-blank.
+    if !detail.trim().is_empty() {
+        embed = embed.field("Details", maybe_ellipsis(1024, detail.trim()), false);
+    }
     if let Err(err) = serenity::model::id::ChannelId::new(channel_id)
         .send_message(&ctx.http, CreateMessage::new().embed(embed))
         .await
     {
         tracing::warn!("Could not emit Discord action log: {err}");
     }
+}
+
+/// Java wraps every user-supplied name in `MarkdownSanitizer.escape`.
+pub(crate) fn escape_markdown(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '*' | '_' | '~' | '`' | '>' | '|' | '\\' | '[' | ']' | '(' | ')' | '#' | '-' | '+' | '.' | '!') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 pub async fn run(
@@ -358,18 +422,33 @@ pub(crate) async fn perform(
         }
     }
     let actor_name = actor.display_name().to_string();
-    let reason = draft.reason.as_deref().unwrap_or("No reason provided");
+    // Java treats a null/blank reason as "no reason at all": the DM and the
+    // audit-log reason simply omit the reason clause rather than substituting
+    // a placeholder. Only the action-log embed's "Reason" field falls back to
+    // "No reason provided" (see `emit_action_log`).
+    let reason = draft
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty());
     if let Some(target) = &target {
-        let dm = if draft.action == MemberAction::Ban {
-            format!(
+        let dm = match (draft.action, reason) {
+            // Java's ban DM omits the actor; the kick DM names them.
+            (MemberAction::Ban, Some(reason)) => format!(
                 "You have been banned from **{}**.\n**Reason:** {reason}",
                 guild.name
-            )
-        } else {
-            format!(
+            ),
+            (MemberAction::Ban, None) => {
+                format!("You have been banned from **{}**.", guild.name)
+            }
+            (MemberAction::Kick, Some(reason)) => format!(
                 "You have been kicked from **{}** by {actor_name}.\n**Reason:** {reason}",
                 guild.name
-            )
+            ),
+            (MemberAction::Kick, None) => format!(
+                "You have been kicked from **{}** by {actor_name}.",
+                guild.name
+            ),
         };
         if let Err(err) = target
             .user
@@ -383,10 +462,13 @@ pub(crate) async fn perform(
             );
         }
     }
-    let audit_reason = format!(
-        "{} via Celeste by {actor_name}. Reason: {reason}",
-        draft.action.title()
-    );
+    let audit_reason = match reason {
+        Some(reason) => format!(
+            "{} via Celeste by {actor_name}. Reason: {reason}",
+            draft.action.past_title()
+        ),
+        None => format!("{} via Celeste by {actor_name}", draft.action.past_title()),
+    };
     let result = if draft.action == MemberAction::Ban {
         draft
             .guild_id
@@ -404,12 +486,13 @@ pub(crate) async fn perform(
             emit_action_log(
                 ctx,
                 &format!("Discord {}", draft.action.title()),
-                &actor_name,
+                Some(actor),
                 &draft.target_name,
                 draft.target_id,
                 reason,
                 true,
                 &detail,
+                draft.action.success_colour(),
             )
             .await;
             Ok(format!(
@@ -422,12 +505,13 @@ pub(crate) async fn perform(
             emit_action_log(
                 ctx,
                 &format!("Discord {}", draft.action.title()),
-                &actor_name,
+                Some(actor),
                 &draft.target_name,
                 draft.target_id,
                 reason,
                 false,
                 &format!("{} failed: {err}", draft.action.title()),
+                FAILURE_COLOUR,
             )
             .await;
             Err(format!(

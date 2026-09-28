@@ -334,6 +334,7 @@ async fn handle_group_request(
         interaction.member.as_ref(),
         scarlet_vrchat::client::PERMISSION_GROUP_INVITES_MANAGE,
         None,
+        None,
     ).await;
     let (message, ephemeral) = match context {
         Ok(context) => {
@@ -473,11 +474,15 @@ async fn handle_audit_edit_component(
     }
 
     if let Some(denial) = crate::commands::tag::tag_access_denial_for(
+        ctx,
         interaction.member.as_ref(),
         &interaction.user.id.to_string(),
+        interaction.channel.as_ref().map(|channel| channel.kind),
         &data,
         audit_id,
-    ) {
+    )
+    .await
+    {
         return ephemeral_component(ctx, interaction, denial).await;
     }
 
@@ -598,6 +603,7 @@ async fn handle_manager_notes_button(
         interaction.member.as_ref(),
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        Some("edit manager notes"),
     ).await {
         Ok(context) => context,
         Err(message) => return ephemeral_component(ctx, interaction, message).await,
@@ -1465,6 +1471,7 @@ async fn perform_timed_ban(
     let context = match crate::commands::moderation_context_for_snowflake_with_override(
         ctx, &snowflake, member, scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        Some("ban users"),
     ).await {
         Ok(context) => context,
         Err(message) => return (message, true),
@@ -1595,11 +1602,15 @@ async fn handle_audit_description_modal(
         return ephemeral_modal(ctx, interaction, "Moderation data is unavailable.").await;
     };
     if let Some(denial) = crate::commands::tag::tag_access_denial_for(
+        ctx,
         interaction.member.as_ref(),
         &interaction.user.id.to_string(),
+        interaction.channel.as_ref().map(|channel| channel.kind),
         &data,
         audit_id,
-    ) {
+    )
+    .await
+    {
         return ephemeral_modal(ctx, interaction, denial).await;
     }
     let description = modal_text(interaction, &format!("input-desc:{audit_id}"));
@@ -1716,6 +1727,7 @@ async fn handle_vrchat_user_multi(
         interaction.member.as_ref(),
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        Some(if ban { "ban users" } else { "unban users" }),
     )
     .await
     {
@@ -1810,6 +1822,7 @@ async fn handle_manager_notes_modal(
         interaction.member.as_ref(),
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+        Some("edit manager notes"),
     ).await;
     let message = match context {
         Ok(context) => {

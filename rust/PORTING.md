@@ -312,6 +312,75 @@ boot splash was considered and **not** added: startup is well under a second,
 so a splash would be a deliberate delay rather than the progress indicator it
 was in Java (where the JVM and dependency loading genuinely took seconds).
 
+## Behavioural diff against Java, pass 1 (28 Sep 2026)
+
+Going command family by command family against the Java source rather than
+just matching the command surface. Fixed so far:
+
+- **Group-owner permission fallback.** Java only grants a group's owner an
+  implicit permission in `checkSelfUserHasVRChatPermission`
+  (`ScarletVRChat.java:2900`), not in `checkUserHasVRChatPermission`
+  (`:2932`). Rust was applying it to every member check, so a group owner
+  passed moderator gates they should not have. Split into
+  `user_has_group_permission` (strict) and `self_has_group_permission`
+  (owner fallback); only Celeste's own check uses the latter.
+- **`staff-list` / `secret-staff-list` role changes.** Java short-circuits
+  ("already has/lacks the role") only when the membership lookup returned a
+  member; a null lookup still calls `add`/`removeGroupRole`. Rust's remove
+  path treated a *failed* lookup as "already lacks it" and silently did
+  nothing. Also: the role option is no longer dropped in silence when there
+  is no VRChat session — it says so.
+- **`staff-list add` / `secret-staff-list add` `discord-user`** is required,
+  as Java registers it (`_discordUser`, `required = true`, no
+  `@Required(false)` on those subcommands). It was optional here.
+- **`/discord-ban` / `/discord-kick` with no reason.** Java omits the reason
+  clause entirely from the audit-log reason and the DM; Rust was substituting
+  "No reason provided" into both. Only the action-log embed's Reason field
+  falls back to that string, which is what Java does.
+- **The Discord action-log embed** now matches
+  `ScarletDiscordJDA.emitDiscordActionLog`: a `Status` field
+  (Completed/Failed, inline), `Moderator` with the mention and id (or
+  "Unknown"), `Target` falling back to the bare id, a 1024-char-ellipsised
+  `Reason`, an optional `Details` field, a UTC timestamp, and the colour the
+  call site passes rather than one inferred from the title.
+- **"Unclaimed" on a moderation thread's aux message.** Java clears it the
+  moment a `group.user.ban` entry consumes a pending ban record — i.e. any
+  ban issued through Celeste — even when the moderator supplied no tags. Rust
+  was deciding purely from the metadata, so a tagless Celeste ban was
+  labelled Unclaimed.
+- **The tag/description access gate** (`ScarletDiscordUI.auditEntryTagDenial`)
+  was missing three of Java's four grants: the `group-bans-manage` VRChat
+  permission, the `groupex-bans-manage` and `groupex-tags-edit` Celeste
+  overrides, and the `group-instance-moderate` re-check for a linked account.
+  It also always tested `MESSAGE_SEND_IN_THREADS`; Java picks
+  `MESSAGE_SEND` outside a thread.
+- **Ban/unban permission denials** now carry Java's full wording, naming the
+  exact `/scarlet-discord-permissions type:Other name:groupex-bans-manage
+  value:Allow` an admin would run, instead of a generic sentence.
+
+Ported along the way: `MiscUtils.maybeEllipsis` (as
+`scarlet_core::misc_utils::maybe_ellipsis`) and the
+`group-instance-moderate` permission constant.
+
+Known, deliberate deviations confirmed in this pass:
+
+- `entries-per-page` matches Java exactly (default 4, range 1-10), but list
+  commands still render **text pages sent as messages** rather than Java's
+  button-navigated embed paginator. This is the pre-existing presentation
+  deviation, not a regression.
+- `/fix-audit-thread` rebuilds an aux message from the entry's *current*
+  tags and description. Java re-reads the (already-consumed) pending record,
+  so it always prints a bare "Unclaimed" there and drops tags the entry has
+  since gained.
+- Discord **command names** keep their Java spelling
+  (`/scarlet-discord-permissions`, ...) even after the Celeste rename, so the
+  registered command surface still matches `java_commands.txt` and existing
+  muscle memory and permission setups keep working. Only the text inside
+  responses says Celeste.
+
+Still to diff: `vrchat-group`, `watched-*`, `config`/`settings` and the
+reports families.
+
 ## Working rules for continuing this port
 
 - **Commit after every subsystem chunk that compiles**, not just at the end. This is the #1 fix versus the first attempt.
