@@ -2,14 +2,7 @@
 //! backed by `scarlet_core::moderation_tags::ModerationTags`. Ported:
 //! `list`, `add`, `delete`.
 //!
-//! **Not ported**: `/tag` (Java's `Tag_` class) -- tagging the moderation
-//! event a Discord thread belongs to. That command depends on
-//! `ScarletDiscordUI.auditEntryIdForThread`/`checkAuditEntryTagAccess`/
-//! `updateAuxMessage`, a separate not-yet-ported subsystem that tracks
-//! which thread belongs to which audit-log entry and keeps an aux message
-//! in sync with its tags. `scarlet_core::data::ScarletData` already has
-//! the underlying `audit_entry_metadata_edit_tags` this command would
-//! eventually call — only the Discord-thread-tracking half is missing.
+//! Thread-level `/tag add|remove` lives in [`super::tag`].
 //!
 //! **Simplified**: `list` renders as plain text via
 //! [`super::paginate_on_lines`] instead of Java's paginated per-tag embeds.

@@ -28,6 +28,7 @@ pub mod ticket_config;
 pub mod aux_webhooks;
 pub mod animated_emoji;
 pub mod moderation_tags;
+pub mod tag;
 pub mod moderation_history;
 pub mod moderation_reports;
 pub mod link_vrchat_account;
@@ -182,6 +183,7 @@ pub async fn register_global_commands(ctx: &Context) {
         staff_list::register(),
         secret_staff_list::register(),
         moderation_tags::register(),
+        tag::register(),
         moderation_history::register_moderation_log(),
         moderation_history::register_query_target(),
         moderation_history::register_query_actor(),
@@ -242,6 +244,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         staff_list::NAME => staff_list::run(ctx, command).await,
         secret_staff_list::NAME => secret_staff_list::run(ctx, command).await,
         moderation_tags::NAME => moderation_tags::run(ctx, command).await,
+        tag::NAME => tag::run(ctx, command).await,
         moderation_history::MODERATION_LOG_NAME => moderation_history::run_moderation_log(ctx, command).await,
         moderation_history::QUERY_TARGET_NAME => moderation_history::run_query_target(ctx, command).await,
         moderation_history::QUERY_ACTOR_NAME => moderation_history::run_query_actor(ctx, command).await,
@@ -287,6 +290,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
 pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) {
     let result = match command.data.name.as_str() {
         settings::NAME => settings::autocomplete(ctx, command).await,
+        tag::NAME => tag::autocomplete(ctx, command).await,
         _ => command
             .create_response(
                 &ctx.http,

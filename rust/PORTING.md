@@ -247,6 +247,17 @@ live instance: previously commands updated one in-memory `discord_bot.json`
 copy while background emitters continued reading a stale second copy until
 restart.
 
+**Update 34 (`/tag`)**: `/tag add` and `/tag remove` are now registered and
+functional inside moderation threads. The command recovers the audit id
+from the thread's durable `edit-tags:<id>` component marker (so it works
+after restart), searches all moderation tags with the existing ranked
+typo-tolerant matcher, excludes values already selected in another option,
+accepts either tag ids or labels, applies the same five-tag operation, and
+updates both `gaud/<id>` metadata and the thread's auxiliary summary. The
+permission path accepts members who can post in the thread, Discord
+moderators/managers, or the linked VRChat actor who performed that audit
+event.
+
 ## Working rules for continuing this port
 
 - **Commit after every subsystem chunk that compiles**, not just at the end. This is the #1 fix versus the first attempt.
