@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use chrono::NaiveDateTime;
-use scarlet_core::ui::{ConnectedPlayer, InstanceState, PlayerJoin, ScarletUi};
+use scarlet_core::ui::{ConnectedPlayer, InstanceState, PlayerJoin, CelesteUi};
 
 #[derive(Debug, Default)]
 pub struct UiCalls {
@@ -31,7 +31,7 @@ impl RecordingUi {
     }
 }
 
-impl ScarletUi for RecordingUi {
+impl CelesteUi for RecordingUi {
     fn fire_sort(&self) {}
 
     fn clear_instance(&self) {

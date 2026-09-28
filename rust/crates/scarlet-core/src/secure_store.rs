@@ -135,7 +135,7 @@ pub struct EncryptedPrefs {
 impl EncryptedPrefs {
     /// Opens (or initializes) the encrypted store rooted at `data_dir`,
     /// deriving everything from `global_password` (see
-    /// `Scarlet::resolve_global_password` for how that's normally
+    /// `Celeste::resolve_global_password` for how that's normally
     /// sourced: `SCARLET_GLOBAL_PW` env var, then a per-install random key
     /// file, matching the Java fallback chain).
     pub fn open(data_dir: &Path, global_password: &str) -> Self {
@@ -243,7 +243,7 @@ fn save_store(data_dir: &Path, store: &HashMap<String, String>) {
     match serde_json::to_string_pretty(store) {
         Ok(json) => {
             // Backup-before-overwrite + atomic rename, same crash-safety
-            // shape as FileBackups::writer for Scarlet's other JSON files.
+            // shape as FileBackups::writer for Celeste's other JSON files.
             let tmp = path.with_extension("json.tmp");
             if std::fs::write(&tmp, json).is_ok() {
                 let _ = std::fs::rename(&tmp, &path);

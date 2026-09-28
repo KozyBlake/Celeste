@@ -18,7 +18,7 @@ use crate::data::{ScarletDataKey, VrChatClientKey};
 pub const NAME: &str = "vrchat-user-info";
 
 pub fn register() -> CreateCommand {
-    CreateCommand::new(NAME).description("Shows Scarlet's internal metadata for a VRChat user").add_option(
+    CreateCommand::new(NAME).description("Shows Celeste's internal metadata for a VRChat user").add_option(
         CreateCommandOption::new(CommandOptionType::String, "vrchat-user-id", "The VRChat user id (usr_...)")
             .required(true),
     )
@@ -35,16 +35,16 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     let vrc_id = vrc_id.to_string();
 
     let Some(scarlet_data) = ({ ctx.data.read().await.get::<ScarletDataKey>().cloned() }) else {
-        return super::reply_ephemeral(ctx, command, "Scarlet data is not available.").await;
+        return super::reply_ephemeral(ctx, command, "Celeste data is not available.").await;
     };
 
     let vrchat_client = { ctx.data.read().await.get::<VrChatClientKey>().cloned() };
     let Some(client_slot) = vrchat_client else {
-        return super::reply_ephemeral(ctx, command, "Scarlet isn't logged in to VRChat right now.").await;
+        return super::reply_ephemeral(ctx, command, "Celeste isn't logged in to VRChat right now.").await;
     };
     let client = { client_slot.read().await.clone() };
     let Some(client) = client else {
-        return super::reply_ephemeral(ctx, command, "Scarlet isn't logged in to VRChat right now.").await;
+        return super::reply_ephemeral(ctx, command, "Celeste isn't logged in to VRChat right now.").await;
     };
 
     let display_name = match client.get_user(&vrc_id).await {

@@ -62,7 +62,7 @@ use scarlet_core::pronoun_lists::PronounLists;
 use scarlet_core::settings::Settings;
 use scarlet_core::staff_list::StaffList;
 use scarlet_core::trust_rank::TrustRank;
-use scarlet_core::ui::{InstanceState, PlayerJoin, ScarletUi, NO_PRIORITY};
+use scarlet_core::ui::{InstanceState, PlayerJoin, CelesteUi, NO_PRIORITY};
 use scarlet_core::watched_entities::WatchedEntities;
 use scarlet_core::watched_groups::WatchedGroups;
 use scarlet_vrchat::client::VrChatClient;
@@ -88,10 +88,10 @@ mod audit_type {
 /// until a login succeeds, so every use is "if we have a session".
 pub type SharedVrChat = Arc<tokio::sync::RwLock<Option<Arc<VrChatClient>>>>;
 
-/// Everything the listener needs from the rest of Scarlet, matching the
-/// fields Java reaches through its `Scarlet` god-object.
+/// Everything the listener needs from the rest of Celeste, matching the
+/// fields Java reaches through its `Celeste` god-object.
 pub struct ListenerDeps {
-    pub ui: Arc<dyn ScarletUi>,
+    pub ui: Arc<dyn CelesteUi>,
     pub vrchat: SharedVrChat,
     pub settings: Arc<Settings>,
     pub data: Arc<ScarletData>,
@@ -148,7 +148,7 @@ pub struct ScarletEventListener {
 }
 
 /// Steam launch options that make VRChat write the `[API]` debug log lines
-/// Scarlet needs for exact avatar statuses.
+/// Celeste needs for exact avatar statuses.
 const VRCHAT_API_LOGGING_FLAGS: &str = "--enable-sdk-log-levels --enable-udon-debug-logging --enable-verbose-logging";
 const VRCHAT_API_LOGGING_LEVELS: &str = "--log-debug-levels=API;All;Always;AssetBundleDownloadManager;ContentCreator;Errors;NetworkData;NetworkProcessing;NetworkTransport;Warnings";
 
@@ -272,7 +272,7 @@ impl ScarletEventListener {
 
         if self.is_tailer_live {
             // Per-log transition already happened; still flush, because each
-            // VRChat session writes a new file and a restart while Scarlet
+            // VRChat session writes a new file and a restart while Celeste
             // keeps running re-queues that session's existing players.
             self.roster.flush();
             self.run_deferred_checks().await;
@@ -283,7 +283,7 @@ impl ScarletEventListener {
         self.roster.flush();
         self.run_deferred_checks().await;
         self.deps.ui.fire_sort();
-        // Scarlet often starts mid-session: players already present had
+        // Celeste often starts mid-session: players already present had
         // their avatars recorded during catch-up, where the live switch
         // trigger never fires. Hydrate their statuses now.
         self.rescan_avatar_info().await;
@@ -1652,7 +1652,7 @@ mod tests {
     }
 
     /// Catch-up rows are queued and flushed in log order at `CatchUp`, so
-    /// people already in the instance when Scarlet starts still appear.
+    /// people already in the instance when Celeste starts still appear.
     #[tokio::test]
     async fn catch_up_rows_appear_when_catch_up_completes() {
         let mut h = harness(true);
@@ -1666,7 +1666,7 @@ mod tests {
         let names: Vec<String> = h.ui.calls().joins.iter().map(|j| j.name.clone()).collect();
         assert_eq!(names, vec!["Early".to_string(), "AlsoEarly".to_string()], "flushed in log order");
         // Catch-up is silent: no announcements for people who were already
-        // there before Scarlet started.
+        // there before Celeste started.
         assert!(h.tts.spoken().is_empty());
         // And no Discord emission for historical joins either.
         assert!(h.emitter.events().is_empty());
@@ -1723,7 +1723,7 @@ mod tests {
         assert_eq!(h.tts.spoken(), vec!["[mixed-name alert]".to_string()]);
     }
 
-    /// The local user is exempt: Scarlet must not flag its own account's
+    /// The local user is exempt: Celeste must not flag its own account's
     /// name on every single join.
     #[tokio::test]
     async fn the_local_users_own_name_is_not_flagged() {

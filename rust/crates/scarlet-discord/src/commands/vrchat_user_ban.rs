@@ -41,7 +41,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 }
 
 /// The ban/unban action itself, shared by `/vrchat-user-ban`,
-/// `/vrchat-user-unban` and the **Ban user**/**Unban user** buttons Scarlet
+/// `/vrchat-user-unban` and the **Ban user**/**Unban user** buttons Celeste
 /// attaches to its instance-event embeds (port of
 /// `ScarletDiscordUI._vrchatUserBan`/`_vrchatUserUnban`, which are likewise
 /// one implementation behind both entry points).

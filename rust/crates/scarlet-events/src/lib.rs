@@ -2,11 +2,11 @@
 //! turns parsed VRChat log events into instance state, player rows,
 //! advisories, spoken announcements and audit emissions.
 //!
-//! This crate exists because that class is the *hub* of Scarlet: in Java it
+//! This crate exists because that class is the *hub* of Celeste: in Java it
 //! reaches into the UI, the VRChat client, the Discord client, the data
-//! store, the watched lists and TTS through the `Scarlet` god-object. Giving
+//! store, the watched lists and TTS through the `Celeste` god-object. Giving
 //! it a crate of its own, talking to the UI through
-//! [`scarlet_core::ui::ScarletUi`] and to Discord through [`AuditEmitter`],
+//! [`scarlet_core::ui::CelesteUi`] and to Discord through [`AuditEmitter`],
 //! keeps that hub from forcing every subsystem into one crate.
 //!
 //! Before this existed the Rust port wired the log tailer *straight into the

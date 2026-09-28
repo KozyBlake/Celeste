@@ -12,7 +12,7 @@ pub const NAME: &str = "server-restart";
 
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME)
-        .description("Restarts the Scarlet application")
+        .description("Restarts the Celeste application")
         .add_option(CreateCommandOption::new(
             CommandOptionType::SubCommand,
             "restart-now",

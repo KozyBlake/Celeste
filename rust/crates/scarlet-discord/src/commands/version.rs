@@ -10,7 +10,7 @@ use serenity::model::application::CommandInteraction;
 pub const NAME: &str = "scarlet-version";
 
 pub fn register() -> CreateCommand {
-    CreateCommand::new(NAME).description("Show the running Scarlet version")
+    CreateCommand::new(NAME).description("Show the running Celeste version")
 }
 
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {

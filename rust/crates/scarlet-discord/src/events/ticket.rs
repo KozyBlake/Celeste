@@ -4,13 +4,13 @@
 //! `sendTicketToolAutoResponse` and the three `inferTicketToolMember*`
 //! helpers.
 //!
-//! When Ticket Tool opens a ticket channel, Scarlet posts the configured
+//! When Ticket Tool opens a ticket channel, Celeste posts the configured
 //! age-verification instructions into it, addressed to whoever opened the
 //! ticket (and optionally pinging a staff role). Both triggers Java has are
 //! ported: the channel being created, and the first message arriving in a
 //! recently-created channel — the second exists because a channel can be
 //! created before its permission overrides identify the opener, and because
-//! Scarlet may have been offline when the channel appeared.
+//! Celeste may have been offline when the channel appeared.
 //!
 //! Configuration comes from the same `discord_bot.json` fields the
 //! `/set-ticket-tool-auto-response` and `/set-ticket-age-verify-message`

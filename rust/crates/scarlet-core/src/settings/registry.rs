@@ -7,7 +7,7 @@
 //! The Java version backs these with `Preferences.userNodeForPackage(...)`
 //! (the Windows registry, or a `prefs.xml`/native store elsewhere), with a
 //! `preferences` (namespaced) node falling back to a `globalPreferences`
-//! node. In the actual Scarlet codebase both are always constructed as the
+//! node. In the actual Celeste codebase both are always constructed as the
 //! same object (`createSecurePrefs(prefs, "")` is called with an empty
 //! namespace everywhere; `globalPreferences`/`preferences` and
 //! `globalEncrypted`/`encrypted` are literally the same references) — so

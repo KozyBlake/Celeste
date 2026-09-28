@@ -9,7 +9,7 @@ use sha1::Sha1;
 const JAVA_SECRET_LEN: usize = 32;
 
 /// Normalizes the common human-readable form of a VRChat authenticator
-/// setup key. Scarlet Java only accepts a 32-character Base32 seed, so the
+/// setup key. Celeste Java only accepts a 32-character Base32 seed, so the
 /// Rust port deliberately preserves that compatibility constraint.
 pub fn normalize_secret(input: &str) -> Result<String, String> {
     let normalized: String = input

@@ -66,7 +66,7 @@ pub struct AvatarSearch {
 impl Default for AvatarSearch {
     fn default() -> Self {
         let client = reqwest::Client::builder()
-            .user_agent(concat!("Scarlet/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Celeste/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(30))
             .build()
             .expect("valid avatar-search HTTP client");

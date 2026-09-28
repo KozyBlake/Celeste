@@ -29,7 +29,7 @@ use std::sync::Arc;
 use scarlet_core::settings::Settings;
 
 fn main() -> anyhow::Result<()> {
-    // Where Scarlet's data lives. This used to fall back to the process's
+    // Where Celeste's data lives. This used to fall back to the process's
     // working directory, which is why running the binary from a checkout
     // scattered settings.json, secure-prefs.json, logs/ and backups/ into
     // it — and why a run from a different directory started blank. Java
@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     for other in &resolved.other_candidates {
         // Java prompts when a config exists in more than one known
         // location; at minimum, say so rather than silently preferring one.
-        tracing::warn!("Another Scarlet config also exists at {} - it is not being used", other.display());
+        tracing::warn!("Another Celeste config also exists at {} - it is not being used", other.display());
     }
 
     let settings = Arc::new(Settings::open(&data_dir));
@@ -124,7 +124,7 @@ fn main() -> anyhow::Result<()> {
             match relaunched {
                 Ok(()) => std::process::exit(0),
                 Err(error) => {
-                    tracing::error!(%error, "Failed to relaunch Scarlet");
+                    tracing::error!(%error, "Failed to relaunch Celeste");
                     std::process::exit(69);
                 }
             }

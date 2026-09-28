@@ -6,15 +6,22 @@
 //! (data-dir resolution/migration, the settings/executor wiring).
 
 pub const GROUP: &str = "KozyBlake";
-pub const NAME: &str = "Scarlet";
+pub const NAME: &str = "Celeste";
+/// The name this fork shipped under before it was renamed. Kept because
+/// anything that has to *find* an existing install — the data-folder
+/// discovery, the log-target rewrite, the log-file pattern — must still
+/// recognise it.
+pub const LEGACY_NAME: &str = "Scarlet";
 /// Java resolves this from the jar manifest's `Implementation-Version` at
 /// runtime, falling back to this literal. Rust has no manifest equivalent,
 /// so this constant (kept in sync with `Cargo.toml`'s workspace version) is
 /// authoritative here.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const APP_NAME: &str = "KozyBlake/Scarlet";
+pub const APP_NAME: &str = "KozyBlake/Celeste";
 pub const FORK_GROUP: &str = GROUP;
-pub const FORK_REPOSITORY: &str = NAME;
+/// The GitHub repository, which is still named Celeste — this feeds real
+/// URLs, so it does not follow the display name.
+pub const FORK_REPOSITORY: &str = LEGACY_NAME;
 pub const FORK_NOTE: &str = "Fork by KozyBlake \u{2014} Windows & Linux";
 pub const DEV_DISCORD: &str = "Discord:@vinyarion/Vinyarion#0292/393412191547555841";
 pub const SCARLET_DISCORD_URL: &str = "https://discord.gg/CP3AyhypBF";
@@ -24,7 +31,7 @@ pub const GITHUB_URL: &str = FORK_GITHUB_URL;
 
 pub const SCARLET_VRCHAT_GROUP_ID: &str = "grp_eb2eb120-67bd-404e-9665-498f567cb56d";
 
-pub const USER_AGENT_NAME: &str = "KozyBlake-Scarlet";
+pub const USER_AGENT_NAME: &str = "KozyBlake-Celeste";
 pub const LICENSE_URL: &str = "https://github.com/KozyBlake/Scarlet?tab=MIT-1-ov-file";
 /// Single endpoint carrying both update-version metadata and the optional
 /// broadcast announcement (see `meta.json` at the repo root).
@@ -64,7 +71,7 @@ mod tests {
     #[test]
     fn user_agent_contains_identity() {
         let ua = user_agent();
-        assert!(ua.starts_with("KozyBlake-Scarlet/"));
+        assert!(ua.starts_with("KozyBlake-Celeste/"));
         assert!(ua.contains(GITHUB_URL));
     }
 }

@@ -688,21 +688,21 @@ impl SetupWizard {
 }
 
 fn render_vibecoded_notice(ui: &mut egui::Ui, action: &mut Action) {
-    ui.heading("Scarlet \u{2014} a note before you start");
+    ui.heading("Celeste \u{2014} a note before you start");
     ui.add_space(12.0);
     ui.label(
-        "This fork of Scarlet is maintained by KozyBlake and developed largely with AI \
+        "This fork of Celeste is maintained by KozyBlake and developed largely with AI \
          assistance \u{2014} a \"vibe-coded\" project. Code is written and reasoned through with \
          an AI pair, then reviewed and built by KozyBlake.\n\n\
          That isn't for everyone, and that's completely fair. If you would rather not run a \
-         vibe-coded project, you can close Scarlet now \u{2014} no hard feelings.",
+         vibe-coded project, you can close Celeste now \u{2014} no hard feelings.",
     );
     ui.add_space(20.0);
     ui.horizontal(|ui| {
         if ui.button("Continue").clicked() {
             *action = Action::VibecodedContinue;
         }
-        if ui.button("Close Scarlet").clicked() {
+        if ui.button("Close Celeste").clicked() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     });
@@ -775,7 +775,7 @@ fn render_vrchat_credentials_stage(
 ) {
     ui.heading("VRChat login");
     ui.add_space(8.0);
-    ui.label("Log in with the VRChat account Scarlet should moderate as.");
+    ui.label("Log in with the VRChat account Celeste should moderate as.");
     ui.add_space(8.0);
     ui.add_enabled_ui(!in_flight, |ui| {
         ui.horizontal(|ui| {
@@ -844,7 +844,7 @@ fn render_vrchat_two_factor_stage(
             ui.add_space(8.0);
             ui.label(
                 "Optional: enter the 32-character Base32 setup key from your authenticator. \
-                 Scarlet will encrypt it and generate future codes automatically. This is not \
+                 Celeste will encrypt it and generate future codes automatically. This is not \
                  the six-digit code above.",
             );
             ui.horizontal(|ui| {
@@ -895,7 +895,7 @@ fn render_vrchat_group_id_stage(
 ) {
     ui.heading("VRChat group");
     ui.add_space(8.0);
-    ui.label("Which VRChat group should Scarlet moderate? This is required.");
+    ui.label("Which VRChat group should Celeste moderate? This is required.");
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label("Group ID:");

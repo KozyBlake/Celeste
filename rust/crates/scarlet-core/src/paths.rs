@@ -11,14 +11,15 @@
 //!
 //! Resolution order:
 //!
-//! 1. `SCARLET_HOME`, if set — an explicit choice that is never overridden.
-//!    `SCARLET_HOME=";"` means "next to the executable", as in Java (where
-//!    it means the jar's directory).
+//! 1. `CELESTE_HOME` (or `SCARLET_HOME`, still honoured), if set — an
+//!    explicit choice that is never overridden. A value of `";"` means
+//!    "next to the executable", as in Java (where it means the jar's
+//!    directory).
 //! 2. A directory remembered from a previous run's choice (see
 //!    [`remembered_data_dir`]); this is the part Java has no equivalent for,
 //!    because Java never asks.
 //! 3. The platform default, if it already holds a usable `settings.json`.
-//! 4. Auto-discovery: any other known Scarlet data location holding a
+//! 4. Auto-discovery: any other known Celeste data location holding a
 //!    usable `settings.json` — an older default, an old Windows-style path
 //!    used on Linux by earlier builds, a bare `~/Scarlet`, or the
 //!    executable's own directory. This is what makes an install that has
@@ -28,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::identity::{GROUP, NAME};
+use crate::identity::{GROUP, LEGACY_NAME, NAME};
 
 /// Where the remembered choice is stored, relative to the platform default
 /// directory. A pointer file rather than a setting, because it has to be
@@ -104,17 +105,22 @@ pub fn settings_file_usable(dir: &Path) -> bool {
 pub fn find_all_usable_data_dirs(primary: &Path) -> Vec<PathBuf> {
     let home = home_dir();
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(xdg) = non_empty_env("XDG_DATA_HOME") {
-        candidates.push(PathBuf::from(xdg).join(GROUP).join(NAME));
+    // The current name first, then the name this fork used before it was
+    // renamed — an install that predates the rename must keep working
+    // rather than silently starting from a blank config.
+    for name in [NAME, LEGACY_NAME] {
+        if let Some(xdg) = non_empty_env("XDG_DATA_HOME") {
+            candidates.push(PathBuf::from(xdg).join(GROUP).join(name));
+        }
+        candidates.push(home.join(".local/share").join(GROUP).join(name));
+        if let Some(local_app_data) = non_empty_env("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(local_app_data).join(GROUP).join(name));
+        }
+        candidates.push(home.join("AppData/Local").join(GROUP).join(name));
+        candidates.push(home.join(format!(".{GROUP}")).join(name));
+        // A bare ~/<name>, used by older SCARLET_HOME layouts and early builds.
+        candidates.push(home.join(name));
     }
-    candidates.push(home.join(".local/share").join(GROUP).join(NAME));
-    if let Some(local_app_data) = non_empty_env("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local_app_data).join(GROUP).join(NAME));
-    }
-    candidates.push(home.join("AppData/Local").join(GROUP).join(NAME));
-    candidates.push(home.join(format!(".{GROUP}")).join(NAME));
-    // Bare ~/Scarlet, used by older SCARLET_HOME layouts and early builds.
-    candidates.push(home.join(NAME));
     if let Some(exe_dir) = executable_dir() {
         candidates.push(exe_dir);
     }
@@ -169,7 +175,9 @@ pub fn forget_data_dir() -> std::io::Result<()> {
 /// Resolves the data directory. Creates nothing — the caller decides
 /// whether to create it or to ask first (see [`DataDirSource::FirstRun`]).
 pub fn resolve_data_dir() -> ResolvedDataDir {
-    if let Some(home) = non_empty_env("SCARLET_HOME") {
+    // `CELESTE_HOME` is the current name; `SCARLET_HOME` keeps working, so
+    // existing launch scripts and shortcuts don't break on the rename.
+    if let Some(home) = non_empty_env("CELESTE_HOME").or_else(|| non_empty_env("SCARLET_HOME")) {
         let trimmed = home.trim().to_string();
         if trimmed == ";" {
             if let Some(exe_dir) = executable_dir() {
@@ -258,14 +266,45 @@ mod tests {
     }
 
     #[test]
-    fn scarlet_home_wins_and_is_never_overridden() {
+    fn an_explicit_home_wins_under_either_env_var() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
+
+        std::env::set_var("CELESTE_HOME", dir.path());
+        let resolved = resolve_data_dir();
+        assert_eq!(resolved.source, DataDirSource::Explicit);
+        assert_eq!(canonical_key(&resolved.path), canonical_key(dir.path()));
+        std::env::remove_var("CELESTE_HOME");
+
+        // The pre-rename variable still works, so existing launch scripts
+        // don't break.
         std::env::set_var("SCARLET_HOME", dir.path());
         let resolved = resolve_data_dir();
         assert_eq!(resolved.source, DataDirSource::Explicit);
         assert_eq!(canonical_key(&resolved.path), canonical_key(dir.path()));
         std::env::remove_var("SCARLET_HOME");
+    }
+
+    /// The rename must not strand an existing install: a config sitting in
+    /// the old KozyBlake/Scarlet folder is found and adopted.
+    #[test]
+    fn a_pre_rename_data_folder_is_discovered() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let fake_home = tempfile::tempdir().unwrap();
+        std::env::remove_var("SCARLET_HOME");
+        std::env::remove_var("CELESTE_HOME");
+        std::env::set_var("XDG_DATA_HOME", fake_home.path());
+        std::env::set_var("HOME", fake_home.path());
+
+        let legacy = fake_home.path().join(GROUP).join(LEGACY_NAME);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("settings.json"), r#"{"vrchat_group_id":"grp_x"}"#).unwrap();
+
+        let resolved = resolve_data_dir();
+        assert_eq!(resolved.source, DataDirSource::Discovered);
+        assert_eq!(resolved.path, legacy);
+
+        std::env::remove_var("XDG_DATA_HOME");
     }
 
     /// The behaviour that made this necessary: with no config anywhere, the
@@ -276,6 +315,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let fake_home = tempfile::tempdir().unwrap();
         std::env::remove_var("SCARLET_HOME");
+        std::env::remove_var("CELESTE_HOME");
         std::env::set_var("XDG_DATA_HOME", fake_home.path());
         std::env::set_var("HOME", fake_home.path());
 
@@ -293,6 +333,7 @@ mod tests {
         let fake_home = tempfile::tempdir().unwrap();
         let chosen = tempfile::tempdir().unwrap();
         std::env::remove_var("SCARLET_HOME");
+        std::env::remove_var("CELESTE_HOME");
         std::env::set_var("XDG_DATA_HOME", fake_home.path());
         std::env::set_var("HOME", fake_home.path());
 

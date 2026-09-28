@@ -24,7 +24,7 @@ pub fn register() -> CreateCommand {
 }
 
 fn valid_log_filename(name: &str) -> bool {
-    regex::Regex::new(r"^scarlet_log_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.txt$")
+    regex::Regex::new(r"^(celeste|scarlet)_log_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.txt$")
         .expect("static log filename regex")
         .is_match(name)
 }
@@ -113,6 +113,8 @@ mod tests {
 
     #[test]
     fn accepts_only_scarlet_generated_log_names() {
+        assert!(valid_log_filename("celeste_log_2026-09-27_16-30-00.txt"));
+        // Logs written before the rename are still exportable.
         assert!(valid_log_filename("scarlet_log_2026-09-27_16-30-00.txt"));
         assert!(!valid_log_filename(
             "../scarlet_log_2026-09-27_16-30-00.txt"

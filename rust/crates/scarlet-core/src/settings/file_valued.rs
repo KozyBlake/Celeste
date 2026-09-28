@@ -220,7 +220,7 @@ where
 }
 
 /// Minimal string-conversion bounds for [`SettingDescriptor`]'s generic
-/// erasure. Implemented for the concrete setting value types Scarlet
+/// erasure. Implemented for the concrete setting value types Celeste
 /// actually uses; add more impls if a new `FileValued<T>` type needs
 /// generic string get/set support.
 pub trait ToStringValue {

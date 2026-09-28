@@ -8,7 +8,7 @@
 //! OpenAPI-generated client. There's no equivalent in this Rust workspace
 //! (generating one is a separate, large undertaking -- the spec covers
 //! hundreds of endpoints), so this hand-writes the handful of endpoints
-//! Scarlet's ported features actually need, growing incrementally rather
+//! Celeste's ported features actually need, growing incrementally rather
 //! than attempting full coverage up front.
 //!
 //! ## Persistent cookie storage
@@ -49,7 +49,7 @@ pub const PASSWORD_KEY: &str = "global:password";
 pub const TOTP_SECRET_KEY: &str = "global:totpsecret";
 
 /// Port of `ScarletVRChat`'s `vrchat_group_id` settings key (the "which
-/// group does Scarlet moderate" config, asked for via
+/// group does Celeste moderate" config, asked for via
 /// `getStringOrRequireInput("vrchat_group_id", ...)` in its constructor).
 /// Stored plain (not encrypted) in `settings.json`, matching Java's use of
 /// the plain `getString`/`setString` for this key rather than
@@ -1062,7 +1062,7 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
-    /// Port of Scarlet's `createInstanceEx`, including fields omitted by the
+    /// Port of Celeste's `createInstanceEx`, including fields omitted by the
     /// older generated Java model such as `minimumAvatarPerformance`.
     pub async fn create_instance(
         &self,
@@ -1381,7 +1381,7 @@ pub async fn login_with_stored_credentials(
         StoredLogin::LoggedIn(client) => Some(client),
         StoredLogin::RequiresTwoFactor { methods, .. } => {
             tracing::warn!(
-                "VRChat unattended login requires two-factor ({:?}); run Scarlet with its UI to log in",
+                "VRChat unattended login requires two-factor ({:?}); run Celeste with its UI to log in",
                 methods
             );
             None

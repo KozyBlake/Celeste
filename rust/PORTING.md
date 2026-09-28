@@ -270,6 +270,48 @@ the accompanying code. Six-digit one-time codes are never cached. Email OTP
 has no reusable secret, so its verified session cookie remains the only
 cacheable credential for that method.
 
+
+## The Celeste rename (28 Sep 2026)
+
+The fork is called **Celeste** now. Renamed: everything a user sees (window
+title, status bar, CLI, Discord command text and embed footers, the whole
+message catalogue in every shipped language) and the app identity that
+follows from it — `NAME`, `APP_NAME`, `USER_AGENT_NAME`, the log-file prefix
+(`celeste_log_*.txt`) and the logger root (`KozyBlake/Celeste`).
+
+Deliberately **not** renamed, each for a reason:
+
+- **Crate, module and type names** stay `scarlet-*` / `scarlet_*`. They are
+  invisible to a user, and renaming them would touch every file in the
+  workspace for no functional gain (and collide with anything in flight).
+  The one exception is the `CelesteUi` trait, which was renamed along with
+  the strings around it.
+- **GitHub and meta URLs, and `FORK_REPOSITORY`** — the repository really is
+  still named Scarlet, and a renamed URL would simply 404.
+- **The Java source tree and its class names**, which remain the reference
+  implementation this port is checked against.
+- **CHANGELOG.md and the RELEASE_NOTES_* files**, which are a record of what
+  shipped under the old name. Rewriting them would make past releases claim
+  a name they never had.
+- **Data file names** (`settings.json`, `discord_bot.json`, `watched_*.json`,
+  ...) — drop-in compatibility with the Java build depends on them.
+
+Nothing existing is stranded by the rename:
+
+- The data folder is now `<platform>/KozyBlake/Celeste`, but discovery looks
+  under the old `KozyBlake/Scarlet` (and the other legacy layouts) too, so an
+  install from before the rename is found and adopted rather than starting
+  blank.
+- `CELESTE_HOME` is the current environment variable; `SCARLET_HOME` is still
+  honoured, so existing launch scripts keep working.
+- `/export-log` accepts both `celeste_log_*` and `scarlet_log_*` filenames.
+- Logger names from before the rename normalise to the current root.
+
+The logo is the window/taskbar icon and the Instance tab's empty state. A
+boot splash was considered and **not** added: startup is well under a second,
+so a splash would be a deliberate delay rather than the progress indicator it
+was in Java (where the JVM and dependency loading genuinely took seconds).
+
 ## Working rules for continuing this port
 
 - **Commit after every subsystem chunk that compiles**, not just at the end. This is the #1 fix versus the first attempt.

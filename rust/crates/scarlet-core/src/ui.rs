@@ -248,7 +248,7 @@ pub struct InstanceState {
 /// Port of `IScarletUI`, minus the Swing-specific members (`jframe`,
 /// `getParentComponent`, `setUIScale`, `loadSettings`) which have no meaning
 /// outside Swing and are handled by the egui app itself.
-pub trait ScarletUi: Send + Sync {
+pub trait CelesteUi: Send + Sync {
     fn fire_sort(&self);
     fn clear_instance(&self);
     fn player_join(&self, initial_preamble: bool, player: PlayerJoin);
@@ -269,7 +269,7 @@ pub trait ScarletUi: Send + Sync {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HeadlessUi;
 
-impl ScarletUi for HeadlessUi {
+impl CelesteUi for HeadlessUi {
     fn fire_sort(&self) {}
     fn clear_instance(&self) {}
     fn player_join(&self, _initial_preamble: bool, _player: PlayerJoin) {}

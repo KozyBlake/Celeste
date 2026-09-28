@@ -8,7 +8,7 @@
 //!
 //! The shared `list`/`add`/`delete` logic lives in this module as
 //! [`run_generic`] (and [`register_generic`] for command registration) and
-//! is reused by [`super::secret_staff_list`] (`ScarletSecretStaffList`/
+//! is reused by [`super::secret_staff_list`] (`CelesteSecretStaffList`/
 //! `secret_staff_list.json`), which Java implements as a second,
 //! byte-for-byte-identical `_StaffList` subclass — one shared
 //! implementation parameterized by which [`scarlet_core::staff_list::StaffList`]

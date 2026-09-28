@@ -3,7 +3,7 @@
 //! A minimum-interval gate: each [`Pacer::await_turn`] returns no sooner than
 //! `millis` after the previous one did. `ScarletEventListener` uses one to
 //! keep catch-up player checks from bursting dozens of VRChat API calls the
-//! moment Scarlet starts against a log with a full instance in it.
+//! moment Celeste starts against a log with a full instance in it.
 //!
 //! Java blocks the calling thread with `Thread.sleep`. This port keeps the
 //! blocking shape (`await_turn`) for callers already on a worker thread, and

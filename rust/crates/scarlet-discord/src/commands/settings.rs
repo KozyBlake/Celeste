@@ -23,7 +23,7 @@ pub fn register() -> CreateCommand {
                     CreateCommandOption::new(
                         CommandOptionType::String,
                         "setting-id",
-                        "The setting id shown in Scarlet's Settings tab",
+                        "The setting id shown in Celeste's Settings tab",
                     )
                     .required(true)
                     .set_autocomplete(true),

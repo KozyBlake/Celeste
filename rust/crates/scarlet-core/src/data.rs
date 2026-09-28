@@ -190,7 +190,7 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> SubData<T> {
 
     /// Reads, applies `edit`, persists immediately, and returns the updated
     /// value (matches the common `xMetadata(id, edit)` call shape used
-    /// throughout Scarlet).
+    /// throughout Celeste).
     pub fn update(&self, id: &str, edit: impl FnOnce(&mut T)) -> T {
         let mut value = self.get(id);
         edit(&mut value);

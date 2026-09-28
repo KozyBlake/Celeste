@@ -5,7 +5,7 @@
 //! spellings: `file_<uuid>/3`, `file_<uuid>:3`, `file_<uuid>/3/security`.
 //! This parses any of them out of a larger string — an asset-bundle URL, or
 //! the `[API] ... analysis/file_.../3` line VRChat writes to its own log,
-//! which is where Scarlet gets exact avatar performance ratings from.
+//! which is where Celeste gets exact avatar performance ratings from.
 
 use std::sync::OnceLock;
 

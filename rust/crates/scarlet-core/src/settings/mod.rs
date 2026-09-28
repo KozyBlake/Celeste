@@ -43,7 +43,7 @@ use registry::{RegistryStore, RegistryStringValued};
 use store::SettingsStore;
 
 /// Resolves the password protecting the local encrypted secret store.
-/// Port of `Scarlet`'s `globalPW`/`fallbackGlobalPw`: `SCARLET_GLOBAL_PW`
+/// Port of `Celeste`'s `globalPW`/`fallbackGlobalPw`: `SCARLET_GLOBAL_PW`
 /// env var first (Java also checked the `scarlet.global.pw` system
 /// property, which Rust has no equivalent of -- env var covers the same
 /// "override from the launch environment" use case), then a persisted
@@ -73,7 +73,7 @@ pub fn resolve_global_password(data_dir: &Path) -> String {
 }
 
 pub struct Settings {
-    /// Root Scarlet data directory, used by subsystems such as Discord log export.
+    /// Root Celeste data directory, used by subsystems such as Discord log export.
     pub data_dir: std::path::PathBuf,
     pub store: Arc<SettingsStore>,
     pub registry: SettingsRegistry,

@@ -388,7 +388,7 @@ pub async fn run_moderation_log(
     let display_name = user.display_name.unwrap_or_else(|| vrc_id.clone());
     let data = { ctx.data.read().await.get::<ScarletDataKey>().cloned() };
     let Some(data) = data else {
-        return super::reply_ephemeral(ctx, command, "Scarlet data is not available.").await;
+        return super::reply_ephemeral(ctx, command, "Celeste data is not available.").await;
     };
     let settings = { ctx.data.read().await.get::<SettingsKey>().cloned() };
     let lookback_days = settings

@@ -1,4 +1,4 @@
-//! Queues Scarlet TTS announcements into Discord voice through Songbird.
+//! Queues Celeste TTS announcements into Discord voice through Songbird.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -156,7 +156,7 @@ mod tests {
         }
         let path =
             std::env::temp_dir().join(format!("scarlet-tts-test-{}.wav", uuid::Uuid::new_v4()));
-        synthesize_wav(&path, "Scarlet voice test", "")
+        synthesize_wav(&path, "Celeste voice test", "")
             .await
             .unwrap();
         let bytes = tokio::fs::read(&path).await.unwrap();

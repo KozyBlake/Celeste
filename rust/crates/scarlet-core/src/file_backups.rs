@@ -1,5 +1,5 @@
 //! Port of `net.sybyline.scarlet.util.FileBackups`: crash-safe saves for
-//! Scarlet's small JSON data files (watched lists, settings, Discord
+//! Celeste's small JSON data files (watched lists, settings, Discord
 //! config, ...).
 //!
 //! [`write`] writes to a temporary sibling file, fsyncs it, and only then:

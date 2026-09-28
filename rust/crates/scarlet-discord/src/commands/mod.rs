@@ -60,7 +60,7 @@ use serenity::builder::{
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
 
-/// Acks the interaction immediately without a visible message yet ("Scarlet
+/// Acks the interaction immediately without a visible message yet ("Celeste
 /// is thinking..."), then lets the handler take as long as it needs (a
 /// VRChat API call, a paginated multi-message reply) without racing
 /// Discord's ~3 second ack window on the initial response. Every command
@@ -169,7 +169,7 @@ pub(crate) async fn watched_remove_menu(
 /// registration can take up to an hour to propagate on Discord's side;
 /// swap to per-guild registration during development if faster iteration
 /// is needed (not done here to keep this skeleton simple).
-/// Removes any guild-scoped copies of Scarlet's commands from the
+/// Removes any guild-scoped copies of Celeste's commands from the
 /// configured guild.
 ///
 /// Both Java (`jda.upsertCommand`) and this port register commands
@@ -358,7 +358,7 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
 /// given VRChat group permission (`checkMemberHasVRChatPermission`).
 ///
 /// **Not ported**: Java's `checkMemberHasScarletPermission` fallback (a
-/// per-server override that can grant a Scarlet-specific permission
+/// per-server override that can grant a Celeste-specific permission
 /// without needing the matching VRChat group role -- the role-to-Discord
 /// mapping config it depends on isn't ported, see PORTING.md) and
 /// `pendingModActions` (a dedup lock preventing two concurrent actions on
@@ -391,15 +391,15 @@ pub(crate) async fn vrchat_context(ctx: &Context) -> Result<ModerationContext, S
             .get::<crate::data::VrChatClientKey>()
             .cloned()
     }
-    .ok_or_else(|| "Scarlet isn't logged in to VRChat right now.".to_string())?;
+    .ok_or_else(|| "Celeste isn't logged in to VRChat right now.".to_string())?;
     let client = { vrchat_slot.read().await.clone() }
-        .ok_or_else(|| "Scarlet isn't logged in to VRChat right now.".to_string())?;
+        .ok_or_else(|| "Celeste isn't logged in to VRChat right now.".to_string())?;
 
     let group_id: Option<String> = settings
         .store
         .get_object(scarlet_vrchat::client::GROUP_ID_KEY);
     let group_id = group_id.filter(|id| !id.trim().is_empty()).ok_or_else(|| {
-        "No VRChat group is configured (run Scarlet's setup wizard, or set `vrchat_group_id`)."
+        "No VRChat group is configured (run Celeste's setup wizard, or set `vrchat_group_id`)."
             .to_string()
     })?;
 
@@ -430,7 +430,7 @@ pub(crate) async fn moderation_context_for_snowflake(
             .get::<crate::data::ScarletDataKey>()
             .cloned()
     }
-    .ok_or_else(|| "Scarlet data is not available.".to_string())?;
+    .ok_or_else(|| "Celeste data is not available.".to_string())?;
     let context = vrchat_context(ctx).await?;
 
     let actor_vrc_id = scarlet_data.global_get_snowflake_id(snowflake).ok_or_else(|| {

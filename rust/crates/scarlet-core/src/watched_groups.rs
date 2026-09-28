@@ -207,7 +207,7 @@ impl WatchedGroups {
         Ok(self.import_groups(groups.into_iter().flatten(), overwrite))
     }
 
-    /// Imports the six-column legacy Excel CSV used by Scarlet Java:
+    /// Imports the six-column legacy Excel CSV used by Celeste Java:
     /// id, legacy type, unused, critical, message, tags.
     pub fn import_legacy_csv(&self, input: &[u8], overwrite: bool) -> Result<usize> {
         let mut reader = csv::ReaderBuilder::new()

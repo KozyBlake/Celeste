@@ -63,7 +63,7 @@ pub async fn run_summary(ctx: &Context, command: &CommandInteraction) -> serenit
     let settings = shared.get::<SettingsKey>().cloned();
     drop(shared);
     let (Some(scarlet_data), Some(staff_list)) = (scarlet_data, staff_list) else {
-        return super::reply_ephemeral(ctx, command, "Scarlet moderation data is unavailable.")
+        return super::reply_ephemeral(ctx, command, "Celeste moderation data is unavailable.")
             .await;
     };
 
@@ -256,7 +256,7 @@ pub async fn run_outstanding(ctx: &Context, command: &CommandInteraction) -> ser
     let (Some(scarlet_data), Some(secret_staff), Some(settings)) =
         (scarlet_data, secret_staff, settings)
     else {
-        return super::reply_ephemeral(ctx, command, "Scarlet moderation data is unavailable.")
+        return super::reply_ephemeral(ctx, command, "Celeste moderation data is unavailable.")
             .await;
     };
 
@@ -422,7 +422,7 @@ fn report_header(title: &str, start: i64, end: i64, color: u32) -> CreateEmbed {
         .description(format!("Spanning <t:{start}:f> through <t:{end}:f>"))
         .color(color)
         .footer(serenity::builder::CreateEmbedFooter::new(
-            "Scarlet • Extended event",
+            "Celeste • Extended event",
         ))
         .timestamp(serenity::model::Timestamp::from_unix_timestamp(end).unwrap_or_default())
 }

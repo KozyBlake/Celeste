@@ -1,4 +1,4 @@
-//! The first-run "where should Scarlet keep its data?" question.
+//! The first-run "where should Celeste keep its data?" question.
 //!
 //! Java never asks: its data directory is derived from the platform and
 //! that's that. Asking is a deliberate addition — the repo owner runs test
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// dismisses the dialog.
 pub fn ask_where_to_store_data(default_dir: &Path) -> PathBuf {
     let message = format!(
-        "Scarlet hasn't been set up on this machine yet.\n\n\
+        "Celeste hasn't been set up on this machine yet.\n\n\
          By default it keeps its settings, logs and backups in:\n{}\n\n\
          Use that folder?\n\n\
          (Choose No to pick a different one. You can move it later by \
@@ -31,7 +31,7 @@ pub fn ask_where_to_store_data(default_dir: &Path) -> PathBuf {
     );
 
     let use_default = rfd::MessageDialog::new()
-        .set_title("Scarlet - data folder")
+        .set_title("Celeste - data folder")
         .set_description(&message)
         .set_buttons(rfd::MessageButtons::YesNo)
         .show();
@@ -43,7 +43,7 @@ pub fn ask_where_to_store_data(default_dir: &Path) -> PathBuf {
     }
 
     let picked = rfd::FileDialog::new()
-        .set_title("Choose a folder for Scarlet's data")
+        .set_title("Choose a folder for Celeste's data")
         .set_directory(default_dir.parent().unwrap_or(default_dir))
         .pick_folder();
 

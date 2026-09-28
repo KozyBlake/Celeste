@@ -1,7 +1,7 @@
 //! Shared application state reachable from slash-command handlers, via
 //! serenity's per-client `TypeMap` (`ctx.data`). Java's
 //! `ScarletDiscordCommands` just holds a direct field reference to the
-//! enclosing `Scarlet`/`ScarletVRChat`/`ScarletData` instances; serenity's
+//! enclosing `Celeste`/`ScarletVRChat`/`ScarletData` instances; serenity's
 //! event-handler methods don't carry an equivalent "the app" parameter, so
 //! this is the idiomatic serenity substitute — insert once before
 //! `Client::start`, read from any command handler via `ctx.data.read()`.
@@ -349,7 +349,7 @@ impl TypeMapKey for ProcessControllerKey {
 /// Every piece of shared app state a command handler might need, bundled so
 /// `connect_and_serve` (and its callers in `scarlet`/`scarlet-ui`) take one
 /// value instead of an ever-growing positional-argument list as more of
-/// `Scarlet`'s fields get ported. Construct with all fields, then
+/// `Celeste`'s fields get ported. Construct with all fields, then
 /// [`SharedState::insert_into`] once before `Client::start`.
 pub struct SharedState {
     pub vrchat_client: SharedVrChatClient,

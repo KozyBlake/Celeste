@@ -206,6 +206,7 @@ pub struct ScarletApp {
     /// `ScarletUI.infoStats`), and the pending Ban confirmation (port of the
     /// row's Ban action, which Java also confirms before acting).
     avatar_stats_open: Option<AvatarStatsView>,
+    logo: Option<egui::TextureHandle>,
     ban_confirm: Option<(String, String)>,
     import_groups_url_open: bool,
     import_groups_url: String,
@@ -317,6 +318,7 @@ impl ScarletApp {
             settings_category: SettingCategory::General,
             settings_search: String::new(),
             avatar_stats_open: None,
+            logo: None,
             ban_confirm: None,
                     import_groups_url_open: false,
             import_groups_url: String::new(),
@@ -469,6 +471,9 @@ impl ScarletApp {
         use egui_extras::{Column, TableBuilder};
 
         let players = self.state.ordered_players();
+        if players.is_empty() {
+            return self.instance_empty_state(ui);
+        }
         let column_order = self.column_order.clone();
         // `ui_left_player_dim_percent` is how much to dim a player who has
         // left (0 = no dimming), so the fade is the user's setting rather
@@ -548,7 +553,48 @@ impl ScarletApp {
         }
     }
 
-    /// Port of `ScarletUI.infoStats`: what Scarlet knows about the avatar a
+    /// What the Instance tab shows before anyone has been logged: the logo,
+    /// and which of the two reasons applies — no instance open, or an
+    /// instance open that nobody has joined yet. Java shows a plain "No
+    /// instance loaded" card here.
+    fn instance_empty_state(&mut self, ui: &mut egui::Ui) {
+        let logo = self.logo_texture(ui.ctx());
+        ui.vertical_centered(|ui| {
+            ui.add_space(48.0);
+            if let Some(logo) = logo {
+                ui.add(egui::Image::new(&logo).max_width(96.0).tint(egui::Color32::from_white_alpha(70)));
+                ui.add_space(12.0);
+            }
+            match self.state.instance() {
+                Some(instance) => {
+                    let where_ = instance.world_name.clone().unwrap_or_else(|| instance.location.clone());
+                    ui.label(egui::RichText::new(format!("In {where_}")).size(15.0));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("Nobody has joined yet \u{2014} players appear here as they arrive.").weak());
+                }
+                None => {
+                    ui.label(egui::RichText::new(scarlet_core::i18n::tr("ui.statusNoInstance", &[]).trim()).size(15.0));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(scarlet_core::i18n::tr("ui.playerDataWillAppear", &[])).weak());
+                }
+            }
+        });
+    }
+
+    /// The logo, uploaded to the renderer once and reused.
+    fn logo_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        if let Some(handle) = &self.logo {
+            return Some(handle.clone());
+        }
+        const LOGO_PNG: &[u8] = include_bytes!("../../../assets/celeste.png");
+        let icon = image_from_png(LOGO_PNG)?;
+        let image = egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba);
+        let handle = ctx.load_texture("celeste-logo", image, egui::TextureOptions::LINEAR);
+        self.logo = Some(handle.clone());
+        Some(handle)
+    }
+
+    /// Port of `ScarletUI.infoStats`: what Celeste knows about the avatar a
     /// player is wearing, and — when it knows nothing — the honest reason
     /// why, which is the part that matters for a private avatar.
     fn avatar_stats_window(&mut self, ctx: &egui::Context) {
@@ -605,7 +651,7 @@ impl ScarletApp {
                     ui.label(
                         egui::RichText::new(
                             "Avatar statuses come from VRChat's own API-request log lines, which the client only \
-                             writes when it was launched with debug logging. Without them Scarlet falls back to the \
+                             writes when it was launched with debug logging. Without them Celeste falls back to the \
                              avatar databases, which can't see private avatars.",
                         )
                         .small()
@@ -1049,7 +1095,7 @@ impl ScarletApp {
         });
     }
 
-    /// Incremental port of Scarlet's command interpreter.
+    /// Incremental port of Celeste's command interpreter.
     fn run_cli_command(&mut self, command: String) {
         self.state.append_cli_output(format!("> {command}"));
         if let Some(text) = command.strip_prefix("tts ").map(str::trim).filter(|text| !text.is_empty()) {
@@ -1241,7 +1287,7 @@ impl eframe::App for ScarletApp {
                 }
                 if let Some(announcement) = self.state.announcement() {
                     ui.separator();
-                    ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Scarlet announcement"));
+                    ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Celeste announcement"));
                 }
             });
         });
@@ -1271,6 +1317,37 @@ impl eframe::App for ScarletApp {
 /// `runtime_handle` is used both by the setup wizard (to run the VRChat
 /// login/TOTP calls without blocking the UI thread) and, once setup
 /// resolves a Discord token, to spawn the Discord client itself.
+/// The window/taskbar icon.
+///
+/// Embedded rather than loaded from disk so a build that has been copied
+/// somewhere else still has it. A boot splash was considered and
+/// deliberately not added: this starts in well under a second, so a splash
+/// would be a delay rather than a progress indicator — the reason Java
+/// needed one (JVM start plus dependency loading) doesn't exist here.
+fn app_icon() -> std::sync::Arc<egui::IconData> {
+    const ICON_PNG: &[u8] = include_bytes!("../../../assets/celeste.png");
+    // A failure here must never stop the window opening, so fall back to an
+    // empty icon rather than unwrapping.
+    match image_from_png(ICON_PNG) {
+        Some(icon) => std::sync::Arc::new(icon),
+        None => std::sync::Arc::new(egui::IconData { rgba: vec![0; 4], width: 1, height: 1 }),
+    }
+}
+
+fn image_from_png(bytes: &[u8]) -> Option<egui::IconData> {
+    let decoder = png::Decoder::new(bytes);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    buffer.truncate(info.buffer_size());
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buffer,
+        png::ColorType::Rgb => buffer.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        _ => return None,
+    };
+    Some(egui::IconData { rgba, width: info.width, height: info.height })
+}
+
 pub fn run(
     state: UiState,
     shared: scarlet_discord::data::SharedState,
@@ -1278,7 +1355,10 @@ pub fn run(
     runtime_handle: tokio::runtime::Handle,
     tts: Arc<crate::tts::TtsService>,
 ) -> eframe::Result<()> {
-    let options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_icon(app_icon()),
+        ..Default::default()
+    };
     eframe::run_native(
         scarlet_core::identity::APP_NAME,
         options,

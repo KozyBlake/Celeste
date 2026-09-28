@@ -1,6 +1,6 @@
 //! Port of `ScarletDiscordJDA.JDAEvents` (the JDA `ListenerAdapter` wired up
 //! in the constructor): connection lifecycle, slash-command dispatch, and
-//! the gateway events Scarlet reacts to. The per-event bodies live in
+//! the gateway events Celeste reacts to. The per-event bodies live in
 //! `crate::events`.
 
 use serenity::async_trait;

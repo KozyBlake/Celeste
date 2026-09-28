@@ -27,14 +27,14 @@
 //!   catalogue contains none — verified by grepping every
 //!   `messages*.properties` for `{n,` patterns. If one is ever added, it
 //!   renders literally instead of silently formatting wrong.
-//! - Java's `Locale` handling is reduced to a language string. Scarlet's
+//! - Java's `Locale` handling is reduced to a language string. Celeste's
 //!   catalogue is language-only (`de`, `ja`, ...), never region-specific.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock, RwLock};
 
-/// Languages Scarlet ships translations for (base English is always present).
+/// Languages Celeste ships translations for (base English is always present).
 pub const SHIPPED_LANGUAGES: [&str; 6] = ["en", "de", "es", "id", "ja", "ru"];
 
 const BUNDLE_EN: &str = include_str!("../../../../src/main/resources/net/sybyline/scarlet/i18n/messages.properties");

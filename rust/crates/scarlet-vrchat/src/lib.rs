@@ -1,4 +1,4 @@
-//! Rust port of Scarlet's VRChat API client (`ScarletVRChat*`).
+//! Rust port of Celeste's VRChat API client (`ScarletVRChat*`).
 //!
 //! **Status: real, working skeleton covering auth + one endpoint family,
 //! not a full port.** `ScarletVRChat.java` is 3,367 lines covering the

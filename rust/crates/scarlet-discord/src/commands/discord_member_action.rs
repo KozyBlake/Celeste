@@ -384,7 +384,7 @@ pub(crate) async fn perform(
         }
     }
     let audit_reason = format!(
-        "{} via Scarlet by {actor_name}. Reason: {reason}",
+        "{} via Celeste by {actor_name}. Reason: {reason}",
         draft.action.title()
     );
     let result = if draft.action == MemberAction::Ban {

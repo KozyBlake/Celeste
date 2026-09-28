@@ -1,5 +1,5 @@
 //! Port of `net.sybyline.scarlet.ScarletStaffList` and
-//! `ScarletSecretStaffList` -- a small JSON-file-backed set of VRChat user
+//! `CelesteSecretStaffList` -- a small JSON-file-backed set of VRChat user
 //! ids. Java implements these as two near-identical hand-copied classes
 //! (`staff_list.json` / `secret_staff_list.json`, `getStaffIds`/
 //! `getSecretStaffIds`, etc., every method body byte-for-byte the same);

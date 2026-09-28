@@ -120,7 +120,7 @@ pub fn vrchat_reports_enabled() -> bool {
     load_flag("vrchat_reports.enabled", true)
 }
 
-/// Whether Scarlet's interactive CLI is active. Default `true`.
+/// Whether Celeste's interactive CLI is active. Default `true`.
 pub fn cli_commands_enabled() -> bool {
     load_flag("cli_commands.enabled", true)
 }

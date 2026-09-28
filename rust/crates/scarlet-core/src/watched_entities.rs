@@ -6,7 +6,7 @@
 //! which this port doesn't need -- see the `commands` module docs on
 //! dropping Java's paginated embeds).
 //!
-//! Java constructs two instances directly in `Scarlet`'s field
+//! Java constructs two instances directly in `Celeste`'s field
 //! initializers (`watchedUsers`/`watchedAvatars`, `watched_users.json`/
 //! `watched_avatars.json`), each with its own id-validity `Pattern`
 //! (`VrcIds.id_user`/`id_avatar`). This port reuses one generic

@@ -1,5 +1,5 @@
 //! Server-manager configuration commands backed by Java-compatible config
-//! and Scarlet settings storage.
+//! and Celeste settings storage.
 
 use serenity::builder::{CreateCommand, CreateCommandOption};
 use serenity::client::Context;
@@ -35,8 +35,8 @@ impl ChannelSetting {
     fn description(self) -> &'static str {
         match self {
             Self::Training => "Set the channel that receives simulated training events",
-            Self::OpsAlert => "Set the channel that receives Scarlet health alerts",
-            Self::ActionLog => "Set the channel used for Scarlet moderation action logs",
+            Self::OpsAlert => "Set the channel that receives Celeste health alerts",
+            Self::ActionLog => "Set the channel used for Celeste moderation action logs",
         }
     }
     fn field(self) -> &'static str {
@@ -122,7 +122,7 @@ pub async fn run_channel(
             "Training channel removed. Simulated events will no longer be posted to Discord.".into()
         }
         (ChannelSetting::OpsAlert, Some(channel)) => {
-            format!("Scarlet health alerts will be sent to <#{}>.", channel.id)
+            format!("Celeste health alerts will be sent to <#{}>.", channel.id)
         }
         (ChannelSetting::OpsAlert, None) => "Ops alert channel removed.".into(),
         (ChannelSetting::ActionLog, Some(channel)) => {

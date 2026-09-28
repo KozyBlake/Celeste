@@ -12,7 +12,7 @@
 //! every crate instead of routed through a facade), so this module ports the
 //! *behavior* rather than the class shapes: [`init`] installs a
 //! `tracing_subscriber` that writes the same timestamp/level/name format to
-//! stdout/stderr and to `<data-dir>/logs/scarlet_log_<timestamp>.txt`, using
+//! stdout/stderr and to `<data-dir>/logs/celeste_log_<timestamp>.txt`, using
 //! `tracing_appender`'s non-blocking writer as the equivalent of the Java
 //! background logging thread. [`normalize_target`] reproduces
 //! `ScarletLoggerFactory::getLogger`'s name rewriting for parity with the old
@@ -23,8 +23,11 @@ use std::path::{Path, PathBuf};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
-const LEGACY_SCARLET_LOG_ROOT: &str = "Scarlet";
-const SCARLET_LOG_ROOT: &str = "KozyBlake/Scarlet";
+/// Logger names from before the rename, still rewritten to the current
+/// root so a mixed run's log lines group together.
+const LEGACY_LOG_ROOT: &str = "Scarlet";
+const LEGACY_LOG_ROOT_2: &str = "Celeste";
+const LOG_ROOT: &str = "KozyBlake/Celeste";
 const SCARLET_PACKAGE_PREFIX: &str = "net.sybyline.scarlet.";
 
 /// Port of `ScarletLoggerFactory.getLogger`'s name normalization.
@@ -37,12 +40,12 @@ pub fn normalize_target(name: &str) -> String {
         format!("JDA/{}", rest.replace('.', "/"))
     } else if let Some(rest) = name.strip_prefix("net.dv8tion.jda.internal.") {
         format!("JDA-I/{}", rest.replace('.', "/"))
-    } else if name == LEGACY_SCARLET_LOG_ROOT {
-        SCARLET_LOG_ROOT.to_string()
-    } else if let Some(rest) = name.strip_prefix(&format!("{LEGACY_SCARLET_LOG_ROOT}/")) {
-        format!("{SCARLET_LOG_ROOT}/{rest}")
+    } else if name == LEGACY_LOG_ROOT || name == LEGACY_LOG_ROOT_2 {
+        LOG_ROOT.to_string()
+    } else if let Some(rest) = name.strip_prefix(&format!("{LEGACY_LOG_ROOT}/")) {
+        format!("{LOG_ROOT}/{rest}")
     } else if let Some(rest) = name.strip_prefix(SCARLET_PACKAGE_PREFIX) {
-        format!("{SCARLET_LOG_ROOT}/{}", rest.replace('.', "/"))
+        format!("{LOG_ROOT}/{}", rest.replace('.', "/"))
     } else {
         name.to_string()
     }
@@ -53,7 +56,7 @@ pub fn normalize_target(name: &str) -> String {
 /// `Scarlet.dir`.
 pub fn log_file_path(data_dir: &Path) -> PathBuf {
     let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
-    data_dir.join("logs").join(format!("scarlet_log_{stamp}.txt"))
+    data_dir.join("logs").join(format!("celeste_log_{stamp}.txt"))
 }
 
 /// Initializes global tracing: stdout/stderr plus the per-run log file.
@@ -104,10 +107,14 @@ mod tests {
             normalize_target("net.dv8tion.jda.internal.JDAImpl"),
             "JDA-I/JDAImpl"
         );
-        assert_eq!(normalize_target("Scarlet"), "KozyBlake/Scarlet");
+        assert_eq!(normalize_target("Celeste"), "KozyBlake/Celeste");
+        // A logger name from before the rename maps to the same root.
+        assert_eq!(normalize_target("Scarlet"), "KozyBlake/Celeste");
+        // A Java class name still maps under the current root, so log
+        // lines from ported and not-yet-ported subsystems group together.
         assert_eq!(
             normalize_target("net.sybyline.scarlet.ScarletSettings"),
-            "KozyBlake/Scarlet/ScarletSettings"
+            "KozyBlake/Celeste/ScarletSettings"
         );
         assert_eq!(normalize_target("some.other.Thing"), "some.other.Thing");
     }

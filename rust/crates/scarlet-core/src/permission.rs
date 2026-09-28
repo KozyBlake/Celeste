@@ -11,7 +11,7 @@
 //! once there's a concrete serenity-based design for "enum as a slash
 //! command option" to port it *onto* rather than transliterating JDA
 //! generics that don't map over. Only the plain data (id/title lookup) is
-//! ported here, since every other Scarlet subsystem needs that regardless of
+//! ported here, since every other Celeste subsystem needs that regardless of
 //! how Discord command options end up wired.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

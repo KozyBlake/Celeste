@@ -5,7 +5,7 @@
 //!
 //! `latest_release`/`latest_build` drive the update-check flow. `announcement`
 //! is an optional broadcast notice: when present (and not expired) it pops a
-//! dialog on every running Scarlet instance on the next hourly poll.
+//! dialog on every running Celeste instance on the next hourly poll.
 //!
 //! Both types derive `Deserialize`/`Serialize` with `#[serde(default)]` on
 //! every optional field, matching Gson's leniency about unknown/missing JSON
@@ -27,7 +27,7 @@ pub struct ScarletMeta {
 }
 
 /// Maintainers edit this sub-object on the repo's `main` branch to push an
-/// out-of-band notice to every running Scarlet instance. `id` is the dedup
+/// out-of-band notice to every running Celeste instance. `id` is the dedup
 /// key: once a user has acknowledged a given id, they won't be re-prompted
 /// for that announcement on the next poll; bump the id to broadcast a new
 /// one.
@@ -38,13 +38,13 @@ pub struct ScarletAnnouncement {
     /// One of "info" (default), "warning", "urgent" - drives the dialog icon.
     #[serde(default)]
     pub severity: Option<String>,
-    /// Short headline shown as the dialog title; falls back to "Scarlet announcement".
+    /// Short headline shown as the dialog title; falls back to "Celeste announcement".
     #[serde(default)]
     pub title: Option<String>,
     /// Body text shown in the dialog. If empty, no popup is shown.
     #[serde(default)]
     pub message: Option<String>,
-    /// Optional web URL; Scarlet only opens http/https announcement links.
+    /// Optional web URL; Celeste only opens http/https announcement links.
     #[serde(default)]
     pub url: Option<String>,
     /// Optional ISO-8601 timestamp. If present and in the past, the

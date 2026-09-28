@@ -1,5 +1,5 @@
 //! Port of `java.lang.String.hashCode()`'s algorithm
-//! (`s[0]*31^(n-1) + s[1]*31^(n-2) + ... + s[n-1]`), needed where Scarlet's
+//! (`s[0]*31^(n-1) + s[1]*31^(n-2) + ... + s[n-1]`), needed where Celeste's
 //! data format embeds it (`ScarletData.customEvent_new`/`customEvent_filter`
 //! encode a `GroupAuditTypeEx` id's Java hash code into a UUID's low bits to
 //! filter custom events by type without a separate index).
@@ -9,7 +9,7 @@
 //! without re-writing every `ex/*.json` file's UUID.
 //!
 //! Operates on UTF-16 code units like Java does; for the ASCII-only ids
-//! Scarlet actually hashes with this (`GroupAuditTypeEx`'s `"groupex.*"`
+//! Celeste actually hashes with this (`GroupAuditTypeEx`'s `"groupex.*"`
 //! ids), UTF-16 code units and Unicode scalar values coincide, so iterating
 //! `char`s (each a valid ASCII code point, one UTF-16 unit) matches exactly.
 //! A string with characters outside the Basic Multilingual Plane would need

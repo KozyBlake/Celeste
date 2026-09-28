@@ -25,7 +25,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     super::defer(ctx, command).await?;
 
     let Some(scarlet_data) = ({ ctx.data.read().await.get::<ScarletDataKey>().cloned() }) else {
-        return super::reply_ephemeral(ctx, command, "Scarlet data is not available.").await;
+        return super::reply_ephemeral(ctx, command, "Celeste data is not available.").await;
     };
 
     let snowflake = command.user.id.to_string();

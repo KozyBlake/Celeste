@@ -35,7 +35,7 @@ pub fn acknowledge(data_dir: &Path) {
 pub fn message(data_dir: &Path, settings_file: &Path) -> String {
     format!(
         "Back up your KozyBlake/Scarlet data before startup continues.\n\n\
-         Scarlet may reinitialize or lose access to previously stored secure settings and credentials during initialization.\n\
+         Celeste may reinitialize or lose access to previously stored secure settings and credentials during initialization.\n\
          If something goes wrong, a backup is the safest way to recover.\n\n\
          Data that could be reset, reverted, or need recovery includes:\n\
          - Discord bot token\n\

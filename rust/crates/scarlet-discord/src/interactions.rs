@@ -193,7 +193,7 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
         }
         return;
     }
-    // The Ban/Unban buttons Scarlet attaches to its instance-event embeds
+    // The Ban/Unban buttons Celeste attaches to its instance-event embeds
     // (port of `ScarletDiscordUI.vrchatUserBan`/`vrchatUserUnban`). Without
     // these the buttons on every emitted embed would do nothing.
     if interaction.data.custom_id.starts_with("vrchat-user-ban:")
@@ -786,7 +786,7 @@ async fn create_instance(
         return ephemeral_component(
             ctx,
             interaction,
-            "Scarlet isn't logged in to VRChat right now.",
+            "Celeste isn't logged in to VRChat right now.",
         )
         .await;
     };
@@ -794,7 +794,7 @@ async fn create_instance(
         return ephemeral_component(
             ctx,
             interaction,
-            "Scarlet isn't logged in to VRChat right now.",
+            "Celeste isn't logged in to VRChat right now.",
         )
         .await;
     };
@@ -812,7 +812,7 @@ async fn create_instance(
             return ephemeral_component(
                 ctx,
                 interaction,
-                format!("Could not identify Scarlet's VRChat account: {err}"),
+                format!("Could not identify Celeste's VRChat account: {err}"),
             )
             .await
         }
@@ -820,7 +820,7 @@ async fn create_instance(
     for permission in required {
         for (user_id, missing_message) in [
             (&actor_id, "You do not have"),
-            (&self_id, "Scarlet's VRChat account does not have"),
+            (&self_id, "Celeste's VRChat account does not have"),
         ] {
             match client
                 .user_has_group_permission(&creation.group_id, user_id, permission)
@@ -1128,7 +1128,7 @@ async fn handle_vrchat_user_multi(
         message.push_str(&format!("\nFailed {} user(s):\n{shown}", failed.len()));
         if failed.len() > 10 {
             message.push_str(&format!(
-                "\n…and {} more failure(s); see Scarlet's log for details.",
+                "\n…and {} more failure(s); see Celeste's log for details.",
                 failed.len() - 10
             ));
             for failure in failed.iter().skip(10) {

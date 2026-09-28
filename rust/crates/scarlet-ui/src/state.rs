@@ -1,4 +1,4 @@
-//! The data model behind [`scarlet_core::ui::ScarletUi`] — Java's
+//! The data model behind [`scarlet_core::ui::CelesteUi`] — Java's
 //! `ScarletUI`'s player table, status bar, CLI output and announcement
 //! state, minus Swing.
 //!
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::NaiveDateTime;
-use scarlet_core::ui::{compare_players, ConnectedPlayer, InstanceState, PlayerJoin, ScarletUi};
+use scarlet_core::ui::{compare_players, ConnectedPlayer, InstanceState, PlayerJoin, CelesteUi};
 
 /// One line of CLI tab output, matching `appendCliOutput`.
 #[derive(Debug, Clone)]
@@ -147,7 +147,7 @@ impl UiState {
     }
 
     /// Port of `playerLeave`. A leave for an unknown id still creates the
-    /// row, as Java does, so a player who joined before Scarlet started is
+    /// row, as Java does, so a player who joined before Celeste started is
     /// still accounted for in the session totals.
     pub fn player_leave(&self, _initial_preamble: bool, id: &str, name: &str, left: NaiveDateTime) {
         let mut inner = self.0.lock().unwrap();
@@ -274,7 +274,7 @@ impl UiState {
 
 /// Lets the ported event listener drive this state through the same
 /// interface Java's listener uses, with no dependency on egui.
-impl ScarletUi for UiState {
+impl CelesteUi for UiState {
     fn fire_sort(&self) {
         UiState::fire_sort(self)
     }
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn the_scarlet_ui_trait_drives_the_same_state() {
         let state = UiState::new();
-        let ui: &dyn ScarletUi = &state;
+        let ui: &dyn CelesteUi = &state;
         ui.player_join(false, PlayerJoin::new("usr_t", "Trait", at(1_000)));
         ui.player_update(false, "usr_t", &mut |p| p.avatar_name = Some("Via Trait".to_string()));
         assert_eq!(state.ordered_players()[0].avatar_name.as_deref(), Some("Via Trait"));

@@ -52,7 +52,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     }
 
     let Some(scarlet_data) = ({ ctx.data.read().await.get::<ScarletDataKey>().cloned() }) else {
-        return super::reply_ephemeral(ctx, command, "Scarlet data is not available.").await;
+        return super::reply_ephemeral(ctx, command, "Celeste data is not available.").await;
     };
 
     let mut any = false;
