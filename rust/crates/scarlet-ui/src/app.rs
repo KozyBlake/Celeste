@@ -153,6 +153,9 @@ pub struct ScarletApp {
     /// See `scarlet_discord::data::SharedHttp` — shared with the event
     /// listener's audit emitter so both see the same connection.
     discord_http: scarlet_discord::data::SharedHttp,
+    /// Set when a background VRChat login stopped to ask for a two-factor
+    /// code; drained in `update` to open the code prompt.
+    two_factor_rx: Option<std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>>,
     scarlet_data: Arc<scarlet_core::data::ScarletData>,
     staff_list: Arc<scarlet_core::staff_list::StaffList>,
     secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
@@ -203,6 +206,7 @@ impl ScarletApp {
         let discord_http = shared.http.clone();
         let settings = Some(shared.settings.clone());
 
+        let mut pending_two_factor = None;
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
 
         // If setup already ran in an earlier session, the wizard is
@@ -221,7 +225,7 @@ impl ScarletApp {
                 // commands still get a working client. Matches Java's own
                 // unattended-re-login behavior, minus stored-TOTP-secret
                 // support (see `login_with_stored_credentials`'s docs).
-                spawn_unattended_vrchat_login(&runtime_handle, vrchat_slot.clone(), settings.clone());
+                pending_two_factor = Some(spawn_unattended_vrchat_login(&runtime_handle, vrchat_slot.clone(), settings.clone()));
 
                 runtime_handle.spawn(scarlet_discord::client::connect_and_serve(
                     token,
@@ -254,6 +258,7 @@ impl ScarletApp {
             wizard,
             vrchat_slot,
             discord_http,
+            two_factor_rx: pending_two_factor.take(),
             scarlet_data,
             staff_list,
             secret_staff_list,
@@ -597,6 +602,27 @@ impl eframe::App for ScarletApp {
         // match) keeps the borrow of `self.wizard` scoped to just this
         // call, so the match arms below are free to touch other `self`
         // fields (staff_mode, runtime_handle, wizard itself).
+        // A background login that stopped at the two-factor step opens the
+        // code prompt, even though setup itself finished long ago.
+        if self.wizard.is_none() {
+            if let Some(rx) = &self.two_factor_rx {
+                if let Ok((client, methods)) = rx.try_recv() {
+                    self.two_factor_rx = None;
+                    if let Some(settings) = self.settings.clone() {
+                        self.wizard = crate::setup::SetupWizard::for_two_factor_only(
+                            &settings,
+                            self.runtime_handle.clone(),
+                            client,
+                            &methods,
+                        );
+                        if self.wizard.is_none() {
+                            tracing::warn!("VRChat asked for an unsupported two-factor method: {methods:?}");
+                        }
+                    }
+                }
+            }
+        }
+
         let (outcome, wizard_vrchat_client) = match &mut self.wizard {
             Some(wizard) => {
                 let outcome = wizard.render(ctx);
@@ -606,6 +632,31 @@ impl eframe::App for ScarletApp {
             }
             None => (None, None),
         };
+        // A code-only prompt finishing means a login happened and nothing
+        // else: publish the client, but don't re-run setup's finishing work
+        // (which would connect a second Discord client).
+        let two_factor_only =
+            self.wizard.as_ref().map(crate::setup::SetupWizard::is_two_factor_only).unwrap_or(false);
+        let outcome = if two_factor_only {
+            match outcome {
+                Some(crate::setup::SetupOutcome::JustFinished { .. }) => {
+                    if let Some(client) = wizard_vrchat_client.clone() {
+                        let slot = self.vrchat_slot.clone();
+                        self.runtime_handle.spawn(async move {
+                            *slot.write().await = Some(client);
+                        });
+                    }
+                    self.wizard = None;
+                    // Treated as "nothing more to do" below, so the normal
+                    // window renders on this same frame.
+                    Some(crate::setup::SetupOutcome::AlreadyDone)
+                }
+                other => other,
+            }
+        } else {
+            outcome
+        };
+
         match outcome {
             Some(crate::setup::SetupOutcome::JustFinished { discord_token }) => {
                 self.staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
@@ -625,7 +676,8 @@ impl eframe::App for ScarletApp {
                     // from) -- fall back to an unattended login attempt.
                     None => {
                         if let Some(settings) = self.settings.clone() {
-                            spawn_unattended_vrchat_login(&self.runtime_handle, self.vrchat_slot.clone(), settings);
+                            self.two_factor_rx =
+                                Some(spawn_unattended_vrchat_login(&self.runtime_handle, self.vrchat_slot.clone(), settings));
                         }
                     }
                 }
@@ -697,6 +749,15 @@ impl eframe::App for ScarletApp {
                         ui.weak(scarlet_core::i18n::tr("ui.statusNoInstance", &[]).trim().to_string());
                     }
                 }
+                // The VRChat session, which every profile-derived column
+                // depends on.
+                let vrchat_status = self.state.connection_status();
+                if !vrchat_status.is_empty() {
+                    ui.separator();
+                    let signed_in = vrchat_status.contains("signed in as");
+                    let colour = if signed_in { egui::Color32::from_rgb(95, 200, 120) } else { egui::Color32::from_rgb(235, 165, 65) };
+                    ui.colored_label(colour, vrchat_status);
+                }
                 if let Some(announcement) = self.state.announcement() {
                     ui.separator();
                     ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Scarlet announcement"));
@@ -751,12 +812,24 @@ fn spawn_unattended_vrchat_login(
     runtime_handle: &tokio::runtime::Handle,
     slot: scarlet_discord::data::SharedVrChatClient,
     settings: Arc<Settings>,
-) {
+) -> std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)> {
+    let (tx, rx) = std::sync::mpsc::channel();
     runtime_handle.spawn(async move {
-        if let Some(client) = scarlet_vrchat::client::login_with_stored_credentials(&settings).await {
-            *slot.write().await = Some(Arc::new(client));
+        match scarlet_vrchat::client::login_with_stored_credentials_detailed(&settings).await {
+            scarlet_vrchat::client::StoredLogin::LoggedIn(client) => {
+                *slot.write().await = Some(Arc::new(client));
+            }
+            // The account has 2FA: hand the half-authenticated client to the
+            // UI thread so it can ask for the code, the way Java prompts at
+            // startup. Dropping it here (which is what used to happen) left
+            // the app permanently signed out after first-run setup.
+            scarlet_vrchat::client::StoredLogin::RequiresTwoFactor { client, methods } => {
+                let _ = tx.send((Arc::new(client), methods));
+            }
+            scarlet_vrchat::client::StoredLogin::Unavailable => {}
         }
     });
+    rx
 }
 
 #[cfg(test)]

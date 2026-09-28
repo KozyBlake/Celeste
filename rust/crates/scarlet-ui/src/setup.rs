@@ -118,6 +118,12 @@ pub enum SetupOutcome {
 pub struct SetupWizard {
     stage: Stage,
     done: bool,
+    /// True when this wizard exists only to collect a two-factor code for
+    /// an already-configured install (see
+    /// [`SetupWizard::for_two_factor_only`]). The caller uses it to avoid
+    /// re-running the "setup just finished" work — reconnecting Discord in
+    /// particular — when all that happened was a login.
+    two_factor_only: bool,
     runtime_handle: tokio::runtime::Handle,
     vibecoded_ack: Arc<FileValued<bool>>,
     discord_setup_prompted: Arc<FileValued<bool>>,
@@ -144,6 +150,7 @@ impl SetupWizard {
         let mut wizard = SetupWizard {
             stage: Stage::Done, // placeholder; replaced below once every field exists
             done: false,
+            two_factor_only: false,
             runtime_handle,
             vibecoded_ack: settings.vibecoded_notice_acknowledged.clone(),
             discord_setup_prompted: settings.discord_setup_prompted.clone(),
@@ -162,8 +169,36 @@ impl SetupWizard {
         wizard
     }
 
+    /// A wizard that shows nothing but the two-factor code prompt, for an
+    /// install whose setup finished long ago but whose stored credentials
+    /// need a fresh code this launch.
+    ///
+    /// Java prompts for the code on every launch that needs one (its
+    /// `ScarletVRChat.login()` runs before the main window exists); this is
+    /// the same prompt, shown when the background login asks for it instead
+    /// of at a fixed point in startup.
+    pub fn for_two_factor_only(
+        settings: &Arc<Settings>,
+        runtime_handle: tokio::runtime::Handle,
+        client: Arc<VrChatClient>,
+        methods: &[String],
+    ) -> Option<Self> {
+        let method = TwoFactorMethod::preferred(methods)?;
+        let mut wizard = SetupWizard::new(settings, runtime_handle);
+        wizard.two_factor_only = true;
+        wizard.done = false;
+        wizard.vrchat_client = Some(client);
+        wizard.stage = Stage::VrChatTwoFactor { method, code: String::new(), error: None, in_flight: false };
+        Some(wizard)
+    }
+
     pub fn is_done(&self) -> bool {
         self.done
+    }
+
+    /// See [`SetupWizard::two_factor_only`].
+    pub fn is_two_factor_only(&self) -> bool {
+        self.two_factor_only
     }
 
     #[cfg(test)]

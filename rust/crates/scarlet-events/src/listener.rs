@@ -133,6 +133,8 @@ pub struct ScarletEventListener {
     is_in_group_instance: bool,
     is_same_as_previous_instance: bool,
 
+    /// One-shot, so a full instance doesn't repeat the warning per player.
+    warned_no_vrchat_session: bool,
     seen_api_log_lines: bool,
     live_avatar_switches_without_api_log: u32,
     warned_missing_api_logging: bool,
@@ -198,6 +200,7 @@ impl ScarletEventListener {
             has_tailer_caught_up: false,
             is_in_group_instance: false,
             is_same_as_previous_instance: false,
+            warned_no_vrchat_session: false,
             seen_api_log_lines: false,
             live_avatar_switches_without_api_log: 0,
             warned_missing_api_logging: false,
@@ -809,7 +812,25 @@ impl ScarletEventListener {
                     None
                 }
             },
-            None => None,
+            None => {
+                // Everything profile-derived silently stays blank without a
+                // session: account age, pronouns, trust rank, age
+                // verification, and the watched-group check. Say so once,
+                // rather than leaving empty columns to be interpreted as
+                // "this player has no data".
+                if !self.warned_no_vrchat_session {
+                    self.warned_no_vrchat_session = true;
+                    tracing::warn!(
+                        "Not signed in to VRChat: account age, pronouns, trust rank, 18+ status and watched-group \
+                         checks are unavailable until a VRChat login succeeds"
+                    );
+                    self.deps.ui.append_cli_output(
+                        "Not signed in to VRChat - account age, pronouns, rank, 18+ and watched-group checks are \
+                         unavailable until VRChat login succeeds.",
+                    );
+                }
+                None
+            }
         };
 
         // check groups

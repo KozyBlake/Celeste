@@ -1040,6 +1040,72 @@ impl VrChatClient {
 /// account requiring 2FA can only log in through the interactive wizard,
 /// which then hands its already-authenticated client onward instead of
 /// calling this at all.
+/// What an unattended login attempt with stored credentials ended up as.
+///
+/// The two-factor case used to be collapsed into "no client" with a log
+/// line telling the user to re-run the setup wizard — which they can't,
+/// because the wizard only runs when setup hasn't completed. On an account
+/// with 2FA (the normal case for a moderation bot account) that made every
+/// launch after the first permanently signed out: the player table still
+/// filled from the log, but account age, pronouns, trust rank, 18+ status
+/// and every watched-group check silently stayed empty. Java prompts for
+/// the code at each launch instead; returning the half-authenticated client
+/// here is what lets the UI do the same.
+pub enum StoredLogin {
+    LoggedIn(VrChatClient),
+    RequiresTwoFactor { client: VrChatClient, methods: Vec<String> },
+    /// No credentials stored, or VRChat rejected them (in which case they
+    /// have been cleared).
+    Unavailable,
+}
+
+/// Unattended login that reports the two-factor case instead of swallowing
+/// it. See [`StoredLogin`].
+pub async fn login_with_stored_credentials_detailed(
+    settings: &scarlet_core::settings::Settings,
+) -> StoredLogin {
+    use scarlet_core::settings::registry::registry_string_encrypted;
+
+    let username_reg = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY);
+    let password_reg = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY);
+    let (Some(username), Some(password)) = (username_reg.get_or_null(), password_reg.get_or_null()) else {
+        return StoredLogin::Unavailable;
+    };
+
+    let client = match VrChatClient::new() {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::error!("Could not build VRChat client for unattended login: {}", err);
+            return StoredLogin::Unavailable;
+        }
+    };
+
+    match client.login_with_credentials(&username, &password).await {
+        Ok(LoginOutcome::LoggedIn(user)) => {
+            tracing::info!(
+                "VRChat unattended login succeeded as {}",
+                user.display_name.as_deref().unwrap_or(&user.id)
+            );
+            StoredLogin::LoggedIn(client)
+        }
+        Ok(LoginOutcome::RequiresTwoFactor(methods)) => {
+            tracing::info!("VRChat unattended login needs a two-factor code ({:?})", methods);
+            StoredLogin::RequiresTwoFactor { client, methods }
+        }
+        Err(err) => {
+            tracing::error!("VRChat unattended login failed: {}", err);
+            // Port of `ScarletVRChat.login()`'s `catch (ApiException)`: only
+            // VRChat actually rejecting the credentials clears them, not a
+            // transient network error.
+            if matches!(err, VrChatError::Api { .. }) {
+                username_reg.clear();
+                password_reg.clear();
+            }
+            StoredLogin::Unavailable
+        }
+    }
+}
+
 pub async fn login_with_stored_credentials(
     settings: &scarlet_core::settings::Settings,
 ) -> Option<VrChatClient> {

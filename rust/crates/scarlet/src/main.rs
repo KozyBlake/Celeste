@@ -46,6 +46,7 @@ fn main() -> anyhow::Result<()> {
     settings.update_run_version_and_time(scarlet_core::identity::VERSION);
 
     let ui_state = scarlet_ui::UiState::new();
+    ui_state.refresh_vrchat_api_status("VRChat: signing in...");
 
     let runtime = tokio::runtime::Runtime::new()?;
 
@@ -102,6 +103,51 @@ fn main() -> anyhow::Result<()> {
         )),
     });
     runtime.spawn(scarlet_events::listener::run(listener, tailer_events));
+
+    // Report the VRChat session in the status bar. Whether the session
+    // arrives from the setup wizard or from an unattended login differs by
+    // launch path, so this watches the shared slot both fill rather than
+    // being wired into each of them. Without it a failed login is
+    // invisible: the player table still fills from the log, but every
+    // profile-derived column (account age, pronouns, rank, 18+) stays blank
+    // with nothing saying why.
+    runtime.spawn({
+        let slot = shared.vrchat_client.clone();
+        let ui_state = ui_state.clone();
+        async move {
+            // How long a login is given before "signing in..." becomes
+            // "not signed in", so a slow 2FA prompt doesn't read as failure.
+            const GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+            let started = std::time::Instant::now();
+            let mut signed_in = false;
+            loop {
+                let client = slot.read().await.clone();
+                match (client, signed_in) {
+                    (Some(client), false) => {
+                        signed_in = true;
+                        let status = match client.get_current_user().await {
+                            Ok(user) => match user.display_name {
+                                Some(name) => format!("VRChat: signed in as {name}"),
+                                None => "VRChat: signed in".to_string(),
+                            },
+                            Err(err) => format!("VRChat: session error ({err})"),
+                        };
+                        tracing::info!("{status}");
+                        ui_state.refresh_vrchat_api_status(status);
+                    }
+                    (None, true) => {
+                        signed_in = false;
+                        ui_state.refresh_vrchat_api_status("VRChat: not signed in");
+                    }
+                    (None, false) if started.elapsed() > GRACE => {
+                        ui_state.refresh_vrchat_api_status("VRChat: not signed in");
+                    }
+                    _ => {}
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    });
 
     if scarlet_ui::platform::is_headless() {
         tracing::info!("No display detected; running headless. Ctrl+C to exit.");
