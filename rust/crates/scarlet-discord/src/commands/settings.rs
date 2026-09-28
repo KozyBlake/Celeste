@@ -12,7 +12,9 @@ use serenity::model::prelude::InputTextStyle;
 use crate::data::SettingsKey;
 
 pub const NAME: &str = "settings";
-pub const MODAL_PREFIX: &str = "settings-edit:";
+// Java uses `settings:<id>`; DPerms keys modal-submit rules by the prefix
+// before `:`, so this spelling is data compatibility, not presentation.
+pub const MODAL_PREFIX: &str = "settings:";
 
 pub fn register() -> CreateCommand {
     CreateCommand::new(NAME)
@@ -219,8 +221,19 @@ fn editor_fields(
                 .chars()
                 .take(45)
                 .collect(),
-            current.split(',').collect::<Vec<_>>().join("\n"),
+            current,
         ),
         SettingKind::Basic | SettingKind::Void { .. } => unreachable!("filtered before editor"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modal_operation_matches_java_and_existing_permission_files() {
+        assert_eq!(MODAL_PREFIX, "settings:");
+        assert_eq!(crate::permissions::operation("settings:custom_avatar_search_providers"), "settings");
     }
 }

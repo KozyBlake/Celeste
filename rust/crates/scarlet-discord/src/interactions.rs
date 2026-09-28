@@ -1654,8 +1654,6 @@ async fn handle_setting_modal(
     ctx: &Context,
     interaction: &ModalInteraction,
 ) -> serenity::Result<()> {
-    use scarlet_core::settings::file_valued::SettingKind;
-
     let setting_id = interaction
         .data
         .custom_id
@@ -1679,10 +1677,9 @@ async fn handle_setting_modal(
         )
         .await;
     };
-    let mut value = modal_text(interaction, "value");
-    if matches!(setting.kind(), SettingKind::StringArrayPattern { .. }) {
-        value = value.lines().map(str::trim).collect::<Vec<_>>().join(",");
-    }
+    // Java passes the modal's newline-delimited string array directly to
+    // `value.split("\\R")`; `FileValued<Vec<String>>` owns that parsing.
+    let value = modal_text(interaction, "value");
     if setting.set_from_string(&value, "discord") {
         ephemeral_modal(
             ctx,

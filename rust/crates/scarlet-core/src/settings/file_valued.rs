@@ -262,12 +262,18 @@ impl FromStringValue for String {
 }
 impl ToStringValue for Vec<String> {
     fn to_string_value(&self) -> String {
-        self.join(",")
+        // Java's Discord editor presents FileValuedStringArrayPattern as
+        // one entry per line (`String.join("\n", currentValues)`). Commas
+        // are valid data inside entries such as URLs and must stay intact.
+        self.join("\n")
     }
 }
 impl FromStringValue for Vec<String> {
     fn from_string_value(s: &str) -> Option<Self> {
-        Some(s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        // Java: `value.split("\\R")` (ScarletDiscordCommands.java).
+        // `str::lines` recognizes LF and CRLF; trim a remaining bare CR so
+        // files pasted from any Java-supported line ending round-trip.
+        Some(s.lines().map(|s| s.trim_end_matches('\r').trim().to_string()).filter(|s| !s.is_empty()).collect())
     }
 }
 
@@ -578,6 +584,19 @@ mod tests {
             "test"
         ));
         assert!(!setting.set(Some(vec!["not-a-world-id".to_string()]), "test"));
+    }
+
+    #[test]
+    fn string_array_text_round_trip_preserves_commas_inside_entries() {
+        // The bug this guards: the Discord modal converted newlines to
+        // commas and this parser split on commas, corrupting URLs on save.
+        let value = "https://example.test/search?q=one,two\nhttps://second.test/path";
+        let parsed = Vec::<String>::from_string_value(value).unwrap();
+        assert_eq!(parsed, vec![
+            "https://example.test/search?q=one,two",
+            "https://second.test/path",
+        ]);
+        assert_eq!(parsed.to_string_value(), value);
     }
 
     #[test]
