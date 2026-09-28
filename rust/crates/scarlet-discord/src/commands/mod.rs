@@ -455,6 +455,10 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
         moderation_tags::NAME => moderation_tags::autocomplete(ctx, command).await,
         config_set::NAME => config_set::autocomplete(ctx, command).await,
         discord_permissions::NAME => discord_permissions::autocomplete(ctx, command).await,
+        set_event_channel::AUDIT_NAME | set_event_channel::SECRET_AUDIT_NAME
+        | aux_webhooks::ASSIGN_NAME => {
+            set_event_channel::autocomplete_audit(ctx, command).await
+        }
         vrchat_user_ban::NAME | vrchat_user_unban::NAME | vrchat_user_info::NAME
         | staff_list::NAME | secret_staff_list::NAME | watched_group::NAME
         | vrchat_group::NAME | unlink_vrchat_account_for::NAME => {

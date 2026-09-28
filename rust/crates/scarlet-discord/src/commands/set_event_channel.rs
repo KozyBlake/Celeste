@@ -1,7 +1,9 @@
 //! Shared implementation for Java's four audit/extended/secret event
 //! channel-routing commands.
 
-use serenity::builder::{CreateCommand, CreateCommandOption};
+use serenity::builder::{
+    CreateAutocompleteResponse, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+};
 use serenity::client::Context;
 use serenity::model::application::{
     CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue,
@@ -146,19 +148,72 @@ impl RouteKind {
 pub fn register(kind: RouteKind) -> CreateCommand {
     CreateCommand::new(kind.name())
         .description(kind.description())
-        .add_option(
-            CreateCommandOption::new(
-                CommandOptionType::String,
-                kind.option(),
-                "The event type id",
-            )
-            .required(true),
-        )
+        .add_option(event_type_option(kind))
         .add_option(CreateCommandOption::new(
             CommandOptionType::Channel,
             "discord-text-channel",
             "The channel, or omit to unassociate it",
         ))
+}
+
+fn event_type_option(kind: RouteKind) -> CreateCommandOption {
+    let mut option = CreateCommandOption::new(
+        CommandOptionType::String,
+        kind.option(),
+        "The event type id",
+    )
+    .required(true);
+    if kind.valid_types().len() <= 25 {
+        for event_type in kind.valid_types() {
+            option = option.add_string_choice(title(event_type), *event_type);
+        }
+    } else {
+        option = option.set_autocomplete(true);
+    }
+    option
+}
+
+pub(crate) async fn autocomplete_audit(
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> serenity::Result<()> {
+    let typing = command
+        .data
+        .autocomplete()
+        .map(|option| option.value.trim())
+        .unwrap_or_default();
+    let mut response = CreateAutocompleteResponse::new();
+    if !typing.is_empty() {
+        response = response.add_string_choice(typing, typing);
+    }
+    for event_type in matching_types(AUDIT_TYPES, typing)
+        .into_iter()
+        .filter(|event_type| *event_type != typing)
+        .take(25 - usize::from(!typing.is_empty()))
+    {
+        response = response.add_string_choice(title(event_type), event_type);
+    }
+    command
+        .create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response))
+        .await
+}
+
+fn matching_types<'a>(types: &'a [&'a str], typing: &str) -> Vec<&'a str> {
+    let query = typing.to_ascii_lowercase();
+    let mut values = types.to_vec();
+    values.sort_by_key(|event_type| {
+        let id = event_type.to_ascii_lowercase();
+        let label = title(event_type).to_ascii_lowercase();
+        let rank = if query.is_empty() || id.starts_with(&query) || label.starts_with(&query) {
+            0
+        } else if id.contains(&query) || label.contains(&query) {
+            1
+        } else {
+            2
+        };
+        (rank, label)
+    });
+    values
 }
 
 fn string<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a str> {
@@ -307,6 +362,11 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn option(command: CreateCommand) -> serde_json::Value {
+        serde_json::to_value(command).unwrap()["options"][0].clone()
+    }
+
     #[test]
     fn validates_known_event_ids() {
         assert!(AUDIT_TYPES.contains(&"group.user.ban"));
@@ -316,5 +376,29 @@ mod tests {
     fn title_fallback_is_readable() {
         assert_eq!(title("groupex.instance.user.join"), "User Join");
         assert_eq!(title("group.calendarEvent.create"), "Event Create");
+    }
+
+    #[test]
+    fn large_java_enum_uses_autocomplete() {
+        let option = option(register(RouteKind::Audit));
+        assert_eq!(option["autocomplete"], true);
+        assert!(option["choices"].as_array().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn small_java_enum_registers_labeled_choices() {
+        let option = option(register(RouteKind::Extended));
+        let choices = option["choices"].as_array().unwrap();
+        assert_eq!(choices.len(), EXTENDED_TYPES.len());
+        assert!(choices.iter().any(|choice| {
+            choice["name"] == "User Spawn Pedestal"
+                && choice["value"] == "groupex.instance.user.pedestal"
+        }));
+    }
+
+    #[test]
+    fn autocomplete_prioritizes_matching_titles_and_ids() {
+        let matches = matching_types(AUDIT_TYPES, "ban");
+        assert_eq!(matches[0], "group.user.ban");
     }
 }

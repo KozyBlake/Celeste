@@ -72,7 +72,8 @@ pub fn register_assignment() -> CreateCommand {
                 "audit-event-type",
                 "The VRChat group audit event type",
             )
-            .required(true),
+            .required(true)
+            .set_autocomplete(true),
         )
 }
 
