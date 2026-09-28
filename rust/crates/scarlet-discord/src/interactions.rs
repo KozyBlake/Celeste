@@ -209,6 +209,7 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
         return;
     }
     if interaction.data.custom_id.starts_with("edit-tags:")
+        || interaction.data.custom_id.starts_with("browse-tags:")
         || interaction.data.custom_id.starts_with("select-tags")
         || interaction.data.custom_id.starts_with("edit-desc:")
         || interaction.data.custom_id.starts_with("event-redact:")
@@ -216,6 +217,15 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     {
         if let Err(err) = handle_audit_edit_component(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error handling audit edit interaction: {err}");
+        }
+        return;
+    }
+    if interaction.data.custom_id.starts_with("view-snapshot-user:")
+        || interaction.data.custom_id.starts_with("view-snapshot-user-groups:")
+        || interaction.data.custom_id.starts_with("view-snapshot-user-represented-group:")
+    {
+        if let Err(err) = handle_audit_snapshot(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error showing audit snapshot: {err}");
         }
         return;
     }
@@ -510,6 +520,47 @@ async fn handle_audit_edit_component(
         )
     }).collect();
     ephemeral_component_with_rows(ctx, interaction, "Select every tag that applies. Use `/tag add` in the thread to search all tags at once.", rows).await
+}
+
+async fn handle_audit_snapshot(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let Some((operation, audit_id)) = split_custom_id(&interaction.data.custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid audit event id.").await;
+    };
+    let data = { ctx.data.read().await.get::<crate::data::ScarletDataKey>().cloned() };
+    let Some(data) = data else {
+        return ephemeral_component(ctx, interaction, "Moderation data is unavailable.").await;
+    };
+    if !data.audit_entry_metadata_exists(audit_id) {
+        return ephemeral_component(ctx, interaction, "Failed to find the audit event.").await;
+    }
+    let metadata = data.audit_entry_metadata(audit_id);
+    let (label, snapshot) = match operation {
+        "view-snapshot-user" => ("user", metadata.snapshot_target_user),
+        "view-snapshot-user-groups" => ("user groups", metadata.snapshot_target_user_groups),
+        "view-snapshot-user-represented-group" => ("user represented group", metadata.snapshot_target_user_represented_group),
+        _ => return ephemeral_component(ctx, interaction, "Unknown snapshot type.").await,
+    };
+    let Some(snapshot) = snapshot else {
+        return ephemeral_component(ctx, interaction, format!("This event has no {label} snapshot available.")).await;
+    };
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+    ).await?;
+    let json = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| snapshot.to_string());
+    let pages = crate::commands::paginate_on_lines(&json, 1850);
+    for (index, page) in pages.iter().enumerate() {
+        interaction.create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new()
+                .content(format!("### Snapshot: {label} ({}/{})\n```json\n{page}\n```", index + 1, pages.len()))
+                .ephemeral(true),
+        ).await?;
+    }
+    Ok(())
 }
 
 async fn ephemeral_component_with_rows(

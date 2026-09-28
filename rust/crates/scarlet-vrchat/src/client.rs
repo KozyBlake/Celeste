@@ -481,6 +481,29 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// Captures the unabridged user JSON used by moderation audit snapshots.
+    /// Unlike [`Self::get_user`], this deliberately does not deserialize into
+    /// the port's reduced `User` model: snapshots are historical records and
+    /// must retain fields that Celeste does not otherwise inspect.
+    pub async fn get_user_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
+        let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Captures the unabridged group-membership array for an audit target.
+    pub async fn get_user_groups_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
+        let response = self.http.get(self.url(&format!("/users/{user_id}/groups"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Captures the group represented by an audit target, if any. The API
+    /// returns JSON `null` when the user is not representing a group; keeping
+    /// that value distinguishes a successful snapshot from a failed request.
+    pub async fn get_user_represented_group_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
+        let response = self.http.get(self.url(&format!("/users/{user_id}/groups/represented"))).send().await?;
+        Self::parse_response(response).await
+    }
+
     /// Port of `getModelFile(String fileId)`: `GET /file/{fileId}`.
     pub async fn get_file(&self, file_id: &str) -> Result<crate::models::ModelFile, VrChatError> {
         let response = self.http.get(self.url(&format!("/file/{file_id}"))).send().await?;
@@ -1553,6 +1576,38 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["grp_watched".to_string(), "grp_other".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn audit_snapshot_endpoints_preserve_unmodeled_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_1", "displayName": "Someone",
+                "futureApiField": {"mustRemain": true}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1/groups"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"groupId": "grp_1", "bannerUrl": "https://example.invalid/banner.png"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1/groups/represented"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "groupId": "grp_1", "unmodeled": 42
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&format!("{}/", server.uri())).unwrap();
+        assert_eq!(client.get_user_snapshot("usr_1").await.unwrap()["futureApiField"]["mustRemain"], true);
+        assert_eq!(client.get_user_groups_snapshot("usr_1").await.unwrap()[0]["bannerUrl"], "https://example.invalid/banner.png");
+        assert_eq!(client.get_user_represented_group_snapshot("usr_1").await.unwrap()["unmodeled"], 42);
     }
 
     #[test]

@@ -101,6 +101,27 @@ impl AuditPoller {
             entry: Some(serde_json::to_value(&entry)?),
             ..AuditEntryMetadata::default()
         };
+        if is_moderation(&entry.event_type) {
+            if let (Some(client), Some(target_id)) = (client.as_ref(), entry.target_id.as_deref()) {
+                let (user, groups, represented) = tokio::join!(
+                    client.get_user_snapshot(target_id),
+                    client.get_user_groups_snapshot(target_id),
+                    client.get_user_represented_group_snapshot(target_id),
+                );
+                match user {
+                    Ok(value) => metadata.snapshot_target_user = Some(value),
+                    Err(error) => tracing::warn!(%error, target_id, "Could not snapshot moderation target user"),
+                }
+                match groups {
+                    Ok(value) => metadata.snapshot_target_user_groups = Some(value),
+                    Err(error) => tracing::warn!(%error, target_id, "Could not snapshot moderation target groups"),
+                }
+                match represented {
+                    Ok(value) => metadata.snapshot_target_user_represented_group = Some(value),
+                    Err(error) => tracing::warn!(%error, target_id, "Could not snapshot moderation target represented group"),
+                }
+            }
+        }
         if let Some(target_id) = entry.target_id.as_deref() {
             match crate::pending_moderation::PendingModeration::take_pending_from_dir(
                 self.config.data_dir(),
@@ -362,6 +383,11 @@ pub(crate) fn moderation_controls(entry: &GroupAuditLogEntry, timed_bans: bool) 
         CreateButton::new(format!("edit-desc:{}", entry.id)).label("Edit description"),
         CreateButton::new(format!("event-redact:{}", entry.id)).label("Redact event"),
         CreateButton::new(format!("event-unredact:{}", entry.id)).label("Unredact event"),
+    ]), CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("view-snapshot-user:{}", entry.id)).label("Snapshot: user"),
+        CreateButton::new(format!("view-snapshot-user-groups:{}", entry.id)).label("Snapshot: user groups"),
+        CreateButton::new(format!("view-snapshot-user-represented-group:{}", entry.id))
+            .label("Snapshot: represented group"),
     ])];
     if let Some(target_id) = entry.target_id.as_deref() {
         rows.push(CreateActionRow::Buttons(vec![
@@ -457,5 +483,18 @@ mod tests {
         assert!(text.contains("group-request-accept:usr_1"));
         assert!(text.contains("group-request-reject:usr_1"));
         assert!(text.contains("group-request-block:usr_1"));
+    }
+
+    #[test]
+    fn moderation_controls_offer_all_snapshot_views() {
+        let entry = GroupAuditLogEntry {
+            id: "gaud_1".into(),
+            target_id: Some("usr_1".into()),
+            ..GroupAuditLogEntry::default()
+        };
+        let text = serde_json::to_value(moderation_controls(&entry, false)).unwrap().to_string();
+        assert!(text.contains("view-snapshot-user:gaud_1"));
+        assert!(text.contains("view-snapshot-user-groups:gaud_1"));
+        assert!(text.contains("view-snapshot-user-represented-group:gaud_1"));
     }
 }
