@@ -102,6 +102,7 @@ pub struct ListenerDeps {
     pub pronoun_lists: Arc<PronounLists>,
     pub tts: Arc<dyn TtsSink>,
     pub emitter: Arc<dyn AuditEmitter>,
+    pub avatar_search: Arc<dyn crate::emitter::AvatarSearch>,
 }
 
 pub struct ScarletEventListener {
@@ -119,6 +120,10 @@ pub struct ScarletEventListener {
     display_name_to_user_id: HashMap<String, String>,
     display_name_to_avatar_name: HashMap<String, String>,
     avatar_name_to_display_names: HashMap<String, HashSet<String>>,
+    /// Port of `clientLocation_userDisplayName2avatarBundleInfo`: the
+    /// resolved avatar status per player, so a re-resolve is skipped and the
+    /// UI can be refilled after a re-add.
+    display_name_to_avatar_bundle_info: HashMap<String, scarlet_core::ui::AvatarBundleInfo>,
     user_id_to_joined: HashMap<String, chrono::DateTime<Utc>>,
     /// Users who have left the current instance at least once — a later join
     /// by one of them is a rejoin.
@@ -191,6 +196,7 @@ impl ScarletEventListener {
             display_name_to_user_id: HashMap::new(),
             display_name_to_avatar_name: HashMap::new(),
             avatar_name_to_display_names: HashMap::new(),
+            display_name_to_avatar_bundle_info: HashMap::new(),
             user_id_to_joined: HashMap::new(),
             left_user_ids: HashSet::new(),
             prev_instance_user_ids: HashSet::new(),
@@ -319,7 +325,7 @@ impl ScarletEventListener {
                 self.log_spawn_prop(preamble, timestamp, user_id, prop_id).await
             }
             LogEventKind::ApiRequest { index, method, url } => {
-                self.log_api_request(preamble, index, &method, &url)
+                self.log_api_request(preamble, timestamp, index, &method, &url).await
             }
             LogEventKind::VideoLoad { display_name, url, title } => {
                 self.log_video_load(preamble, timestamp, display_name, url, title).await
@@ -333,6 +339,7 @@ impl ScarletEventListener {
     fn log_user_quit(&mut self, lifetime_seconds: f64) {
         self.display_name_to_avatar_name.clear();
         self.avatar_name_to_display_names.clear();
+        self.display_name_to_avatar_bundle_info.clear();
         self.deps.ui.append_cli_output(&format!("VRChat closed after {lifetime_seconds:.0}s this session"));
     }
 
@@ -390,6 +397,7 @@ impl ScarletEventListener {
         // next instance's `Switching` lines rebuild it.
         self.display_name_to_avatar_name.clear();
         self.avatar_name_to_display_names.clear();
+        self.display_name_to_avatar_bundle_info.clear();
         // Clear as soon as the local client leaves — stale players from the
         // previous instance shouldn't linger while between worlds.
         if !preamble {
@@ -601,6 +609,11 @@ impl ScarletEventListener {
 
         if !preamble {
             if let Some(id) = user_id.clone() {
+                // The avatar table shows statuses in any instance, not just
+                // the configured group's, so hydration is deliberately not
+                // gated on `is_in_group_instance` (Java says the same in
+                // `maybeHydrateAvatarInfo`'s docs).
+                self.hydrate_avatar_info_from_search(&display_name, &id, &avatar_display_name).await;
                 if self.is_in_group_instance {
                     self.switch_player_avatar(preamble, timestamp, &display_name, &id, &avatar_display_name).await;
                 }
@@ -629,6 +642,9 @@ impl ScarletEventListener {
                 names.remove(display_name);
             }
         }
+        // The avatar changed, so the previous avatar's stats no longer
+        // describe what this player is wearing.
+        self.display_name_to_avatar_bundle_info.remove(display_name);
         self.avatar_name_to_display_names
             .entry(avatar_display_name.to_string())
             .or_default()
@@ -733,8 +749,25 @@ impl ScarletEventListener {
     /// drives isn't ported yet, so this only enforces the privacy guard that
     /// wraps it (never look anything up unless a session is actually live).
     async fn rescan_avatar_info(&mut self) {
+        // Privacy guard, ported as-is: never look up avatars unless a VRChat
+        // session is actually live right now. Catch-up over a closed
+        // session's log still populates the instance state, and people who
+        // are no longer around must not be queried.
         if self.client_location.is_none() {
             return;
+        }
+        let pending: Vec<(String, String)> = self
+            .display_name_to_avatar_name
+            .iter()
+            .filter(|(display_name, _)| !self.display_name_to_avatar_bundle_info.contains_key(*display_name))
+            .map(|(display_name, avatar)| (display_name.clone(), avatar.clone()))
+            .collect();
+        for (display_name, avatar_name) in pending {
+            let Some(user_id) = self.display_name_to_user_id.get(&display_name).cloned() else { continue };
+            if !self.is_player_present(&user_id) {
+                continue;
+            }
+            self.hydrate_avatar_info_from_search(&display_name, &user_id, &avatar_name).await;
         }
     }
 
@@ -1156,11 +1189,184 @@ impl ScarletEventListener {
     /// here is the part everything else depends on — noting that this
     /// session *does* write `[API]` lines, which is what suppresses the
     /// "launched without debug logging" warning.
-    fn log_api_request(&mut self, preamble: bool, index: i32, method: &str, url: &str) {
+    async fn log_api_request(&mut self, preamble: bool, timestamp: NaiveDateTime, index: i32, method: &str, url: &str) {
+        // Any [API] line proves this VRChat session has API debug logging
+        // enabled, which is what the exact avatar-status path depends on.
         self.seen_api_log_lines = true;
-        if !preamble {
-            tracing::trace!("[API #{index}] {method} {url}");
+        tracing::trace!("[API #{index}] {method} {url}");
+
+        if !method.eq_ignore_ascii_case("get") {
+            return;
         }
+        let path_index = url.find("/api/1/").map(|at| at + 7).unwrap_or(0);
+        let rest = &url[path_index.min(url.len())..];
+        let Some(analysis) = rest.strip_prefix("analysis/") else { return };
+        if !analysis.starts_with("file_") {
+            return;
+        }
+
+        if preamble {
+            // Java skips catch-up analysis lines from before the instance
+            // was joined (minus a minute of slack): they describe avatars
+            // from an earlier session.
+            if let Some(joined) = self.deps.settings.last_instance_joined.get_or_null() {
+                if joined - chrono::Duration::minutes(1) > timestamp {
+                    return;
+                }
+            }
+        }
+
+        let Some(versioned) = scarlet_core::versioned_file::VersionedFile::parse(analysis) else { return };
+        self.apply_avatar_analysis(&versioned).await;
+    }
+
+    /// Port of the `analysis/file_...` branch of `log_apiRequest`: resolve
+    /// the bundle's file, read the avatar name out of its
+    /// `Avatar - <name> - Asset bundle - ...` filename, fetch the analysis,
+    /// and apply the performance rating to everyone currently wearing that
+    /// avatar. This is the exact path — VRChat is telling us precisely which
+    /// bundle it just loaded.
+    async fn apply_avatar_analysis(&mut self, versioned: &scarlet_core::versioned_file::VersionedFile) {
+        let Some(client) = self.vrchat().await else { return };
+        let file = match client.get_file(&versioned.id).await {
+            Ok(file) => file,
+            Err(err) => {
+                tracing::warn!("Analysis: file lookup failed for {versioned}: {err}");
+                return;
+            }
+        };
+        let Some(name) = file.name.clone() else {
+            tracing::warn!("Analysis: file.name was null for {versioned}");
+            return;
+        };
+        // `Avatar - <avatar name> - Asset bundle - ...`
+        let Some(after_prefix) = name.strip_prefix("Avatar - ") else { return };
+        let Some(cut) = after_prefix.rfind(" - Asset bundle - ") else { return };
+        let avatar_name = after_prefix[..cut].to_string();
+
+        let analysis = client.get_file_analysis(versioned).await.ok();
+        let performance = analysis
+            .as_ref()
+            .and_then(|a| a.performance_rating.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let info = scarlet_core::ui::AvatarBundleInfo {
+            file_id: Some(versioned.id.clone()),
+            file_name: Some(name),
+            performance_rating: Some(performance.clone()),
+        };
+
+        let wearers: Vec<String> =
+            self.avatar_name_to_display_names.get(&avatar_name).map(|set| set.iter().cloned().collect()).unwrap_or_default();
+        for display_name in wearers {
+            let Some(user_id) = self.display_name_to_user_id.get(&display_name).cloned() else { continue };
+            // Never record avatar data for someone who has left.
+            if !self.is_player_present(&user_id) {
+                continue;
+            }
+            tracing::info!("{display_name}'s chosen avatar {avatar_name} is {performance}");
+            self.display_name_to_avatar_bundle_info.insert(display_name.clone(), info.clone());
+            let initial_preamble = !self.is_tailer_live;
+            let info = info.clone();
+            self.deps.ui.player_update(initial_preamble, &user_id, &mut |player| {
+                player.avatar_info = Some(info.clone());
+                player.avatar_info_note = None;
+            });
+        }
+    }
+
+    /// Port of `maybeHydrateAvatarInfo`'s fallback: with no `[API]` lines to
+    /// work from (VRChat launched without the debug logging options), ask
+    /// the avatar-search providers which avatars carry this name, then read
+    /// the rating off the one VRChat will tell us about.
+    ///
+    /// Java additionally identifies the exact avatar by the user's current
+    /// avatar *image* file; VRChat's API no longer exposes that field (see
+    /// the 1.21.0 migration note in PORTING.md), so that pass can't run here
+    /// and this is the name-match pass only.
+    async fn hydrate_avatar_info_from_search(&mut self, display_name: &str, user_id: &str, avatar_display_name: &str) {
+        if self.seen_api_log_lines {
+            return; // the exact path is running; it wins
+        }
+        if self.display_name_to_avatar_bundle_info.contains_key(display_name) {
+            return;
+        }
+        if !self.is_player_present(user_id) {
+            return;
+        }
+
+        let candidates = self.deps.avatar_search.search_by_name(avatar_display_name).await;
+        if candidates.is_empty() {
+            return;
+        }
+        // Java only treats a name match as identification when few enough
+        // avatars share the name; more than five is a guess, not a match.
+        if candidates.len() > 5 {
+            let note = scarlet_core::i18n::tr("adv.reasonTooMany", &[avatar_display_name]);
+            let note = scarlet_core::i18n::tr("adv.avatarUnavailableNote", &[display_name, &note]);
+            self.set_avatar_note(user_id, note);
+            return;
+        }
+
+        let client = self.vrchat().await;
+        for candidate in &candidates {
+            let Some(client) = client.as_ref() else { break };
+            let Ok(avatar) = client.get_avatar(&candidate.id).await else { continue };
+            if avatar.name != avatar_display_name {
+                continue;
+            }
+            let Some(versioned) = avatar
+                .unity_packages
+                .iter()
+                .filter_map(|package| {
+                    package.asset_url.as_deref().and_then(scarlet_core::versioned_file::VersionedFile::parse).map(
+                        |parsed| {
+                            // Prefer the PC bundle, as Java does.
+                            let pc = package.platform.as_deref().is_some_and(|p| p.eq_ignore_ascii_case("standalonewindows"));
+                            (pc, parsed)
+                        },
+                    )
+                })
+                .max_by_key(|(pc, _)| *pc)
+                .map(|(_, parsed)| parsed)
+            else {
+                continue;
+            };
+            if !self.is_player_present(user_id) {
+                return; // left mid-lookup
+            }
+            let analysis = client.get_file_analysis(&versioned).await.ok();
+            let performance = analysis
+                .and_then(|a| a.performance_rating)
+                .or_else(|| candidate.performance_rating.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            let info = scarlet_core::ui::AvatarBundleInfo {
+                file_id: Some(versioned.id.clone()),
+                file_name: Some(avatar_display_name.to_string()),
+                performance_rating: Some(performance),
+            };
+            self.display_name_to_avatar_bundle_info.insert(display_name.to_string(), info.clone());
+            let initial_preamble = !self.is_tailer_live;
+            self.deps.ui.player_update(initial_preamble, user_id, &mut |player| {
+                player.avatar_info = Some(info.clone());
+                player.avatar_info_note = None;
+            });
+            return;
+        }
+
+        // Nothing resolvable: say why, honestly, rather than leaving the
+        // column blank (Java's `adv.reasonPrivate` wording).
+        let reason = scarlet_core::i18n::tr("adv.reasonPrivate", &[avatar_display_name]);
+        let note = scarlet_core::i18n::tr("adv.avatarUnavailableNote", &[display_name, &reason]);
+        self.set_avatar_note(user_id, note);
+    }
+
+    fn set_avatar_note(&self, user_id: &str, note: String) {
+        let initial_preamble = !self.is_tailer_live;
+        self.deps.ui.player_update(initial_preamble, user_id, &mut |player| {
+            if player.avatar_info.is_none() {
+                player.avatar_info_note = Some(note.clone());
+            }
+        });
     }
 
     /// Port of `log_videoLoad`.
@@ -1348,6 +1554,9 @@ mod tests {
             watched_groups: Arc::new(WatchedGroups::open(dir.path(), "watched_groups.json")),
             pronoun_lists: Arc::new(PronounLists::open(dir.path())),
             tts: Arc::new(tts.clone()),
+            // No avatar-search providers in tests: the same state as a run
+            // with the feature disabled.
+            avatar_search: Arc::new(crate::NoAvatarSearch),
             emitter: Arc::new(emitter.clone()),
         });
         Harness { listener, ui, emitter, tts, _dir: dir }
@@ -1565,6 +1774,7 @@ mod tests {
             watched_groups: Arc::new(WatchedGroups::open(h_dir.path(), "watched_groups.json")),
             pronoun_lists: Arc::new(PronounLists::open(h_dir.path())),
             tts: Arc::new(tts.clone()),
+            avatar_search: Arc::new(crate::NoAvatarSearch),
             emitter: Arc::new(crate::NoopAuditEmitter),
         });
 

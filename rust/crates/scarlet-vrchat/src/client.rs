@@ -481,6 +481,32 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// Port of `getModelFile(String fileId)`: `GET /file/{fileId}`.
+    pub async fn get_file(&self, file_id: &str) -> Result<crate::models::ModelFile, VrChatError> {
+        let response = self.http.get(self.url(&format!("/file/{file_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// Port of `getFileAnalysis(VersionedFile)`: `GET
+    /// /analysis/{fileId}/{version}`, with Java's two qualifier variants
+    /// (`/security`, `/standard`). Anything else falls through to the plain
+    /// endpoint, exactly as Java's `if/else if/else` does.
+    ///
+    /// This is where an avatar's performance rating comes from — the rating
+    /// VRChat itself shows on a nameplate.
+    pub async fn get_file_analysis(
+        &self,
+        file: &scarlet_core::versioned_file::VersionedFile,
+    ) -> Result<crate::models::FileAnalysis, VrChatError> {
+        let path = match file.qualifier.as_str() {
+            "security" => format!("/analysis/{}/{}/security", file.id, file.version),
+            "standard" => format!("/analysis/{}/{}/standard", file.id, file.version),
+            _ => format!("/analysis/{}/{}", file.id, file.version),
+        };
+        let response = self.http.get(self.url(&path)).send().await?;
+        Self::parse_response(response).await
+    }
+
     // ---- groups (moderation surface) ----
     //
     // Every endpoint below has its exact path, method, and request/response

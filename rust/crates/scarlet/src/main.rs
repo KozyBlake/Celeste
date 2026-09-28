@@ -66,6 +66,10 @@ fn main() -> anyhow::Result<()> {
 
     let runtime = tokio::runtime::Runtime::new()?;
 
+    // One avatar-search client for the whole process: the Discord command
+    // and the player table's avatar status share its cache and back-off.
+    let avatar_search = Arc::new(scarlet_discord::avatar_search::AvatarSearch::default());
+
     // Everything the Discord commands and the event listener must agree on.
     // Published by `connect_and_serve` once the gateway client exists, so
     // the event listener's audit emitter can post without a `Context`.
@@ -76,6 +80,7 @@ fn main() -> anyhow::Result<()> {
 
     let shared = scarlet_discord::data::SharedState {
         vrchat_client: Arc::new(tokio::sync::RwLock::new(None)),
+        avatar_search: avatar_search.clone(),
         http: discord_http.clone(),
         discord_config: discord_config.clone(),
         voice_manager: voice_manager.clone(),
@@ -148,6 +153,10 @@ fn main() -> anyhow::Result<()> {
                 shared.discord_config.clone(),
                 runtime.handle().clone(),
             )),
+        )),
+        avatar_search: Arc::new(scarlet_discord::avatar_search::ListenerAvatarSearch::new(
+            avatar_search.clone(),
+            settings.clone(),
         )),
         emitter: Arc::new(scarlet_discord::events::audit_emitter::DiscordAuditEmitter::new(
             discord_http,

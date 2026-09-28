@@ -250,6 +250,10 @@ pub struct Avatar {
     pub release_status: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Where the asset bundle's file id lives, for the avatar-status
+    /// fallback path.
+    #[serde(rename = "unityPackages", default)]
+    pub unity_packages: Vec<UnityPackage>,
 }
 
 /// Confirmed against `components/schemas/GroupAnnouncement.yaml`. Every
@@ -355,4 +359,48 @@ pub struct Instance {
     pub owner_id: Option<String>,
     pub closed: Option<serde_json::Value>,
     pub full: Option<bool>,
+}
+
+/// Port of `io.github.vrchatapi.model.File` (the API's `File`, called
+/// `ModelFile` in the Java client to avoid clashing with `java.io.File`),
+/// reduced to what the avatar-status path reads.
+///
+/// `name` is the field that matters: an avatar's asset bundle is named
+/// `Avatar - <avatar name> - Asset bundle - ...`, which is how a file id
+/// seen in the client log is tied back to the avatar someone is wearing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelFile {
+    pub id: String,
+    pub name: Option<String>,
+    #[serde(rename = "ownerId")]
+    pub owner_id: Option<String>,
+    #[serde(rename = "mimeType")]
+    pub mime_type: Option<String>,
+}
+
+/// Port of `io.github.vrchatapi.model.FileAnalysis`, reduced to the fields
+/// the player table and its avatar-stats view show.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FileAnalysis {
+    #[serde(rename = "performanceRating")]
+    pub performance_rating: Option<String>,
+    #[serde(rename = "fileSize")]
+    pub file_size: Option<i64>,
+    #[serde(rename = "uncompressedSize")]
+    pub uncompressed_size: Option<i64>,
+    #[serde(rename = "polygons")]
+    pub polygons: Option<i64>,
+    #[serde(rename = "avatarStats")]
+    pub avatar_stats: Option<serde_json::Value>,
+}
+
+/// One entry of an avatar's `unityPackages`, which is where its asset
+/// bundle's file id comes from on the API-fallback path.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UnityPackage {
+    #[serde(rename = "assetUrl")]
+    pub asset_url: Option<String>,
+    pub platform: Option<String>,
+    #[serde(rename = "unityVersion")]
+    pub unity_version: Option<String>,
 }

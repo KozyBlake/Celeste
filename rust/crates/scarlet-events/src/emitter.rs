@@ -136,3 +136,39 @@ impl TtsSink for NoopTts {
     fn speak_after_nuisance_alert(&self, _marker: &str, _text: &str) {}
     fn speak_mixed_character_name_alert(&self, _marker: &str) {}
 }
+
+
+/// One avatar as an avatar-search provider knows it (port of the fields
+/// `AvatarSearch.VrcxAvatar` exposes that the status path reads).
+#[derive(Debug, Clone, Default)]
+pub struct SearchedAvatar {
+    pub id: String,
+    pub name: Option<String>,
+    /// Performance rating a provider has recorded, if any — the fallback
+    /// used when VRChat's own API won't hand over a private avatar's data.
+    pub performance_rating: Option<String>,
+}
+
+/// The slice of `AvatarSearch` the event listener needs.
+///
+/// Java reaches the provider list through `ScarletDiscordJDA`; defining it
+/// as a trait keeps that dependency out of this crate, the same way
+/// [`AuditEmitter`] does for Discord posting.
+#[async_trait::async_trait]
+pub trait AvatarSearch: Send + Sync {
+    /// Avatars whose name matches `avatar_display_name` exactly, across the
+    /// configured providers.
+    async fn search_by_name(&self, avatar_display_name: &str) -> Vec<SearchedAvatar>;
+}
+
+/// Used when avatar search is disabled or unavailable: finds nothing, which
+/// is the same state Java is in with `Features.AVATAR_SEARCH_ENABLED` off.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoAvatarSearch;
+
+#[async_trait::async_trait]
+impl AvatarSearch for NoAvatarSearch {
+    async fn search_by_name(&self, _avatar_display_name: &str) -> Vec<SearchedAvatar> {
+        Vec::new()
+    }
+}

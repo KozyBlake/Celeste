@@ -353,6 +353,10 @@ impl TypeMapKey for ProcessControllerKey {
 /// [`SharedState::insert_into`] once before `Client::start`.
 pub struct SharedState {
     pub vrchat_client: SharedVrChatClient,
+    /// Shared so the `/vrchat-search avatar` command and the player table's
+    /// avatar status use one cache and one back-off state, rather than a
+    /// client each hitting the same providers twice.
+    pub avatar_search: Arc<crate::avatar_search::AvatarSearch>,
     /// Filled in by `connect_and_serve` once the client exists; see
     /// [`SharedHttp`].
     pub http: SharedHttp,
@@ -378,7 +382,7 @@ impl SharedState {
         data.insert::<HttpKey>(self.http);
         data.insert::<ScarletDataKey>(self.scarlet_data);
         data.insert::<SettingsKey>(self.settings);
-        data.insert::<AvatarSearchKey>(Arc::new(crate::avatar_search::AvatarSearch::default()));
+        data.insert::<AvatarSearchKey>(self.avatar_search);
         data.insert::<DiscordConfigKey>(self.discord_config);
         data.insert::<ProcessControllerKey>(self.process_controller);
         data.insert::<StaffListKey>(self.staff_list);

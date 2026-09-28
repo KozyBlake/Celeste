@@ -140,6 +140,16 @@ impl ColumnId {
 /// label ended.
 const CONTROL_WIDTH: f32 = 260.0;
 
+/// What the avatar-stats window shows, snapshotted when it opens so it
+/// doesn't hold a borrow of the player table.
+#[derive(Debug, Clone)]
+pub struct AvatarStatsView {
+    player_name: String,
+    avatar_name: Option<String>,
+    info: Option<scarlet_core::ui::AvatarBundleInfo>,
+    note: Option<String>,
+}
+
 pub struct ScarletApp {
     state: UiState,
     settings: Option<Arc<Settings>>,
@@ -159,6 +169,7 @@ pub struct ScarletApp {
     /// See `scarlet_discord::data::SharedHttp` — shared with the event
     /// listener's audit emitter so both see the same connection.
     discord_http: scarlet_discord::data::SharedHttp,
+    avatar_search: Arc<scarlet_discord::avatar_search::AvatarSearch>,
     discord_config: Arc<scarlet_discord::data::DiscordConfigStore>,
     voice_manager: Arc<songbird::Songbird>,
     process_controller: Arc<scarlet_discord::data::ProcessController>,
@@ -191,6 +202,11 @@ pub struct ScarletApp {
     /// The "Import Groups (URL)" prompt — Java asks for the URL with a
     /// modal input box; this is the same question as an egui window.
     settings_search: String,
+    /// The player whose avatar stats are being shown (port of
+    /// `ScarletUI.infoStats`), and the pending Ban confirmation (port of the
+    /// row's Ban action, which Java also confirms before acting).
+    avatar_stats_open: Option<AvatarStatsView>,
+    ban_confirm: Option<(String, String)>,
     import_groups_url_open: bool,
     import_groups_url: String,
     import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
@@ -219,6 +235,7 @@ impl ScarletApp {
         let watched_avatars = shared.watched_avatars.clone();
         let vrchat_slot = shared.vrchat_client.clone();
         let discord_http = shared.http.clone();
+        let avatar_search = shared.avatar_search.clone();
         let discord_config = shared.discord_config.clone();
         let voice_manager = shared.voice_manager.clone();
         let process_controller = shared.process_controller.clone();
@@ -249,6 +266,7 @@ impl ScarletApp {
                     token,
                     scarlet_discord::data::SharedState {
                         vrchat_client: vrchat_slot.clone(),
+                        avatar_search: avatar_search.clone(),
                         http: discord_http.clone(),
                         discord_config: discord_config.clone(),
                         voice_manager: voice_manager.clone(),
@@ -278,6 +296,7 @@ impl ScarletApp {
             runtime_handle,
             wizard,
             vrchat_slot,
+            avatar_search,
             discord_http,
             discord_config,
             voice_manager,
@@ -297,7 +316,9 @@ impl ScarletApp {
             column_order: ColumnId::ALL.to_vec(),
             settings_category: SettingCategory::General,
             settings_search: String::new(),
-            import_groups_url_open: false,
+            avatar_stats_open: None,
+            ban_confirm: None,
+                    import_groups_url_open: false,
             import_groups_url: String::new(),
             import_groups_rx: None,
         }
@@ -394,7 +415,12 @@ impl ScarletApp {
             }
             ColumnId::AvatarStats => {
                 if ui.button("View").clicked() {
-                    self.state.append_cli_output(format!("Avatar stats for {}: not wired up yet.", player.name));
+                    self.avatar_stats_open = Some(AvatarStatsView {
+                        player_name: player.name.clone(),
+                        avatar_name: player.avatar_name.clone(),
+                        info: player.avatar_info.clone(),
+                        note: player.avatar_info_note.clone(),
+                    });
                 }
             }
             ColumnId::AccAge => {
@@ -431,8 +457,9 @@ impl ScarletApp {
             }
             ColumnId::Ban => {
                 if ui.button("Ban").clicked() {
-                    self.state
-                        .append_cli_output(format!("Ban {}: not wired up yet (needs the VRChat group-ban call).", player.name));
+                    // Java confirms before banning from the table; so does
+                    // this, because a stray click in a row list is easy.
+                    self.ban_confirm = Some((player.id.clone(), player.name.clone()));
                 }
             }
         }
@@ -519,6 +546,127 @@ impl ScarletApp {
                 self.column_order.swap(from, to);
             }
         }
+    }
+
+    /// Port of `ScarletUI.infoStats`: what Scarlet knows about the avatar a
+    /// player is wearing, and — when it knows nothing — the honest reason
+    /// why, which is the part that matters for a private avatar.
+    fn avatar_stats_window(&mut self, ctx: &egui::Context) {
+        let Some(view) = self.avatar_stats_open.clone() else { return };
+        let mut open = true;
+        egui::Window::new(format!("Avatar - {}", view.player_name))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::Grid::new("avatar_stats_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("Player");
+                    ui.label(&view.player_name);
+                    ui.end_row();
+
+                    ui.label("Avatar");
+                    ui.label(view.avatar_name.clone().unwrap_or_else(|| "(unknown)".to_string()));
+                    ui.end_row();
+
+                    match &view.info {
+                        Some(info) => {
+                            ui.label("Performance");
+                            ui.label(info.performance_rating.clone().unwrap_or_else(|| "Unknown".to_string()));
+                            ui.end_row();
+
+                            if let Some(file_id) = &info.file_id {
+                                ui.label("Asset bundle");
+                                ui.add(egui::Label::new(egui::RichText::new(file_id).monospace()).truncate())
+                                    .on_hover_text(file_id);
+                                ui.end_row();
+                            }
+                            if let Some(name) = &info.file_name {
+                                ui.label("File");
+                                ui.add(egui::Label::new(name).truncate()).on_hover_text(name);
+                                ui.end_row();
+                            }
+                        }
+                        None => {
+                            ui.label("Performance");
+                            ui.weak("not resolved");
+                            ui.end_row();
+                        }
+                    }
+                });
+
+                if let Some(note) = &view.note {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(note).weak());
+                }
+                if view.info.is_none() && view.note.is_none() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Avatar statuses come from VRChat's own API-request log lines, which the client only \
+                             writes when it was launched with debug logging. Without them Scarlet falls back to the \
+                             avatar databases, which can't see private avatars.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+            });
+        if !open {
+            self.avatar_stats_open = None;
+        }
+    }
+
+    /// The table's Ban action. Same call the `/vrchat-user-ban` command
+    /// makes, run on the shared VRChat session.
+    fn ban_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some((user_id, display_name)) = self.ban_confirm.clone() else { return };
+        let mut open = true;
+        let mut decided = false;
+        egui::Window::new("Ban from the VRChat group")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(format!("Ban {display_name} from the configured VRChat group?"));
+                ui.add(egui::Label::new(egui::RichText::new(&user_id).small().monospace().weak()));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Ban").clicked() {
+                        decided = true;
+                        self.spawn_group_ban(user_id.clone(), display_name.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        decided = true;
+                    }
+                });
+            });
+        if decided || !open {
+            self.ban_confirm = None;
+        }
+    }
+
+    fn spawn_group_ban(&mut self, user_id: String, display_name: String) {
+        let Some(settings) = self.settings.clone() else { return };
+        let Some(group_id) = settings.store.get_string("vrchat_group_id").filter(|id| !id.trim().is_empty()) else {
+            self.state.append_cli_output("Ban failed: no VRChat group is configured.");
+            return;
+        };
+        let slot = self.vrchat_slot.clone();
+        let state = self.state.clone();
+        self.state.append_cli_output(format!("Banning {display_name}..."));
+        self.runtime_handle.spawn(async move {
+            let client = slot.read().await.clone();
+            let Some(client) = client else {
+                state.append_cli_output("Ban failed: not signed in to VRChat.");
+                return;
+            };
+            match client.ban_from_group(&group_id, &user_id).await {
+                Ok(_) => state.append_cli_output(format!("Banned {display_name}.")),
+                Err(err) => state.append_cli_output(format!("Failed to ban {display_name}: {err}")),
+            }
+        });
     }
 
     /// Port of `ScarletUI.importWG(true)`: pick a `.csv` or `.json` file
@@ -1016,6 +1164,7 @@ impl eframe::App for ScarletApp {
                         discord_token,
                         scarlet_discord::data::SharedState {
                             vrchat_client: self.vrchat_slot.clone(),
+                            avatar_search: self.avatar_search.clone(),
                             http: self.discord_http.clone(),
                             discord_config: self.discord_config.clone(),
                             voice_manager: self.voice_manager.clone(),
@@ -1098,6 +1247,8 @@ impl eframe::App for ScarletApp {
         });
 
         self.import_groups_windows(ctx);
+        self.avatar_stats_window(ctx);
+        self.ban_confirm_window(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Instance => self.instance_tab(ui),
