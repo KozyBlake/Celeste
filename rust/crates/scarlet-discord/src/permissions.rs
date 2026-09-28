@@ -346,6 +346,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_role_rule_can_delegate_permission_management() {
+        let dir = tempfile::tempdir().unwrap();
+        let permissions = DiscordPermissions::open(dir.path());
+        let role = RoleId::new(2);
+        permissions
+            .set(
+                PermissionType::SlashCommand,
+                PermissionTarget::Role(role),
+                "scarlet-discord-permissions",
+                Some(true),
+            )
+            .unwrap();
+
+        let mut member = Member::default();
+        member.roles.push(role);
+        member.permissions = Some(Permissions::empty());
+
+        assert!(permissions.check_slash(
+            &member,
+            "scarlet-discord-permissions",
+            None,
+            Some("set")
+        ));
+    }
+
+    #[test]
     fn java_file_shape_round_trips_user_and_role_rules() {
         let dir = tempfile::tempdir().unwrap();
         let permissions = DiscordPermissions::open(dir.path());

@@ -82,17 +82,9 @@ do; just don't assume the toolchain is there.
 Everything below is a measured divergence from Java, not a preference. What
 differs between them is consequence, not whether they're real.
 
-**1. Correctness you can't see until it bites.** These change what the
-software *decides*:
-- B4 — `/settings edit` splits string-array values on commas where Java
-  splits on newlines only, so any entry containing a comma (a URL with a
-  query string) is silently cut in two. Corrupts data on save.
-- B13 — `transfer-check` reports a requirement flag VRChat didn't return as
-  a hard "No" instead of Java's "Unknown".
-- B3 — the `/settings` modal id changed, so a carried-over
-  `discord_perms.json` modal-submit rule stops matching.
-- A6 — `/scarlet-discord-permissions` can no longer be delegated to a role;
-  Rust hard-codes ADMINISTRATOR where Java relies on DPerms.
+**1. Correctness you can't see until it bites — completed 2026-09-28.** B4,
+B13, B3, and A6 are fixed in Rust with regression coverage; see the audit for
+the exact compatibility changes.
 
 **2. Things that make the app usable.** Blake can't run this in anger until
 these are right:

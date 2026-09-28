@@ -8,7 +8,6 @@ use serenity::model::application::{
     CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue,
 };
 use serenity::model::mention::Mentionable;
-use serenity::model::permissions::Permissions;
 
 use crate::data::DiscordPermissionsKey;
 use crate::permissions::{PermissionTarget, PermissionType};
@@ -80,7 +79,6 @@ pub fn register() -> CreateCommand {
     .add_sub_option(list_kind);
     CreateCommand::new(NAME)
         .description("View and edit permissions")
-        .default_member_permissions(Permissions::ADMINISTRATOR)
         .add_option(set)
         .add_option(list)
 }
@@ -126,22 +124,17 @@ pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> sereni
 
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
     super::defer(ctx, command).await?;
-    let Some(member) = command.member.as_ref() else {
+    if command.member.is_none() {
         return super::reply_ephemeral(
             ctx,
             command,
             "This command can only be used in the configured server.",
         )
         .await;
-    };
-    if !crate::handler::member_is_owner_or_admin(ctx, command.guild_id, member) {
-        return super::reply_ephemeral(
-            ctx,
-            command,
-            "You do not have permission to use this command.",
-        )
-        .await;
     }
+    // Java delegates access to this command through DPerms. The shared
+    // command handler has already checked that permission before dispatching
+    // here, so a second administrator-only check would reject delegated roles.
     let permissions = {
         ctx.data
             .read()
@@ -314,6 +307,12 @@ fn suggestions(kind: Option<PermissionType>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_does_not_override_delegated_permissions() {
+        let value = serde_json::to_value(register()).unwrap();
+        assert!(value.get("default_member_permissions").is_none());
+    }
 
     #[test]
     fn suggestions_include_java_other_permissions_and_commands() {
