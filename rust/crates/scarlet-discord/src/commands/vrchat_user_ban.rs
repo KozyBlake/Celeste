@@ -179,17 +179,39 @@ pub(crate) async fn execute(
         if currently_banned {
             return Err("This VRChat user is already banned".to_string());
         }
+        let pending = { ctx.data.read().await.get::<crate::data::PendingModerationKey>().cloned() }
+            .ok_or_else(|| "Pending moderation state is unavailable.".to_string())?;
+        let actor_id = context.actor_id.as_deref().ok_or_else(|| "Linked VRChat actor is unavailable.".to_string())?;
+        match pending.add_pending("group.user.ban", target_id, actor_id) {
+            Ok(true) => {}
+            Ok(false) => return Err("This VRChat user currently has automated/assisted moderation pending, please retry later".to_string()),
+            Err(error) => return Err(format!("Could not save the pending moderation action: {error}")),
+        }
         match context.client.ban_from_group(&context.group_id, target_id).await {
             Ok(_) => Ok(format!("Banned {display_name}")),
-            Err(err) => Err(format!("Failed to ban {display_name}: {err}")),
+            Err(err) => {
+                let _ = pending.take_pending("group.user.ban", target_id);
+                Err(format!("Failed to ban {display_name}: {err}"))
+            }
         }
     } else {
         if !currently_banned {
             return Err("This VRChat user is not banned".to_string());
         }
+        let pending = { ctx.data.read().await.get::<crate::data::PendingModerationKey>().cloned() }
+            .ok_or_else(|| "Pending moderation state is unavailable.".to_string())?;
+        let actor_id = context.actor_id.as_deref().ok_or_else(|| "Linked VRChat actor is unavailable.".to_string())?;
+        match pending.add_pending("group.user.unban", target_id, actor_id) {
+            Ok(true) => {}
+            Ok(false) => return Err("This VRChat user currently has automated/assisted moderation pending, please retry later".to_string()),
+            Err(error) => return Err(format!("Could not save the pending moderation action: {error}")),
+        }
         match context.client.unban_from_group(&context.group_id, target_id).await {
             Ok(_) => Ok(format!("Unbanned {display_name}")),
-            Err(err) => Err(format!("Failed to unban {display_name}: {err}")),
+            Err(err) => {
+                let _ = pending.take_pending("group.user.unban", target_id);
+                Err(format!("Failed to unban {display_name}: {err}"))
+            }
         }
     }
 }

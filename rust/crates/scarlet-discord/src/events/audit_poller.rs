@@ -101,6 +101,25 @@ impl AuditPoller {
             entry: Some(serde_json::to_value(&entry)?),
             ..AuditEntryMetadata::default()
         };
+        if let Some(target_id) = entry.target_id.as_deref() {
+            match crate::pending_moderation::PendingModeration::take_pending_from_dir(
+                self.config.data_dir(),
+                &entry.event_type,
+                target_id,
+            ) {
+                Ok(Some(actor_id)) => {
+                    metadata.aux_actor_display_name = match client.as_ref() {
+                        Some(client) => client.get_user(&actor_id).await.ok()
+                            .and_then(|user| user.display_name)
+                            .or_else(|| Some(actor_id.clone())),
+                        None => Some(actor_id.clone()),
+                    };
+                    metadata.aux_actor_id = Some(actor_id);
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, target_id, "Could not consume pending moderation action"),
+            }
+        }
         if entry.event_type == "group.user.ban" {
             if let Some(target_id) = entry.target_id.as_deref() {
                 match crate::pending_moderation::PendingModeration::take_from_dir(

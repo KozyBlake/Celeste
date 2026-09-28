@@ -475,6 +475,7 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
 pub(crate) struct ModerationContext {
     pub client: Arc<scarlet_vrchat::client::VrChatClient>,
     pub group_id: String,
+    pub actor_id: Option<String>,
 }
 
 /// Resolves the shared VRChat client and the configured group id, with no
@@ -511,7 +512,7 @@ pub(crate) async fn vrchat_context(ctx: &Context) -> Result<ModerationContext, S
             .to_string()
     })?;
 
-    Ok(ModerationContext { client, group_id })
+    Ok(ModerationContext { client, group_id, actor_id: None })
 }
 
 /// [`vrchat_context`] plus the linked-account and VRChat-group-permission
@@ -584,7 +585,7 @@ pub(crate) async fn moderation_context_for_snowflake_with_override(
             .to_string());
     }
 
-    Ok(context)
+    Ok(ModerationContext { actor_id: Some(actor_vrc_id), ..context })
 }
 
 /// Port of `MiscUtils.paginateOnLines`: splits `input` into chunks of at

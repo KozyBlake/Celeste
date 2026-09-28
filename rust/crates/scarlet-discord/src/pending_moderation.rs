@@ -45,6 +45,30 @@ impl PendingModeration {
         Ok(added)
     }
 
+    pub fn add_pending(&self, event_type: &str, target: &str, actor: &str) -> anyhow::Result<bool> {
+        let key = format!("{event_type}:{target}");
+        self.edit_pending(|pending| {
+            if pending.contains_key(&key) {
+                return false;
+            }
+            pending.insert(key, actor.to_string());
+            true
+        })
+    }
+
+    pub fn take_pending(&self, event_type: &str, target: &str) -> anyhow::Result<Option<String>> {
+        let key = format!("{event_type}:{target}");
+        self.edit_pending(|pending| pending.remove(&key))
+    }
+
+    pub fn take_pending_from_dir(
+        data_dir: &Path,
+        event_type: &str,
+        target: &str,
+    ) -> anyhow::Result<Option<String>> {
+        Self::open(data_dir).take_pending(event_type, target)
+    }
+
     pub fn is_ban_info_owner(&self, target: &str, owner: &str) -> bool {
         self.bans().get(target).is_some_and(|info| {
             info.owner_snowflake.as_deref().is_none_or(|stored| stored == owner)
@@ -103,6 +127,23 @@ impl PendingModeration {
         Ok(output)
     }
 
+    fn edit_pending<T>(&self, edit: impl FnOnce(&mut HashMap<String, String>) -> T) -> anyhow::Result<T> {
+        let _file_guard = FILE_LOCK.lock().unwrap();
+        let mut value = self.value.lock().unwrap();
+        if let Some(fresh) = self.read_disk() {
+            *value = fresh;
+        }
+        let mut pending: HashMap<String, String> = value.get("pendingModActions").cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+        let output = edit(&mut pending);
+        value.as_object_mut().expect("object established by open").insert(
+            "pendingModActions".to_string(), serde_json::to_value(pending)?);
+        let text = serde_json::to_string_pretty(&*value)?;
+        scarlet_core::file_backups::write(&self.file, &text)?;
+        Ok(output)
+    }
+
     fn read_disk(&self) -> Option<serde_json::Value> {
         std::fs::read_to_string(&self.file).ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -128,5 +169,23 @@ mod tests {
         assert_eq!(info.tags.unwrap(), vec!["spam"]);
         let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("pending_moderation_actions.json")).unwrap()).unwrap();
         assert!(saved["timedBans"]["usr_x"].is_object());
+    }
+
+    #[test]
+    fn pending_actions_use_java_keys_and_deduplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PendingModeration::open(dir.path());
+        assert!(store.add_pending("group.user.ban", "usr_target", "usr_actor").unwrap());
+        assert!(!store.add_pending("group.user.ban", "usr_target", "usr_other").unwrap());
+        assert_eq!(
+            store.take_pending("group.user.ban", "usr_target").unwrap().as_deref(),
+            Some("usr_actor")
+        );
+        assert!(store.take_pending("group.user.ban", "usr_target").unwrap().is_none());
+
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("pending_moderation_actions.json")).unwrap()
+        ).unwrap();
+        assert!(saved["pendingModActions"].as_object().unwrap().is_empty());
     }
 }
