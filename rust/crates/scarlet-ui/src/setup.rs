@@ -132,6 +132,10 @@ pub struct SetupWizard {
     vrchat_username_reg: RegistryStringValued<String>,
     vrchat_password_reg: RegistryStringValued<String>,
     settings_store: Arc<SettingsStore>,
+    /// Kept so a successful login or verified code can persist the cookie
+    /// jar, the way Java's `ScarletVRChatCookieJar.save()` does — without
+    /// it, the next launch asks for a two-factor code all over again.
+    settings: Arc<Settings>,
     vrchat_client: Option<Arc<VrChatClient>>,
     login_rx: Option<mpsc::Receiver<Result<LoginOutcome, VrChatError>>>,
     two_factor_rx: Option<mpsc::Receiver<Result<bool, String>>>,
@@ -159,6 +163,7 @@ impl SetupWizard {
             vrchat_username_reg,
             vrchat_password_reg,
             settings_store: settings.store.clone(),
+            settings: settings.clone(),
             vrchat_client: None,
             login_rx: None,
             two_factor_rx: None,
@@ -266,7 +271,16 @@ impl SetupWizard {
 
     fn vrchat_client_or_init(&mut self) -> Option<Arc<VrChatClient>> {
         if self.vrchat_client.is_none() {
-            match VrChatClient::new() {
+            // Start from the saved cookie jar: VRChat's `twoFactorAuth`
+            // cookie outlives a single session, so a fresh credential login
+            // on a machine that has verified a code before doesn't need
+            // another one.
+            let saved = scarlet_core::settings::registry::registry_string_encrypted(
+                self.settings.encrypted.clone(),
+                scarlet_vrchat::client::COOKIE_STORE_KEY,
+            )
+            .get_or_null();
+            match VrChatClient::with_cookies(saved.as_deref()) {
                 Ok(client) => self.vrchat_client = Some(Arc::new(client)),
                 Err(err) => {
                     if let Stage::VrChatCredentials { error, .. } = &mut self.stage {
@@ -311,6 +325,14 @@ impl SetupWizard {
         });
     }
 
+    /// Persists the current VRChat cookie jar (port of
+    /// `ScarletVRChatCookieJar.save()`).
+    fn save_vrchat_session(&self) {
+        if let Some(client) = &self.vrchat_client {
+            scarlet_vrchat::client::save_session(&self.settings, client);
+        }
+    }
+
     /// Drains any finished background VRChat call and applies its result to
     /// the current stage. Called at the start of every `render` so a result
     /// that landed between frames is reflected before this frame draws.
@@ -319,6 +341,7 @@ impl SetupWizard {
             match rx.try_recv() {
                 Ok(Ok(LoginOutcome::LoggedIn(_user))) => {
                     self.login_rx = None;
+                    self.save_vrchat_session();
                     self.stage = self.compute_stage_after_vrchat();
                 }
                 Ok(Ok(LoginOutcome::RequiresTwoFactor(methods))) => {
@@ -379,6 +402,10 @@ impl SetupWizard {
             match rx.try_recv() {
                 Ok(Ok(true)) => {
                     self.two_factor_rx = None;
+                    // VRChat issues the `twoFactorAuth` cookie on a verified
+                    // code; saving the jar here is what stops the next
+                    // launch asking again.
+                    self.save_vrchat_session();
                     self.stage = self.compute_stage_after_vrchat();
                 }
                 Ok(Ok(false)) => {

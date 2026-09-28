@@ -19,6 +19,7 @@ repository = "https://github.com/KozyBlake/ScarletRust"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
+reqwest_cookie_store = "0.8"
 unicode-script = "0.5"
 unicode-normalization = "0.1"
 unicode-general-category = "1"

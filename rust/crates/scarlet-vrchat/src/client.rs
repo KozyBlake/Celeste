@@ -11,19 +11,26 @@
 //! Scarlet's ported features actually need, growing incrementally rather
 //! than attempting full coverage up front.
 //!
-//! ## Not ported yet: persistent encrypted cookie storage
+//! ## Persistent cookie storage
 //!
-//! `ScarletVRChatCookieJar` persists the session cookie into the encrypted
-//! settings store so a restart doesn't require re-authenticating. This
-//! client only keeps cookies in memory via `reqwest`'s built-in cookie
-//! jar (`cookie_store(true)`), which is correct for the lifetime of one
-//! run but means every restart re-logs-in. Wiring persistence through
-//! `scarlet_core::secure_store` is a real, tracked gap (see PORTING.md),
-//! not a silent omission -- it needs a serializable cookie jar (e.g. the
-//! `reqwest_cookie_store` crate) that this skeleton doesn't pull in yet.
+//! `ScarletVRChatCookieJar` keeps the session in the encrypted settings
+//! store under `<domain>.cookieStore` (`global.cookieStore` for the primary
+//! account) as one `Set-Cookie` line per cookie, and reloads it at startup.
+//! That is what makes two-factor a once-per-expiry event rather than
+//! once-per-launch: VRChat's `auth` cookie lasts a year, and the
+//! `twoFactorAuth` cookie issued after a verified code is what stops VRChat
+//! asking again.
+//!
+//! This client does the same, through the same key and the same line
+//! format, so a session established by either build works in the other:
+//! see [`VrChatClient::with_cookies`], [`VrChatClient::export_cookies`] and
+//! [`load_session`]/[`save_session`]. Alt-account jars
+//! (`<domain>.cookieStoreAlt`) are not ported, matching the rest of the
+//! alt-account support.
 
 use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode};
+use std::sync::Arc;
 use serde_json::Value;
 
 use crate::basic_auth::basic_auth_header;
@@ -83,6 +90,10 @@ pub enum LoginOutcome {
 pub struct VrChatClient {
     http: Client,
     base_url: String,
+    /// The live cookie jar, kept so the session (VRChat's `auth` cookie and
+    /// the `twoFactorAuth` cookie that follows a verified code) can be saved
+    /// and restored across restarts — see [`VrChatClient::export_cookies`].
+    cookies: Arc<reqwest_cookie_store::CookieStoreMutex>,
 }
 
 impl VrChatClient {
@@ -100,17 +111,73 @@ impl VrChatClient {
         ))
     }
 
+    /// [`VrChatClient::new`] with a restored cookie jar.
+    pub fn with_cookies(saved_cookies: Option<&str>) -> Result<Self, VrChatError> {
+        Self::with_base_url_and_cookies(
+            &scarlet_core::identity::api_base(scarlet_core::identity::API_HOST_2),
+            saved_cookies,
+        )
+    }
+
     /// Builds a client against an arbitrary base URL — used to point at a
     /// local mock server in tests.
     pub fn with_base_url(base_url: &str) -> Result<Self, VrChatError> {
+        Self::with_base_url_and_cookies(base_url, None)
+    }
+
+    /// Builds a client whose cookie jar starts from `saved_cookies`, in the
+    /// `Set-Cookie`-per-line format [`VrChatClient::export_cookies`]
+    /// produces — the same format Java's `ScarletVRChatCookieJar` keeps in
+    /// the encrypted store under `global.cookieStore`, so a session
+    /// established by either build is usable by the other.
+    ///
+    /// Restoring the jar is what makes two-factor a once-per-expiry event
+    /// rather than a once-per-launch one: VRChat's `auth` cookie is good for
+    /// a year, and the `twoFactorAuth` cookie it issues after a verified
+    /// code is what tells VRChat not to ask again.
+    pub fn with_base_url_and_cookies(base_url: &str, saved_cookies: Option<&str>) -> Result<Self, VrChatError> {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        let mut store = reqwest_cookie_store::CookieStore::new(None);
+        if let Some(saved) = saved_cookies {
+            if let Ok(url) = reqwest::Url::parse(&base_url) {
+                for line in saved.lines().map(str::trim).filter(|line| !line.is_empty()) {
+                    if let Err(err) = store.parse(line, &url) {
+                        tracing::debug!("Ignoring unparseable saved cookie: {err}");
+                    }
+                }
+            }
+        }
+        let cookies = Arc::new(reqwest_cookie_store::CookieStoreMutex::new(store));
         let http = Client::builder()
-            .cookie_store(true)
+            .cookie_provider(cookies.clone())
             .user_agent(scarlet_core::identity::user_agent())
             .build()?;
-        Ok(VrChatClient {
-            http,
-            base_url: base_url.trim_end_matches('/').to_string(),
-        })
+        Ok(VrChatClient { http, base_url, cookies })
+    }
+
+    /// The current session as `Set-Cookie` lines, one per cookie, for
+    /// persisting. Expired cookies are dropped, matching Java's
+    /// `removeStale` on save.
+    pub fn export_cookies(&self) -> String {
+        let store = self.cookies.lock().expect("cookie store poisoned");
+        let mut out = String::new();
+        for cookie in store.iter_unexpired() {
+            // `cookie.to_string()` on a `cookie_store` cookie renders the
+            // `name=value; Attr=...` Set-Cookie form Java's okhttp
+            // `Cookie.toString()` also produces.
+            out.push_str(&cookie.to_string());
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Whether the jar currently holds VRChat's session cookie at all. A
+    /// client with no `auth` cookie can skip straight to a credential login
+    /// instead of making a doomed request.
+    pub fn has_session_cookie(&self) -> bool {
+        let store = self.cookies.lock().expect("cookie store poisoned");
+        let has_auth = store.iter_unexpired().any(|cookie| cookie.name() == "auth");
+        has_auth
     }
 
     fn url(&self, path: &str) -> String {
@@ -1061,6 +1128,50 @@ pub enum StoredLogin {
 
 /// Unattended login that reports the two-factor case instead of swallowing
 /// it. See [`StoredLogin`].
+/// Encrypted-registry key Java's cookie jar uses for the primary account
+/// (`ScarletVRChatCookieJar`'s `domain + ".cookieStore"`, with domain
+/// `global`).
+pub const COOKIE_STORE_KEY: &str = "global.cookieStore";
+
+/// Builds a client from the saved session, or `None` if nothing is saved.
+pub fn client_from_saved_session(
+    settings: &scarlet_core::settings::Settings,
+) -> Option<VrChatClient> {
+    use scarlet_core::settings::registry::registry_string_encrypted;
+    let saved = registry_string_encrypted(settings.encrypted.clone(), COOKIE_STORE_KEY).get_or_null()?;
+    if saved.trim().is_empty() {
+        return None;
+    }
+    match VrChatClient::with_cookies(Some(&saved)) {
+        Ok(client) if client.has_session_cookie() => Some(client),
+        Ok(_) => None,
+        Err(err) => {
+            tracing::warn!("Could not restore the saved VRChat session: {err}");
+            None
+        }
+    }
+}
+
+/// Persists the client's current cookies (port of the jar's `save()`).
+/// Call after any step that can change them: a credential login, a verified
+/// two-factor code, a refresh.
+pub fn save_session(settings: &scarlet_core::settings::Settings, client: &VrChatClient) {
+    use scarlet_core::settings::registry::registry_string_encrypted;
+    let cookies = client.export_cookies();
+    let store = registry_string_encrypted(settings.encrypted.clone(), COOKIE_STORE_KEY);
+    if cookies.trim().is_empty() {
+        store.clear();
+    } else {
+        store.set(Some(cookies));
+    }
+}
+
+/// Clears the saved session, for when VRChat rejects it.
+pub fn clear_session(settings: &scarlet_core::settings::Settings) {
+    use scarlet_core::settings::registry::registry_string_encrypted;
+    registry_string_encrypted(settings.encrypted.clone(), COOKIE_STORE_KEY).clear();
+}
+
 pub async fn login_with_stored_credentials_detailed(
     settings: &scarlet_core::settings::Settings,
 ) -> StoredLogin {
@@ -1068,11 +1179,32 @@ pub async fn login_with_stored_credentials_detailed(
 
     let username_reg = registry_string_encrypted(settings.encrypted.clone(), USERNAME_KEY);
     let password_reg = registry_string_encrypted(settings.encrypted.clone(), PASSWORD_KEY);
+    // The saved cookie jar first: if the session is still good this needs
+    // no credentials and no two-factor code at all, which is how Java
+    // behaves and what makes a restart free.
+    if let Some(client) = client_from_saved_session(settings) {
+        match client.get_current_user().await {
+            Ok(user) => {
+                tracing::info!(
+                    "VRChat session restored from the saved cookie as {}",
+                    user.display_name.as_deref().unwrap_or(&user.id)
+                );
+                // Refresh whatever VRChat rotated on that request.
+                save_session(settings, &client);
+                return StoredLogin::LoggedIn(client);
+            }
+            Err(err) => {
+                tracing::info!("Saved VRChat session is no longer valid ({err}); signing in again");
+                clear_session(settings);
+            }
+        }
+    }
+
     let (Some(username), Some(password)) = (username_reg.get_or_null(), password_reg.get_or_null()) else {
         return StoredLogin::Unavailable;
     };
 
-    let client = match VrChatClient::new() {
+    let client = match VrChatClient::with_cookies(None) {
         Ok(client) => client,
         Err(err) => {
             tracing::error!("Could not build VRChat client for unattended login: {}", err);
@@ -1086,6 +1218,7 @@ pub async fn login_with_stored_credentials_detailed(
                 "VRChat unattended login succeeded as {}",
                 user.display_name.as_deref().unwrap_or(&user.id)
             );
+            save_session(settings, &client);
             StoredLogin::LoggedIn(client)
         }
         Ok(LoginOutcome::RequiresTwoFactor(methods)) => {
@@ -1186,6 +1319,25 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn java_cookie_store_format_round_trips_the_vrchat_session() {
+        let saved = concat!(
+            "auth=auth-token; expires=Fri, 01 Jan 2038 00:00:00 GMT; path=/; domain=.vrchat.cloud; secure; httponly\n",
+            "twoFactorAuth=2fa-token; expires=Fri, 01 Jan 2038 00:00:00 GMT; path=/; domain=.vrchat.cloud; secure; httponly\n",
+        );
+
+        let client = VrChatClient::with_cookies(Some(saved)).unwrap();
+        assert!(client.has_session_cookie());
+
+        let exported = client.export_cookies();
+        assert!(exported.contains("auth=auth-token"));
+        assert!(exported.contains("twoFactorAuth=2fa-token"));
+
+        let restored = VrChatClient::with_cookies(Some(&exported)).unwrap();
+        assert!(restored.has_session_cookie());
+        assert!(restored.export_cookies().contains("twoFactorAuth=2fa-token"));
+    }
 
     /// Pins the user endpoint's real response shape, including the two
     /// fields the join checks depend on. `date_joined` is snake_case on the

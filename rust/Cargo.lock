@@ -845,6 +845,24 @@ dependencies = [
 
 [[package]]
 name = "cookie_store"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eac901828f88a5241ee0600950ab981148a18f2f756900ffba1b125ca6a3ef9"
+dependencies = [
+ "cookie",
+ "document-features",
+ "idna",
+ "log",
+ "publicsuffix",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "time",
+ "url",
+]
+
+[[package]]
+name = "cookie_store"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "15b2c103cf610ec6cae3da84a766285b42fd16aad564758459e6ecf128c75206"
@@ -1052,6 +1070,12 @@ checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "serde_core",
 ]
+
+[[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "digest"
@@ -3558,7 +3582,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "cookie",
- "cookie_store",
+ "cookie_store 0.22.1",
  "encoding_rs",
  "futures-core",
  "futures-util",
@@ -3597,6 +3621,18 @@ dependencies = [
  "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.9",
+]
+
+[[package]]
+name = "reqwest_cookie_store"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2314c325724fea278d44c13a525ebf60074e33c05f13b4345c076eb65b2446b3"
+dependencies = [
+ "bytes",
+ "cookie_store 0.21.1",
+ "reqwest",
+ "url",
 ]
 
 [[package]]
@@ -3749,6 +3785,7 @@ dependencies = [
  "scarlet-core",
  "scarlet-dave",
  "scarlet-discord",
+ "scarlet-events",
  "scarlet-gif",
  "scarlet-ui",
  "scarlet-vrchat",
@@ -3766,6 +3803,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "csv",
+ "deunicode",
  "lru",
  "pbkdf2",
  "rand 0.8.8",
@@ -3775,9 +3813,13 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unicode-general-category",
+ "unicode-normalization",
+ "unicode-script",
  "uuid",
 ]
 
@@ -3793,11 +3835,13 @@ name = "scarlet-discord"
 version = "0.4.20"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "chrono-tz",
  "regex",
  "reqwest",
  "scarlet-core",
+ "scarlet-events",
  "scarlet-gif",
  "scarlet-vrchat",
  "serde",
@@ -3808,6 +3852,19 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "scarlet-events"
+version = "0.4.20"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "scarlet-core",
+ "scarlet-vrchat",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3831,6 +3888,7 @@ dependencies = [
  "reqwest",
  "scarlet-core",
  "scarlet-discord",
+ "scarlet-events",
  "scarlet-vrchat",
  "tempfile",
  "tokio",
@@ -3845,6 +3903,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "reqwest",
+ "reqwest_cookie_store",
  "scarlet-core",
  "serde",
  "serde_json",
@@ -4783,10 +4842,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
+name = "unicode-general-category"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
+name = "unicode-script"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
 
 [[package]]
 name = "unicode-segmentation"
