@@ -23,6 +23,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use scarlet_core::settings::file_valued::SettingDescriptor;
 use scarlet_core::settings::file_valued::{SettingCategory, SettingKind};
 use scarlet_core::settings::Settings;
 
@@ -134,6 +135,11 @@ impl ColumnId {
     }
 }
 
+/// Width of the settings column's controls, so checkboxes, drop-downs and
+/// text fields line up down the page instead of each sitting wherever its
+/// label ended.
+const CONTROL_WIDTH: f32 = 260.0;
+
 pub struct ScarletApp {
     state: UiState,
     settings: Option<Arc<Settings>>,
@@ -184,6 +190,7 @@ pub struct ScarletApp {
     settings_category: SettingCategory,
     /// The "Import Groups (URL)" prompt — Java asks for the URL with a
     /// modal input box; this is the same question as an egui window.
+    settings_search: String,
     import_groups_url_open: bool,
     import_groups_url: String,
     import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
@@ -289,6 +296,7 @@ impl ScarletApp {
             settings_edit_buffers: std::collections::HashMap::new(),
             column_order: ColumnId::ALL.to_vec(),
             settings_category: SettingCategory::General,
+            settings_search: String::new(),
             import_groups_url_open: false,
             import_groups_url: String::new(),
             import_groups_rx: None,
@@ -435,6 +443,14 @@ impl ScarletApp {
 
         let players = self.state.ordered_players();
         let column_order = self.column_order.clone();
+        // `ui_left_player_dim_percent` is how much to dim a player who has
+        // left (0 = no dimming), so the fade is the user's setting rather
+        // than a number baked in here.
+        let dim_opacity = self
+            .settings
+            .as_ref()
+            .map(|settings| 1.0 - (settings.ui_left_player_dim_percent.get() as f32 / 100.0).clamp(0.0, 0.9))
+            .unwrap_or(0.65);
 
         // Header cells are drag sources *and* drop zones at once: dropping
         // one column's drag payload (its current index) onto another
@@ -485,10 +501,10 @@ impl ScarletApp {
                                         // Someone who has left stays listed
                                         // (their history is the point) but
                                         // reads as past tense: sorted below
-                                        // everyone present, and faded so the
-                                        // live roster is what the eye lands
-                                        // on.
-                                        ui.set_opacity(0.45);
+                                        // everyone present, and faded by the
+                                        // amount `ui_left_player_dim_percent`
+                                        // asks for.
+                                        ui.set_opacity(dim_opacity);
                                     }
                                     self.render_cell(ui, player, *column);
                                 });
@@ -621,85 +637,251 @@ impl ScarletApp {
         }
     }
 
+    /// Settings that belong to subsystems this port deliberately does not
+    /// have (see PORTING.md's scope section). They stay registered, because
+    /// removing them would drop the values from a `settings.json` shared
+    /// with the Java build — but showing a "Mobile relay endpoint" field in
+    /// an app with no mobile companion is just clutter with no way to act
+    /// on it.
+    fn is_dropped_subsystem(id: &str) -> bool {
+        const DROPPED_PREFIXES: [&str; 4] = [
+            "mobile_",             // mobile companion / FCM relay
+            "evidence_",           // evidence submission
+            "advisory_translate_", // LibreTranslate advisory translation
+            "vrchat_report_",      // report templates
+        ];
+        const DROPPED_IDS: [&str; 1] = [
+            "training_mode_enabled", // training / simulation mode
+        ];
+        DROPPED_PREFIXES.iter().any(|prefix| id.starts_with(prefix)) || DROPPED_IDS.contains(&id)
+    }
+
+    /// A readable group heading from a setting's id, so a category of forty
+    /// entries reads as a handful of short lists instead of one wall.
+    /// Java's Swing UI had only the category sidebar; this is the "1:1 plus
+    /// fixes" part.
+    fn setting_group(id: &str) -> &'static str {
+        const GROUPS: [(&str, &str); 14] = [
+            ("tts_", "Text to speech"),
+            ("advisory_", "Advisories"),
+            ("toast_", "Desktop notifications"),
+            ("notify_", "Desktop notifications"),
+            ("discord_ping_", "Discord pings"),
+            ("discord_", "Discord"),
+            ("enforce_instances", "Instance enforcement"),
+            ("auto_invite", "Auto-invite"),
+            ("ui_", "Appearance"),
+            ("cache_", "Cache"),
+            ("audit_", "Audit polling"),
+            ("moderation_", "Moderation"),
+            ("instance_", "Instances"),
+            ("vrchat_", "VRChat"),
+        ];
+        GROUPS
+            .iter()
+            .find(|(prefix, _)| id.starts_with(prefix))
+            .map(|(_, label)| *label)
+            .unwrap_or("Other")
+    }
+
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
         let Some(settings) = &self.settings else {
             ui.label("Settings unavailable (no settings store attached).");
             return;
         };
         let all = settings.registry.all();
+        let query = self.settings_search.trim().to_lowercase();
 
-        egui::SidePanel::left("settings_categories").resizable(false).show_inside(ui, |ui| {
-            ui.add_space(4.0);
+        // Everything the current filter shows, so the sidebar counts and the
+        // "nothing here" message agree with the list.
+        let visible: Vec<_> = all
+            .iter()
+            .filter(|descriptor| !Self::is_dropped_subsystem(descriptor.id()))
+            .filter(|descriptor| {
+                query.is_empty()
+                    || descriptor.name().to_lowercase().contains(&query)
+                    || descriptor.id().to_lowercase().contains(&query)
+            })
+            .collect();
+
+        egui::SidePanel::left("settings_categories").resizable(false).min_width(150.0).show_inside(ui, |ui| {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("CATEGORIES").small().weak());
+            ui.add_space(2.0);
             for category in SettingCategory::ALL {
-                let count = all.iter().filter(|d| d.category() == category).count();
-                let label = format!("{}  ({count})", category.label());
+                let count = visible.iter().filter(|d| d.category() == category).count();
+                let label = if count == 0 {
+                    egui::RichText::new(format!("{}  ({count})", category.label())).weak()
+                } else {
+                    egui::RichText::new(format!("{}  ({count})", category.label()))
+                };
                 ui.selectable_value(&mut self.settings_category, category, label);
             }
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Settings for features this build doesn't have are hidden.").small().weak());
         });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let category = self.settings_category;
-            egui::ScrollArea::vertical().show(ui, |ui| {
+
+            ui.horizontal(|ui| {
                 ui.heading(category.label());
-                ui.separator();
-                for descriptor in all.iter().filter(|d| d.category() == category) {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !self.settings_search.is_empty() && ui.button("\u{2715}").on_hover_text("Clear search").clicked() {
+                        self.settings_search.clear();
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings_search)
+                            .desired_width(220.0)
+                            .hint_text("Search all settings"),
+                    );
+                });
+            });
+            ui.separator();
+
+            // A search looks across every category; otherwise this is the
+            // selected one.
+            let rows: Vec<_> = if query.is_empty() {
+                visible.iter().filter(|d| d.category() == category).copied().collect()
+            } else {
+                visible.clone()
+            };
+
+            if rows.is_empty() {
+                ui.add_space(12.0);
+                ui.weak(if query.is_empty() {
+                    "No settings in this category.".to_string()
+                } else {
+                    format!("Nothing matches \"{}\".", self.settings_search.trim())
+                });
+                return;
+            }
+
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let mut current_group = "";
+                for descriptor in rows {
+                    let group = Self::setting_group(descriptor.id());
+                    if group != current_group {
+                        current_group = group;
+                        ui.add_space(10.0);
+                        ui.label(egui::RichText::new(group.to_uppercase()).small().weak());
+                        ui.add_space(2.0);
+                    }
+
+                    // One row: name and id on the left, the control on the
+                    // right, at a fixed width so controls line up down the
+                    // column instead of wandering with the label length.
                     ui.horizontal(|ui| {
-                        ui.label(descriptor.name());
-                        match descriptor.kind() {
-                            SettingKind::Boolean { .. } => {
-                                let mut value = descriptor.get_as_string() == "true";
-                                if ui.checkbox(&mut value, "").changed() {
-                                    descriptor.set_from_string(&value.to_string(), "ui");
-                                }
-                            }
-                            SettingKind::IntegerRange { min, max, .. } => {
-                                let mut value: i32 = descriptor.get_as_string().parse().unwrap_or(*min);
-                                if ui.add(egui::Slider::new(&mut value, *min..=*max)).changed() {
-                                    descriptor.set_from_string(&value.to_string(), "ui");
-                                }
-                            }
-                            SettingKind::Enum { variants, .. } => {
-                                let mut current = descriptor.get_as_string();
-                                egui::ComboBox::from_id_salt(descriptor.id()).selected_text(current.clone()).show_ui(ui, |ui| {
-                                    for variant in variants {
-                                        if ui.selectable_value(&mut current, variant.clone(), variant).changed() {
-                                            descriptor.set_from_string(variant, "ui");
-                                        }
-                                    }
-                                });
-                            }
-                            SettingKind::StringChoice { valid_values } => {
-                                let mut current = descriptor.get_as_string();
-                                let selected = if current.is_empty() { "System default".to_string() } else { current.clone() };
-                                egui::ComboBox::from_id_salt(descriptor.id()).selected_text(selected).show_ui(ui, |ui| {
-                                    if ui.selectable_value(&mut current, String::new(), "System default").changed() {
-                                        descriptor.set_from_string("", "ui");
-                                    }
-                                    for value in valid_values() {
-                                        if ui.selectable_value(&mut current, value.clone(), &value).changed() {
-                                            descriptor.set_from_string(&value, "ui");
-                                        }
-                                    }
-                                });
-                            }
-                            _ => {
-                                let buf = self
-                                    .settings_edit_buffers
-                                    .entry(descriptor.id().to_string())
-                                    .or_insert_with(|| descriptor.get_as_string());
-                                ui.text_edit_singleline(buf);
-                                if ui.button("Set").clicked() {
-                                    descriptor.set_from_string(buf, "ui");
-                                }
-                            }
+                        ui.vertical(|ui| {
+                            ui.set_width(ui.available_width() - CONTROL_WIDTH);
+                            ui.label(descriptor.name());
+                            ui.label(egui::RichText::new(descriptor.id()).small().weak().monospace())
+                                .on_hover_text("Use this id with /settings edit in Discord");
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            self.render_setting_control(ui, descriptor);
+                        });
+                    });
+                    ui.add_space(2.0);
+                    ui.separator();
+                }
+                ui.add_space(12.0);
+            });
+        });
+    }
+
+    /// The control for one setting, sized so the column lines up.
+    fn render_setting_control(&mut self, ui: &mut egui::Ui, descriptor: &std::sync::Arc<dyn SettingDescriptor>) {
+        ui.set_width(CONTROL_WIDTH);
+        match descriptor.kind() {
+            SettingKind::Boolean { default } => {
+                let mut value = descriptor.get_as_string() == "true";
+                let label = if value { "On" } else { "Off" };
+                if ui.checkbox(&mut value, label).changed() {
+                    descriptor.set_from_string(&value.to_string(), "ui");
+                }
+                if value != *default {
+                    ui.scope(|ui| {
+                        if ui.small_button("\u{21BA}").on_hover_text("Reset to default").clicked() {
+                            descriptor.set_from_string(&default.to_string(), "ui");
                         }
                     });
                 }
-                if !all.iter().any(|d| d.category() == category) {
-                    ui.label("(No settings in this category.)");
+            }
+            SettingKind::IntegerRange { default, min, max } => {
+                let mut value: i32 = descriptor.get_as_string().parse().unwrap_or(*default);
+                if ui.add(egui::DragValue::new(&mut value).range(*min..=*max).speed(1.0)).changed() {
+                    descriptor.set_from_string(&value.to_string(), "ui");
                 }
-            });
-        });
+                if value != *default {
+                    ui.scope(|ui| {
+                        if ui.small_button("\u{21BA}").on_hover_text("Reset to default").clicked() {
+                            descriptor.set_from_string(&default.to_string(), "ui");
+                        }
+                    });
+                }
+            }
+            SettingKind::Enum { variants, .. } => {
+                let mut current = descriptor.get_as_string();
+                egui::ComboBox::from_id_salt(descriptor.id())
+                    .selected_text(current.clone())
+                    .width(CONTROL_WIDTH - 24.0)
+                    .show_ui(ui, |ui| {
+                        for variant in variants {
+                            if ui.selectable_value(&mut current, variant.clone(), variant).changed() {
+                                descriptor.set_from_string(variant, "ui");
+                            }
+                        }
+                    });
+            }
+            SettingKind::StringChoice { valid_values } => {
+                let mut current = descriptor.get_as_string();
+                let values = valid_values();
+                let selected = if current.is_empty() { "System default".to_string() } else { current.clone() };
+                egui::ComboBox::from_id_salt(descriptor.id())
+                    .selected_text(selected)
+                    .width(CONTROL_WIDTH - 24.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut current, String::new(), "System default").changed() {
+                            descriptor.set_from_string("", "ui");
+                        }
+                        if values.is_empty() {
+                            ui.weak("(nothing installed)");
+                        }
+                        for value in values {
+                            if ui.selectable_value(&mut current, value.clone(), &value).changed() {
+                                descriptor.set_from_string(&value, "ui");
+                            }
+                        }
+                    });
+            }
+            SettingKind::Void { task } => {
+                if ui.button("Run").clicked() {
+                    task();
+                }
+            }
+            _ => {
+                // Text-ish settings commit on Enter or focus loss, so a
+                // half-typed value is never written, and the field shows
+                // whether the last commit validated.
+                let id = descriptor.id().to_string();
+                let buf = self.settings_edit_buffers.entry(id.clone()).or_insert_with(|| descriptor.get_as_string());
+                let response = ui.add(egui::TextEdit::singleline(buf).desired_width(CONTROL_WIDTH - 12.0));
+                let commit =
+                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || response.lost_focus();
+                if commit {
+                    let accepted = descriptor.set_from_string(buf, "ui");
+                    if !accepted {
+                        // Put the stored value back rather than leaving a
+                        // rejected string sitting in the box looking saved.
+                        *buf = descriptor.get_as_string();
+                        self.state.append_cli_output(format!("Setting {id}: value rejected (didn't validate)."));
+                    }
+                }
+            }
+        }
     }
 
     fn cli_tab(&mut self, ui: &mut egui::Ui) {
