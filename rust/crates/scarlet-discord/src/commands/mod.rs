@@ -33,6 +33,7 @@ pub mod moderation_reports;
 pub mod link_vrchat_account;
 pub mod secret_staff_list;
 pub mod staff_list;
+pub mod submit_attachments;
 pub mod unlink_vrchat_account;
 pub mod unlink_vrchat_account_for;
 pub mod version;
@@ -303,6 +304,7 @@ pub fn all_commands() -> Vec<serenity::builder::CreateCommand> {
         ticket_config::register_message(),
         discord_permissions::register(),
         fix_audit_thread::register(),
+        submit_attachments::register(),
     ];
     if scarlet_core::features::watched_avatars_enabled() {
         commands.push(watched_avatar::register());
@@ -434,6 +436,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         ticket_config::MESSAGE_NAME => ticket_config::run_message(ctx, command).await,
         discord_permissions::NAME => discord_permissions::run(ctx, command).await,
         fix_audit_thread::NAME => fix_audit_thread::run(ctx, command).await,
+        submit_attachments::NAME => submit_attachments::run(ctx, command).await,
         animated_emoji::NAME => animated_emoji::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
@@ -898,7 +901,11 @@ mod command_surface_tests {
     fn message_command_surface_matches_in_scope_java_commands() {
         assert_eq!(
             message_command_names(),
-            vec!["fix-audit-thread".to_string(), "vrchat-animated-emoji".to_string()]
+            vec![
+                "fix-audit-thread".to_string(),
+                "submit-attachments".to_string(),
+                "vrchat-animated-emoji".to_string(),
+            ]
         );
     }
 }

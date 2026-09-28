@@ -387,43 +387,26 @@ async fn run_import(
             .await
         }
     };
-    let filename = attachment.filename.to_lowercase();
-    let result = if filename.ends_with(".csv") {
-        watched
-            .import_legacy_csv(&bytes, true)
-            .map(|count| (count, "legacy CSV"))
-    } else if filename.ends_with(".json") {
-        watched
-            .import_json(&bytes, true)
-            .map(|count| (count, "JSON"))
+    let message = import_attachment(watched, &attachment.filename, &bytes);
+    super::reply_ephemeral(ctx, command, &message).await
+}
+
+pub(crate) fn import_attachment(
+    watched: &scarlet_core::watched_groups::WatchedGroups,
+    filename: &str,
+    bytes: &[u8],
+) -> String {
+    let lower = filename.to_lowercase();
+    let result = if lower.ends_with(".csv") {
+        watched.import_legacy_csv(bytes, true).map(|count| (count, "legacy CSV"))
+    } else if lower.ends_with(".json") {
+        watched.import_json(bytes, true).map(|count| (count, "JSON"))
     } else {
-        return super::reply_ephemeral(
-            ctx,
-            command,
-            &format!(
-                "File `{}` is not importable; use `.json` or `.csv`.",
-                attachment.filename
-            ),
-        )
-        .await;
+        return format!("File `{filename}` is not importable; use `.json` or `.csv`.");
     };
     match result {
-        Ok((count, format)) => {
-            super::reply_ephemeral(
-                ctx,
-                command,
-                &format!("Successfully imported watched groups {format} ({count} valid entries)."),
-            )
-            .await
-        }
-        Err(err) => {
-            super::reply_ephemeral(
-                ctx,
-                command,
-                &format!("Exception while importing `{}`: {err}", attachment.filename),
-            )
-            .await
-        }
+        Ok((count, format)) => format!("Successfully imported watched groups {format} ({count} valid entries)."),
+        Err(error) => format!("Exception while importing `{filename}`: {error}"),
     }
 }
 
@@ -959,6 +942,19 @@ mod tests {
     #[test]
     fn split_tags_drops_empty_entries() {
         assert_eq!(split_tags("a,,b"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn attachment_import_reports_json_and_rejects_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let watched = scarlet_core::watched_groups::WatchedGroups::open(
+            dir.path(),
+            "watched_groups.json",
+        );
+        let result = import_attachment(&watched, "groups.json", br#"[{"id":"grp_one"}]"#);
+        assert!(result.contains("Successfully imported watched groups JSON (1 valid entries)"));
+        assert!(watched.get_watched_group("grp_one").is_some());
+        assert!(import_attachment(&watched, "groups.txt", b"ignored").contains("not importable"));
     }
 
     #[test]

@@ -182,6 +182,12 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction.data.custom_id.starts_with("import-watched-groups:") {
+        if let Err(err) = handle_import_watched_groups(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error importing watched groups from message attachments: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("immediate-ban-") {
         if let Err(err) = handle_immediate_ban_component(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error handling immediate ban interaction: {err}");
@@ -257,6 +263,63 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if let Err(err) = handle_instance_component(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling component interaction: {err}");
     }
+}
+
+async fn handle_import_watched_groups(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let allowed = interaction.member.as_ref().is_some_and(|member| {
+        member.permissions.unwrap_or_else(Permissions::empty).intersects(
+            Permissions::MANAGE_GUILD | Permissions::ADMINISTRATOR,
+        )
+    });
+    if !allowed {
+        return ephemeral_component(ctx, interaction, "You do not have permission to import watched groups.").await;
+    }
+    let Some((_, message_id)) = split_custom_id(&interaction.data.custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid source message.").await;
+    };
+    let Ok(message_id) = message_id.parse::<u64>() else {
+        return ephemeral_component(ctx, interaction, "Invalid source message.").await;
+    };
+    let message = match interaction.channel_id.message(&ctx.http, message_id).await {
+        Ok(message) => message,
+        Err(error) => return ephemeral_component(
+            ctx,
+            interaction,
+            format!("Could not retrieve the source message: {error}"),
+        ).await,
+    };
+    if message.attachments.is_empty() {
+        return ephemeral_component(ctx, interaction, "No attachments.").await;
+    }
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+    ).await?;
+    let watched = { ctx.data.read().await.get::<crate::data::WatchedGroupsKey>().cloned() };
+    let Some(watched) = watched else {
+        return interaction.create_followup(
+            &ctx.http,
+            CreateInteractionResponseFollowup::new().content("Watched groups are unavailable.").ephemeral(true),
+        ).await.map(|_| ());
+    };
+    let mut results = Vec::new();
+    for attachment in &message.attachments {
+        match attachment.download().await {
+            Ok(bytes) => results.push(crate::commands::watched_group::import_attachment(
+                &watched,
+                &attachment.filename,
+                &bytes,
+            )),
+            Err(error) => results.push(format!("Could not download `{}`: {error}", attachment.filename)),
+        }
+    }
+    interaction.create_followup(
+        &ctx.http,
+        CreateInteractionResponseFollowup::new().content(results.join("\n")).ephemeral(true),
+    ).await.map(|_| ())
 }
 
 async fn audit_edit_data(
