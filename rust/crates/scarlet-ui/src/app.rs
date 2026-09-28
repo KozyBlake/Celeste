@@ -61,6 +61,12 @@ enum ColumnId {
     Ban,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TableSort {
+    column: ColumnId,
+    ascending: bool,
+}
+
 impl ColumnId {
     const ALL: [ColumnId; 15] = [
         ColumnId::Name,
@@ -134,6 +140,16 @@ impl ColumnId {
             _ => 55.0,
         }
     }
+
+    fn sortable(self) -> bool {
+        !matches!(
+            self,
+            ColumnId::AvatarStats
+                | ColumnId::Profile
+                | ColumnId::CopyId
+                | ColumnId::Ban
+        )
+    }
 }
 
 /// Width of the settings column's controls, so checkboxes, drop-downs and
@@ -205,6 +221,9 @@ pub struct ScarletApp {
     /// AUDIT-2026-09-28.md — the claim that Java doesn't persist it was
     /// simply wrong.
     column_order: Vec<ColumnId>,
+    /// Active JTable-style header sort. `None` uses Java's default player
+    /// order (present, advisory priority, join time).
+    table_sort: Option<TableSort>,
     /// Last native window rectangle written to Java's `uiBounds` registry
     /// key. Keeping the previous value avoids rewriting registry.json on
     /// every immediate-mode frame when the window has not moved.
@@ -333,6 +352,7 @@ impl ScarletApp {
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
             column_order: ColumnId::ALL.to_vec(),
+            table_sort: None,
             last_window_bounds,
             settings_category: SettingCategory::General,
             settings_search: String::new(),
@@ -596,7 +616,8 @@ impl ScarletApp {
     fn instance_tab(&mut self, ui: &mut egui::Ui) {
         use egui_extras::{Column, TableBuilder};
 
-        let players = self.state.ordered_players();
+        let mut players = self.state.ordered_players();
+        sort_players(&mut players, self.table_sort);
         if players.is_empty() {
             return self.instance_empty_state(ui);
         }
@@ -616,6 +637,9 @@ impl ScarletApp {
         // `JTableHeader`'s drag-to-reorder behavior instead of egui_extras'
         // fixed column order.
         let mut swap: Option<(usize, usize)> = None;
+        let mut clicked_sort = None;
+        let mut reset_sort = false;
+        let active_sort = self.table_sort;
 
         egui::ScrollArea::horizontal().show(ui, |ui| {
             // `Column::auto()` sizes to content, which is what let a long
@@ -633,10 +657,26 @@ impl ScarletApp {
                 .header(20.0, |mut header| {
                     for (index, column) in column_order.iter().enumerate() {
                         header.col(|ui| {
-                            let (_, dropped) = ui.dnd_drop_zone::<usize, ()>(egui::Frame::none(), |ui| {
+                            let (drop_zone, dropped) = ui.dnd_drop_zone::<usize, _>(egui::Frame::none(), |ui| {
                                 ui.dnd_drag_source(egui::Id::new("instance_column_header").with(index), index, |ui| {
-                                    ui.strong(column.label());
-                                });
+                                    let marker = match active_sort {
+                                        Some(TableSort { column: sorted, ascending: true }) if sorted == *column => " ▲",
+                                        Some(TableSort { column: sorted, ascending: false }) if sorted == *column => " ▼",
+                                        _ => "",
+                                    };
+                                    ui.strong(format!("{}{marker}", column.label()));
+                                })
+                                .response
+                            });
+                            let response = drop_zone.inner;
+                            if column.sortable() && response.clicked() {
+                                clicked_sort = Some(*column);
+                            }
+                            response.context_menu(|ui| {
+                                if ui.button("Default order").clicked() {
+                                    reset_sort = true;
+                                    ui.close_menu();
+                                }
                             });
                             if let Some(dragged_from) = dropped {
                                 swap = Some((*dragged_from, index));
@@ -691,6 +731,16 @@ impl ScarletApp {
             if from != to && from < self.column_order.len() && to < self.column_order.len() {
                 self.column_order.swap(from, to);
             }
+        }
+        if reset_sort {
+            self.table_sort = None;
+        } else if let Some(column) = clicked_sort {
+            self.table_sort = Some(match self.table_sort {
+                Some(TableSort { column: active, ascending }) if active == column => {
+                    TableSort { column, ascending: !ascending }
+                }
+                _ => TableSort { column, ascending: true },
+            });
         }
     }
 
@@ -1481,6 +1531,41 @@ impl eframe::App for ScarletApp {
 /// Java's condition is deliberately narrow: amber only when the pronouns are
 /// flagged, the player is still present, and no advisory colour already
 /// applies — so the background never competes with a watched-entity colour.
+fn sort_players(players: &mut [scarlet_core::ui::ConnectedPlayer], sort: Option<TableSort>) {
+    let Some(sort) = sort else {
+        return;
+    };
+    fn text(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
+        left.map(str::to_lowercase).cmp(&right.map(str::to_lowercase))
+    }
+    players.sort_by(|left, right| {
+        let ordering = match sort.column {
+            ColumnId::Name => text(Some(&left.name), Some(&right.name)),
+            ColumnId::Id => text(Some(&left.id), Some(&right.id)),
+            ColumnId::Pronouns => text(left.pronouns.as_deref(), right.pronouns.as_deref()),
+            ColumnId::Avatar => text(left.avatar_name.as_deref(), right.avatar_name.as_deref()),
+            ColumnId::Performance => text(
+                left.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()),
+                right.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()),
+            ),
+            ColumnId::AccAge => left.account_age.cmp(&right.account_age),
+            ColumnId::Joined => left.joined.cmp(&right.joined),
+            ColumnId::Left => left.left.cmp(&right.left),
+            ColumnId::Advisory => text(left.advisory.as_deref(), right.advisory.as_deref()),
+            ColumnId::Age18 => text(
+                left.age_verification_status.as_deref(),
+                right.age_verification_status.as_deref(),
+            ),
+            ColumnId::Rank => left.trust_rank.cmp(&right.trust_rank),
+            // Java marks Action-valued columns non-sortable.
+            ColumnId::AvatarStats | ColumnId::Profile | ColumnId::CopyId | ColumnId::Ban => {
+                std::cmp::Ordering::Equal
+            }
+        };
+        if sort.ascending { ordering } else { ordering.reverse() }
+    });
+}
+
 fn row_background(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Color32> {
     (player.pronouns_flagged && player.left.is_none() && player.text_color.is_none())
         .then(|| egui::Color32::from_rgb(80, 55, 10))
@@ -1652,5 +1737,33 @@ mod tests {
         order.swap(from, to);
         assert_eq!(order[to], ColumnId::Name);
         assert_eq!(order[from], ColumnId::Avatar);
+    }
+
+    #[test]
+    fn sortable_headers_order_rows_and_can_reverse() {
+        let at = chrono::Utc::now().naive_utc();
+        let mut players = vec![
+            scarlet_core::ui::ConnectedPlayer::new("usr_2", "Zulu", at),
+            scarlet_core::ui::ConnectedPlayer::new("usr_1", "alpha", at),
+        ];
+        sort_players(
+            &mut players,
+            Some(TableSort { column: ColumnId::Name, ascending: true }),
+        );
+        assert_eq!(players[0].name, "alpha");
+        sort_players(
+            &mut players,
+            Some(TableSort { column: ColumnId::Name, ascending: false }),
+        );
+        assert_eq!(players[0].name, "Zulu");
+    }
+
+    #[test]
+    fn action_headers_are_not_sortable_like_java() {
+        assert!(!ColumnId::AvatarStats.sortable());
+        assert!(!ColumnId::Profile.sortable());
+        assert!(!ColumnId::CopyId.sortable());
+        assert!(!ColumnId::Ban.sortable());
+        assert!(ColumnId::AccAge.sortable());
     }
 }
