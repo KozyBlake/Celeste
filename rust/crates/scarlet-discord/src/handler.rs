@@ -8,7 +8,7 @@ use serenity::builder::{
     CreateAutocompleteResponse, CreateInteractionResponse, CreateInteractionResponseMessage,
 };
 use serenity::client::{Context, EventHandler};
-use serenity::model::application::{CommandInteraction, Interaction, ResolvedValue};
+use serenity::model::application::{CommandInteraction, CommandType, Interaction, ResolvedValue};
 use serenity::model::channel::{GuildChannel, Message};
 use serenity::model::gateway::Ready;
 use serenity::model::id::{ChannelId, GuildId};
@@ -44,14 +44,14 @@ impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         match interaction {
             Interaction::Command(command) => {
-                if slash_permitted(&ctx, &command).await {
+                if command_permitted(&ctx, &command).await {
                     commands::dispatch(&ctx, &command).await
                 } else {
                     deny_command(&ctx, &command).await;
                 }
             }
             Interaction::Autocomplete(command) => {
-                if slash_permitted(&ctx, &command).await {
+                if command_permitted(&ctx, &command).await {
                     commands::dispatch_autocomplete(&ctx, &command).await
                 } else if let Err(error) = command
                     .create_response(
@@ -169,7 +169,7 @@ async fn interaction_permitted(
     permissions.is_some_and(|permissions| permissions.check(kind, member, operation, false))
 }
 
-async fn slash_permitted(ctx: &Context, command: &CommandInteraction) -> bool {
+async fn command_permitted(ctx: &Context, command: &CommandInteraction) -> bool {
     if !configured_guild(ctx, command.guild_id).await {
         return false;
     }
@@ -179,6 +179,31 @@ async fn slash_permitted(ctx: &Context, command: &CommandInteraction) -> bool {
     if member_is_owner_or_admin(ctx, command.guild_id, member) {
         return true;
     }
+    let permissions = {
+        ctx.data
+            .read()
+            .await
+            .get::<crate::data::DiscordPermissionsKey>()
+            .cloned()
+    };
+    let Some(permissions) = permissions else { return false };
+    if command.data.kind == CommandType::Message {
+        return permissions.check(
+            crate::permissions::PermissionType::MessageCommand,
+            member,
+            &command.data.name,
+            false,
+        );
+    }
+    if command.data.kind == CommandType::User {
+        return permissions.check(
+            crate::permissions::PermissionType::UserCommand,
+            member,
+            &command.data.name,
+            false,
+        );
+    }
+
     let options = command.data.options();
     let (group, subcommand) = match options.first() {
         Some(option) => match &option.value {
@@ -190,16 +215,7 @@ async fn slash_permitted(ctx: &Context, command: &CommandInteraction) -> bool {
         },
         None => (None, None),
     };
-    let permissions = {
-        ctx.data
-            .read()
-            .await
-            .get::<crate::data::DiscordPermissionsKey>()
-            .cloned()
-    };
-    permissions.is_some_and(|permissions| {
-        permissions.check_slash(member, &command.data.name, group, subcommand)
-    })
+    permissions.check_slash(member, &command.data.name, group, subcommand)
 }
 
 pub(crate) fn member_is_owner_or_admin(

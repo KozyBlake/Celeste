@@ -173,7 +173,7 @@ impl AuditPoller {
                             Ok(thread) => {
                                 metadata.thread_snowflake = Some(thread.id.get().to_string());
                                 let aux = CreateMessage::new()
-                                    .content(self.moderation_aux_content(&metadata))
+                                    .content(moderation_aux_content(&metadata, &self.moderation_tags))
                                     .components(moderation_controls(&entry));
                                 if let Ok(aux_message) = thread.id.send_message(&http, aux).await {
                                     metadata.aux_message_snowflake = Some(aux_message.id.get().to_string());
@@ -193,22 +193,26 @@ impl AuditPoller {
         Ok(())
     }
 
-    fn moderation_aux_content(&self, metadata: &AuditEntryMetadata) -> String {
-        let claimed = metadata.has_tags() || metadata.has_description();
-        let mut content = if claimed { String::new() } else { "Unclaimed".to_string() };
-        if metadata.has_tags() {
-            content.push_str("\n### Tags:\n");
-            content.push_str(&metadata.entry_tags.iter()
-                .map(|tag| self.moderation_tags.get_tag_label(tag))
-                .collect::<Vec<_>>()
-                .join(", "));
-        }
-        if let Some(description) = metadata.entry_description.as_deref() {
-            content.push_str("\n### Description:\n");
-            content.push_str(description);
-        }
-        content.trim_start().to_string()
+}
+
+pub(crate) fn moderation_aux_content(
+    metadata: &AuditEntryMetadata,
+    moderation_tags: &ModerationTags,
+) -> String {
+    let claimed = metadata.has_tags() || metadata.has_description();
+    let mut content = if claimed { String::new() } else { "Unclaimed".to_string() };
+    if metadata.has_tags() {
+        content.push_str("\n### Tags:\n");
+        content.push_str(&metadata.entry_tags.iter()
+            .map(|tag| moderation_tags.get_tag_label(tag))
+            .collect::<Vec<_>>()
+            .join(", "));
     }
+    if let Some(description) = metadata.entry_description.as_deref() {
+        content.push_str("\n### Description:\n");
+        content.push_str(description);
+    }
+    content.trim_start().to_string()
 }
 
 pub async fn run(poller: AuditPoller) {
@@ -304,7 +308,7 @@ fn entry_embed(entry: &GroupAuditLogEntry, target: Option<&scarlet_vrchat::model
     embed
 }
 
-fn moderation_controls(entry: &GroupAuditLogEntry) -> Vec<CreateActionRow> {
+pub(crate) fn moderation_controls(entry: &GroupAuditLogEntry) -> Vec<CreateActionRow> {
     let mut rows = vec![CreateActionRow::Buttons(vec![
         CreateButton::new(format!("edit-tags:{}", entry.id)).label("Edit tags"),
         CreateButton::new(format!("edit-desc:{}", entry.id)).label("Edit description"),
@@ -324,7 +328,7 @@ fn moderation_controls(entry: &GroupAuditLogEntry) -> Vec<CreateActionRow> {
     rows
 }
 
-fn thread_name(entry: &GroupAuditLogEntry) -> String {
+pub(crate) fn thread_name(entry: &GroupAuditLogEntry) -> String {
     let value = entry
         .description
         .as_deref()

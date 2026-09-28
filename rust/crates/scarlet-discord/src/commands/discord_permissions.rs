@@ -299,6 +299,7 @@ fn suggestions(kind: Option<PermissionType>) -> Vec<String> {
     let mut values = vec!["*".to_string()];
     match kind {
         Some(PermissionType::SlashCommand) => values.extend(super::slash_command_paths()),
+        Some(PermissionType::MessageCommand) => values.extend(super::message_command_names()),
         Some(PermissionType::Other) => values.extend([
             "groupex-bans-manage".to_string(),
             "groupex-tags-edit".to_string(),
@@ -321,5 +322,7 @@ mod tests {
         );
         assert!(suggestions(Some(PermissionType::SlashCommand))
             .contains(&"vrchat-user-ban".to_string()));
+        assert!(suggestions(Some(PermissionType::MessageCommand))
+            .contains(&"fix-audit-thread".to_string()));
     }
 }

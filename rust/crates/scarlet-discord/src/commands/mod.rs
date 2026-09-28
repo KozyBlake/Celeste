@@ -16,6 +16,7 @@ pub mod discord_warn;
 pub mod discord_member_action;
 pub mod discord_permissions;
 pub mod export_log;
+pub mod fix_audit_thread;
 pub mod set_event_channel;
 pub mod set_tts_voice;
 pub mod set_voice_channel;
@@ -301,6 +302,7 @@ pub fn all_commands() -> Vec<serenity::builder::CreateCommand> {
         ticket_config::register_auto_response(),
         ticket_config::register_message(),
         discord_permissions::register(),
+        fix_audit_thread::register(),
     ];
     if scarlet_core::features::watched_avatars_enabled() {
         commands.push(watched_avatar::register());
@@ -355,6 +357,18 @@ pub fn slash_command_paths() -> Vec<String> {
     output.sort();
     output.dedup();
     output
+}
+
+pub fn message_command_names() -> Vec<String> {
+    let mut names = all_commands().into_iter().filter_map(|command| {
+        let value = serde_json::to_value(command).ok()?;
+        (value.get("type").and_then(serde_json::Value::as_u64) == Some(3))
+            .then(|| value.get("name").and_then(serde_json::Value::as_str).map(str::to_string))
+            .flatten()
+    }).collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
 }
 
 pub async fn register_global_commands(ctx: &Context) {
@@ -419,6 +433,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         ticket_config::AUTO_RESPONSE_NAME => ticket_config::run_auto_response(ctx, command).await,
         ticket_config::MESSAGE_NAME => ticket_config::run_message(ctx, command).await,
         discord_permissions::NAME => discord_permissions::run(ctx, command).await,
+        fix_audit_thread::NAME => fix_audit_thread::run(ctx, command).await,
         animated_emoji::NAME => animated_emoji::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
@@ -877,5 +892,13 @@ mod command_surface_tests {
         let extra: Vec<&String> =
             rust.iter().filter(|leaf| !java.contains(*leaf) && !EXPECTED_ADDITIONS.contains(&leaf.as_str())).collect();
         assert!(extra.is_empty(), "commands registered that Java doesn't have: {extra:?}");
+    }
+
+    #[test]
+    fn message_command_surface_matches_in_scope_java_commands() {
+        assert_eq!(
+            message_command_names(),
+            vec!["fix-audit-thread".to_string(), "vrchat-animated-emoji".to_string()]
+        );
     }
 }
