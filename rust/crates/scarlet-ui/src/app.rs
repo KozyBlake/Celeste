@@ -8,8 +8,8 @@
 //! [`scarlet_core::settings`] for the Settings tab), not fixtures. What
 //! isn't ported: several toolbar buttons' actual behavior (Create Instance,
 //! Import Groups, Sync Discord are logged as not-yet-wired
-//! rather than faked), moderation actions (Ban/Unban/Invite are stubs),
-//! and most of the CLI command interpreter. TTS pause/resume, skip, and the
+//! rather than faked), and most of the CLI command interpreter. The table's
+//! Ban/Unban/Invite actions call the shared VRChat client. TTS pause/resume, skip, and the
 //! CLI `tts <text>` command are backed by the real platform TTS service.
 //!
 //! Toolkit: `egui`/`eframe` (see prior module docs in git history for the
@@ -59,6 +59,8 @@ enum ColumnId {
     Profile,
     CopyId,
     Ban,
+    Unban,
+    Invite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,8 +69,81 @@ struct TableSort {
     ascending: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupAction {
+    Ban,
+    Unban,
+    Invite,
+}
+
+fn load_column_layout(
+    settings: Option<&Settings>,
+) -> (
+    Vec<ColumnId>,
+    std::collections::HashMap<ColumnId, f32>,
+) {
+    let mut widths = ColumnId::ALL
+        .into_iter()
+        .map(|column| (column, column.initial_width()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let Some(saved) = settings.and_then(|settings| {
+        settings
+            .store
+            .get_object::<std::collections::HashMap<String, UiPropsInfo>>("ui_instance_columns")
+    }) else {
+        return (ColumnId::DEFAULT_VISIBLE.to_vec(), widths);
+    };
+    if saved.is_empty() {
+        return (ColumnId::DEFAULT_VISIBLE.to_vec(), widths);
+    }
+
+    let mut visible = saved
+        .iter()
+        .filter_map(|(id, info)| {
+            let column = ColumnId::from_id(id)?;
+            if info.width > 0 {
+                widths.insert(column, info.width as f32);
+            }
+            (info.index >= 0).then_some((info.index, column))
+        })
+        .collect::<Vec<_>>();
+    visible.sort_by_key(|(index, _)| *index);
+    let mut order = visible.into_iter().map(|(_, column)| column).collect::<Vec<_>>();
+    // A layout written by an older version has no entries for newly added
+    // default-visible columns. Java leaves those columns at their defaults.
+    for column in ColumnId::DEFAULT_VISIBLE {
+        if !saved.contains_key(column.id()) && !order.contains(&column) {
+            order.push(column);
+        }
+    }
+    if order.is_empty() {
+        order.push(ColumnId::Name);
+    }
+    (order, widths)
+}
+
 impl ColumnId {
-    const ALL: [ColumnId; 15] = [
+    const ALL: [ColumnId; 17] = [
+        ColumnId::Name,
+        ColumnId::Id,
+        ColumnId::Pronouns,
+        ColumnId::Avatar,
+        ColumnId::Performance,
+        ColumnId::AvatarStats,
+        ColumnId::AccAge,
+        ColumnId::Joined,
+        ColumnId::Left,
+        ColumnId::Advisory,
+        ColumnId::Age18,
+        ColumnId::Rank,
+        ColumnId::Profile,
+        ColumnId::CopyId,
+        ColumnId::Ban,
+        ColumnId::Unban,
+        ColumnId::Invite,
+    ];
+
+    const DEFAULT_VISIBLE: [ColumnId; 15] = [
         ColumnId::Name,
         ColumnId::Id,
         ColumnId::Pronouns,
@@ -103,7 +178,17 @@ impl ColumnId {
             ColumnId::Profile => "Profile",
             ColumnId::CopyId => "Copy Id",
             ColumnId::Ban => "Ban",
+            ColumnId::Unban => "Unban",
+            ColumnId::Invite => "Invite",
         }
+    }
+
+    fn id(self) -> &'static str {
+        self.label()
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|column| column.id() == id)
     }
 
     /// Starting column width. These are sized so the value Java shows in
@@ -128,7 +213,7 @@ impl ColumnId {
             ColumnId::Rank => 80.0,
             ColumnId::Profile => 55.0,
             ColumnId::CopyId => 55.0,
-            ColumnId::Ban => 45.0,
+            ColumnId::Ban | ColumnId::Unban | ColumnId::Invite => 55.0,
         }
     }
 
@@ -136,7 +221,13 @@ impl ColumnId {
     /// readable.
     fn min_width(&self) -> f32 {
         match self {
-            ColumnId::Age18 | ColumnId::Ban | ColumnId::Profile | ColumnId::CopyId | ColumnId::AvatarStats => 40.0,
+            ColumnId::Age18
+            | ColumnId::Ban
+            | ColumnId::Unban
+            | ColumnId::Invite
+            | ColumnId::Profile
+            | ColumnId::CopyId
+            | ColumnId::AvatarStats => 40.0,
             _ => 55.0,
         }
     }
@@ -148,8 +239,16 @@ impl ColumnId {
                 | ColumnId::Profile
                 | ColumnId::CopyId
                 | ColumnId::Ban
+                | ColumnId::Unban
+                | ColumnId::Invite
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct UiPropsInfo {
+    index: i32,
+    width: i32,
 }
 
 /// Width of the settings column's controls, so checkboxes, drop-downs and
@@ -221,6 +320,7 @@ pub struct ScarletApp {
     /// AUDIT-2026-09-28.md — the claim that Java doesn't persist it was
     /// simply wrong.
     column_order: Vec<ColumnId>,
+    column_widths: std::collections::HashMap<ColumnId, f32>,
     /// Active JTable-style header sort. `None` uses Java's default player
     /// order (present, advisory priority, join time).
     table_sort: Option<TableSort>,
@@ -241,7 +341,7 @@ pub struct ScarletApp {
     /// row's Ban action, which Java also confirms before acting).
     avatar_stats_open: Option<AvatarStatsView>,
     logo: Option<egui::TextureHandle>,
-    ban_confirm: Option<(String, String)>,
+    group_action_confirm: Option<(GroupAction, String, String)>,
     import_groups_url_open: bool,
     import_groups_url: String,
     import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
@@ -324,6 +424,8 @@ impl ScarletApp {
             _ => true,
         };
 
+        let (column_order, column_widths) = load_column_layout(settings.as_deref());
+
         ScarletApp {
             state,
             settings,
@@ -351,15 +453,16 @@ impl ScarletApp {
             exit_confirmed: false,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
-            column_order: ColumnId::ALL.to_vec(),
+            column_order,
+            column_widths,
             table_sort: None,
             last_window_bounds,
             settings_category: SettingCategory::General,
             settings_search: String::new(),
             avatar_stats_open: None,
             logo: None,
-            ban_confirm: None,
-                    import_groups_url_open: false,
+            group_action_confirm: None,
+            import_groups_url_open: false,
             import_groups_url: String::new(),
             import_groups_rx: None,
         }
@@ -405,6 +508,28 @@ impl ScarletApp {
             settings.ui_bounds.set(Some(bounds));
             self.last_window_bounds = Some(bounds);
         }
+    }
+
+    fn save_column_layout(&self) {
+        let Some(settings) = &self.settings else { return };
+        let layout = ColumnId::ALL
+            .into_iter()
+            .map(|column| {
+                let index = self
+                    .column_order
+                    .iter()
+                    .position(|visible| *visible == column)
+                    .map_or(-1, |index| index as i32);
+                let width = self
+                    .column_widths
+                    .get(&column)
+                    .copied()
+                    .unwrap_or_else(|| column.initial_width())
+                    .round() as i32;
+                (column.id().to_string(), UiPropsInfo { index, width })
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        settings.store.set_object("ui_instance_columns", &layout);
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -607,7 +732,25 @@ impl ScarletApp {
                 if ui.button("Ban").clicked() {
                     // Java confirms before banning from the table; so does
                     // this, because a stray click in a row list is easy.
-                    self.ban_confirm = Some((player.id.clone(), player.name.clone()));
+                    self.group_action_confirm = Some((GroupAction::Ban, player.id.clone(), player.name.clone()));
+                }
+            }
+            ColumnId::Unban => {
+                if ui.button("Unban").clicked() {
+                    self.group_action_confirm = Some((GroupAction::Unban, player.id.clone(), player.name.clone()));
+                }
+            }
+            ColumnId::Invite => {
+                if ui.button("Invite").clicked() {
+                    let confirm = self
+                        .settings
+                        .as_ref()
+                        .is_some_and(|settings| settings.confirm_group_invite.get());
+                    if confirm {
+                        self.group_action_confirm = Some((GroupAction::Invite, player.id.clone(), player.name.clone()));
+                    } else {
+                        self.spawn_group_invite(player.id.clone(), player.name.clone());
+                    }
                 }
             }
         }
@@ -622,6 +765,7 @@ impl ScarletApp {
             return self.instance_empty_state(ui);
         }
         let column_order = self.column_order.clone();
+        let column_widths = self.column_widths.clone();
         // `ui_left_player_dim_percent` is how much to dim a player who has
         // left (0 = no dimming), so the fade is the user's setting rather
         // than a number baked in here.
@@ -639,6 +783,8 @@ impl ScarletApp {
         let mut swap: Option<(usize, usize)> = None;
         let mut clicked_sort = None;
         let mut reset_sort = false;
+        let mut toggle_column = None;
+        let mut width_update = None;
         let active_sort = self.table_sort;
 
         egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -646,11 +792,10 @@ impl ScarletApp {
             // VRChat id wrap over five lines. A fixed initial width that
             // clips (and can still be dragged wider) is the Swing
             // `JTable`'s behaviour.
-            let mut table = TableBuilder::new(ui).striped(true).resizable(true);
+            let mut table = TableBuilder::new(ui).striped(true);
             for column in &column_order {
-                table = table.column(
-                    Column::initial(column.initial_width()).at_least(column.min_width()).clip(true).resizable(true),
-                );
+                let width = column_widths.get(column).copied().unwrap_or_else(|| column.initial_width());
+                table = table.column(Column::exact(width.max(column.min_width())).clip(true));
             }
 
             table
@@ -677,7 +822,36 @@ impl ScarletApp {
                                     reset_sort = true;
                                     ui.close_menu();
                                 }
+                                ui.separator();
+                                ui.strong("Columns");
+                                for candidate in ColumnId::ALL {
+                                    let mut shown = column_order.contains(&candidate);
+                                    if ui.checkbox(&mut shown, candidate.label()).changed() {
+                                        toggle_column = Some(candidate);
+                                    }
+                                }
                             });
+                            let resize_id = egui::Id::new("instance_column_resize").with(*column);
+                            let edge = ui.max_rect().right();
+                            let resize_rect = egui::Rect::from_min_max(
+                                egui::pos2(edge - 4.0, ui.max_rect().top()),
+                                egui::pos2(edge + 4.0, ui.max_rect().bottom()),
+                            );
+                            let resize = ui
+                                .interact(resize_rect, resize_id, egui::Sense::drag())
+                                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                            if resize.drag_started() {
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(resize_id, column_widths.get(column).copied().unwrap_or_else(|| column.initial_width()));
+                                });
+                            }
+                            if resize.dragged() || resize.drag_stopped() {
+                                let start = ui.ctx().data(|data| {
+                                    data.get_temp::<f32>(resize_id)
+                                        .unwrap_or_else(|| column_widths.get(column).copied().unwrap_or_else(|| column.initial_width()))
+                                });
+                                width_update = Some((*column, (start + resize.drag_delta().x).max(column.min_width()), resize.drag_stopped()));
+                            }
                             if let Some(dragged_from) = dropped {
                                 swap = Some((*dragged_from, index));
                             }
@@ -730,7 +904,24 @@ impl ScarletApp {
         if let Some((from, to)) = swap {
             if from != to && from < self.column_order.len() && to < self.column_order.len() {
                 self.column_order.swap(from, to);
+                self.save_column_layout();
             }
+        }
+        if let Some((column, width, finished)) = width_update {
+            self.column_widths.insert(column, width);
+            if finished {
+                self.save_column_layout();
+            }
+        }
+        if let Some(column) = toggle_column {
+            if let Some(index) = self.column_order.iter().position(|visible| *visible == column) {
+                if self.column_order.len() > 1 {
+                    self.column_order.remove(index);
+                }
+            } else {
+                self.column_order.push(column);
+            }
+            self.save_column_layout();
         }
         if reset_sort {
             self.table_sort = None;
@@ -857,22 +1048,32 @@ impl ScarletApp {
 
     /// The table's Ban action. Same call the `/vrchat-user-ban` command
     /// makes, run on the shared VRChat session.
-    fn ban_confirm_window(&mut self, ctx: &egui::Context) {
-        let Some((user_id, display_name)) = self.ban_confirm.clone() else { return };
+    fn group_action_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some((action, user_id, display_name)) = self.group_action_confirm.clone() else { return };
         let mut open = true;
         let mut decided = false;
-        egui::Window::new("Ban from the VRChat group")
+        let verb = match action {
+            GroupAction::Ban => "Ban",
+            GroupAction::Unban => "Unban",
+            GroupAction::Invite => "Invite",
+        };
+        let preposition = if action == GroupAction::Invite { "to" } else { "from" };
+        egui::Window::new(format!("{verb} VRChat group user"))
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(format!("Ban {display_name} from the configured VRChat group?"));
+                ui.label(format!("{verb} {display_name} {preposition} the configured VRChat group?"));
                 ui.add(egui::Label::new(egui::RichText::new(&user_id).small().monospace().weak()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Ban").clicked() {
+                    if ui.button(verb).clicked() {
                         decided = true;
-                        self.spawn_group_ban(user_id.clone(), display_name.clone());
+                        match action {
+                            GroupAction::Ban => self.spawn_group_ban(user_id.clone(), display_name.clone()),
+                            GroupAction::Unban => self.spawn_group_unban(user_id.clone(), display_name.clone()),
+                            GroupAction::Invite => self.spawn_group_invite(user_id.clone(), display_name.clone()),
+                        }
                     }
                     if ui.button("Cancel").clicked() {
                         decided = true;
@@ -880,7 +1081,7 @@ impl ScarletApp {
                 });
             });
         if decided || !open {
-            self.ban_confirm = None;
+            self.group_action_confirm = None;
         }
     }
 
@@ -902,6 +1103,42 @@ impl ScarletApp {
             match client.ban_from_group(&group_id, &user_id).await {
                 Ok(_) => state.append_cli_output(format!("Banned {display_name}.")),
                 Err(err) => state.append_cli_output(format!("Failed to ban {display_name}: {err}")),
+            }
+        });
+    }
+
+    fn spawn_group_unban(&mut self, user_id: String, display_name: String) {
+        self.spawn_group_action(user_id, display_name, GroupAction::Unban);
+    }
+
+    fn spawn_group_invite(&mut self, user_id: String, display_name: String) {
+        self.spawn_group_action(user_id, display_name, GroupAction::Invite);
+    }
+
+    fn spawn_group_action(&mut self, user_id: String, display_name: String, action: GroupAction) {
+        let Some(settings) = self.settings.clone() else { return };
+        let Some(group_id) = settings.store.get_string("vrchat_group_id").filter(|id| !id.trim().is_empty()) else {
+            self.state.append_cli_output(format!("{} failed: no VRChat group is configured.", match action { GroupAction::Unban => "Unban", GroupAction::Invite => "Invite", GroupAction::Ban => "Ban" }));
+            return;
+        };
+        let slot = self.vrchat_slot.clone();
+        let state = self.state.clone();
+        let verb = match action { GroupAction::Unban => "Unbanning", GroupAction::Invite => "Inviting", GroupAction::Ban => "Banning" };
+        self.state.append_cli_output(format!("{verb} {display_name}..."));
+        self.runtime_handle.spawn(async move {
+            let client = slot.read().await.clone();
+            let Some(client) = client else {
+                state.append_cli_output(format!("{verb} failed: not signed in to VRChat."));
+                return;
+            };
+            let result = match action {
+                GroupAction::Unban => client.unban_from_group(&group_id, &user_id).await.map(|_| ()),
+                GroupAction::Invite => client.create_group_invite(&group_id, &user_id, true).await,
+                GroupAction::Ban => client.ban_from_group(&group_id, &user_id).await.map(|_| ()),
+            };
+            match result {
+                Ok(()) => state.append_cli_output(format!("{} {display_name}.", match action { GroupAction::Unban => "Unbanned", GroupAction::Invite => "Invited", GroupAction::Ban => "Banned" })),
+                Err(err) => state.append_cli_output(format!("Failed to {} {display_name}: {err}", match action { GroupAction::Unban => "unban", GroupAction::Invite => "invite", GroupAction::Ban => "ban" })),
             }
         });
     }
@@ -1494,7 +1731,7 @@ impl eframe::App for ScarletApp {
         self.exit_confirm_window(ctx);
         self.import_groups_windows(ctx);
         self.avatar_stats_window(ctx);
-        self.ban_confirm_window(ctx);
+        self.group_action_confirm_window(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Instance => self.instance_tab(ui),
@@ -1558,7 +1795,12 @@ fn sort_players(players: &mut [scarlet_core::ui::ConnectedPlayer], sort: Option<
             ),
             ColumnId::Rank => left.trust_rank.cmp(&right.trust_rank),
             // Java marks Action-valued columns non-sortable.
-            ColumnId::AvatarStats | ColumnId::Profile | ColumnId::CopyId | ColumnId::Ban => {
+            ColumnId::AvatarStats
+            | ColumnId::Profile
+            | ColumnId::CopyId
+            | ColumnId::Ban
+            | ColumnId::Unban
+            | ColumnId::Invite => {
                 std::cmp::Ordering::Equal
             }
         };
@@ -1711,13 +1953,16 @@ mod tests {
     #[test]
     fn column_order_starts_as_all_columns_with_no_duplicates() {
         // Guards the drag-to-reorder column list against accidental
-        // duplication/omission: exactly the 15 `propstable` columns,
+        // duplication/omission: exactly the 17 `propstable` columns,
         // matching ScarletUI.java's column set, each exactly once.
         let mut seen = std::collections::HashSet::new();
         for column in ColumnId::ALL {
             assert!(seen.insert(column), "duplicate column in ColumnId::ALL: {:?}", column);
         }
-        assert_eq!(ColumnId::ALL.len(), 15);
+        assert_eq!(ColumnId::ALL.len(), 17);
+        assert_eq!(ColumnId::DEFAULT_VISIBLE.len(), 15);
+        assert!(!ColumnId::DEFAULT_VISIBLE.contains(&ColumnId::Unban));
+        assert!(!ColumnId::DEFAULT_VISIBLE.contains(&ColumnId::Invite));
     }
 
     #[test]
@@ -1764,6 +2009,27 @@ mod tests {
         assert!(!ColumnId::Profile.sortable());
         assert!(!ColumnId::CopyId.sortable());
         assert!(!ColumnId::Ban.sortable());
+        assert!(!ColumnId::Unban.sortable());
+        assert!(!ColumnId::Invite.sortable());
         assert!(ColumnId::AccAge.sortable());
+    }
+
+    #[test]
+    fn column_layout_reads_javas_index_width_and_hidden_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings::open(dir.path());
+        let saved = std::collections::HashMap::from([
+            ("Name".to_string(), UiPropsInfo { index: 1, width: 222 }),
+            ("Id".to_string(), UiPropsInfo { index: 0, width: 333 }),
+            ("Ban".to_string(), UiPropsInfo { index: -1, width: 70 }),
+        ]);
+        settings.store.set_object("ui_instance_columns", &saved);
+
+        let (order, widths) = load_column_layout(Some(&settings));
+        assert_eq!(&order[..2], &[ColumnId::Id, ColumnId::Name]);
+        assert!(!order.contains(&ColumnId::Ban));
+        assert!(!order.contains(&ColumnId::Unban));
+        assert_eq!(widths[&ColumnId::Name], 222.0);
+        assert_eq!(widths[&ColumnId::Id], 333.0);
     }
 }

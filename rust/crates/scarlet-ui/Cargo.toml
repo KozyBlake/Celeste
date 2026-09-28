@@ -13,6 +13,7 @@ scarlet-vrchat.workspace = true
 scarlet-events.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+serde.workspace = true
 tokio.workspace = true
 eframe = "0.29"
 egui = "0.29"

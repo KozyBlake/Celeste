@@ -5322,6 +5322,7 @@ dependencies = [
  "scarlet-discord",
  "scarlet-events",
  "scarlet-vrchat",
+ "serde",
  "songbird",
  "tempfile",
  "tokio",
