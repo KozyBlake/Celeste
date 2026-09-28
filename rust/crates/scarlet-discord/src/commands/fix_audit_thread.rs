@@ -41,11 +41,12 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     let Some(audit_id) = audit_id_from_message(message) else {
         return super::reply_ephemeral(ctx, command, "Message does not appear to be an audit entry").await;
     };
-    let (data, tags) = {
+    let (data, tags, settings) = {
         let shared = ctx.data.read().await;
         (
             shared.get::<crate::data::ScarletDataKey>().cloned(),
             shared.get::<crate::data::ModerationTagsKey>().cloned(),
+            shared.get::<crate::data::SettingsKey>().cloned(),
         )
     };
     let Some(data) = data else {
@@ -105,7 +106,10 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             &ctx.http,
             CreateMessage::new()
                 .content(crate::events::audit_poller::moderation_aux_content(&metadata, &tags))
-                .components(crate::events::audit_poller::moderation_controls(&entry)),
+                .components(crate::events::audit_poller::moderation_controls(
+                    &entry,
+                    settings.is_some_and(|settings| settings.timed_bans_enabled.get()),
+                )),
         ).await?;
         metadata.aux_message_snowflake = Some(aux.id.get().to_string());
     }

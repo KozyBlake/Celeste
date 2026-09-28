@@ -180,7 +180,10 @@ impl AuditPoller {
                                 metadata.thread_snowflake = Some(thread.id.get().to_string());
                                 let aux = CreateMessage::new()
                                     .content(moderation_aux_content(&metadata, &self.moderation_tags))
-                                    .components(moderation_controls(&entry));
+                                    .components(moderation_controls(
+                                        &entry,
+                                        self.settings.timed_bans_enabled.get(),
+                                    ));
                                 if let Ok(aux_message) = thread.id.send_message(&http, aux).await {
                                     metadata.aux_message_snowflake = Some(aux_message.id.get().to_string());
                                 }
@@ -197,6 +200,44 @@ impl AuditPoller {
         // overlap polling cannot repeatedly process the same event.
         self.data.set_audit_entry_metadata(&entry.id, metadata);
         Ok(())
+    }
+
+    async fn process_timed_bans(&self) {
+        if !self.settings.timed_bans_enabled.get() { return; }
+        let Some(client) = self.vrchat.read().await.clone() else { return };
+        let Some(group_id) = self.group_id() else { return };
+        let pending = crate::pending_moderation::PendingModeration::open(self.config.data_dir());
+        let now = Utc::now().timestamp_millis();
+        for (target_id, timed) in pending.timed_bans() {
+            if timed.expires_at > now { continue; }
+            let banned = match client.get_group_member(&group_id, &target_id).await {
+                Ok(Some(member)) => crate::commands::vrchat_user_ban::is_banned_member(&member),
+                Ok(None) => false,
+                Err(error) => {
+                    tracing::warn!(%error, target_id, "Timed-ban membership lookup failed; will retry");
+                    continue;
+                }
+            };
+            if !banned {
+                let _ = pending.remove_timed_ban(&target_id);
+                continue;
+            }
+            match pending.add_pending("group.user.unban", &target_id, &timed.actor_user_id) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    tracing::warn!(%error, target_id, "Could not queue expired timed ban");
+                    continue;
+                }
+            }
+            match client.unban_from_group(&group_id, &target_id).await {
+                Ok(_) => { let _ = pending.remove_timed_ban(&target_id); }
+                Err(error) => {
+                    let _ = pending.take_pending("group.user.unban", &target_id);
+                    tracing::warn!(%error, target_id, "Timed unban failed; will retry");
+                }
+            }
+        }
     }
 
 }
@@ -226,6 +267,7 @@ pub async fn run(poller: AuditPoller) {
         if let Err(err) = poller.poll_once().await {
             tracing::warn!("VRChat audit poll failed; the cursor was not advanced: {err}");
         }
+        poller.process_timed_bans().await;
         let seconds = poller.settings.audit_polling_interval.get().clamp(10, 300) as u64;
         tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
     }
@@ -314,7 +356,7 @@ fn entry_embed(entry: &GroupAuditLogEntry, target: Option<&scarlet_vrchat::model
     embed
 }
 
-pub(crate) fn moderation_controls(entry: &GroupAuditLogEntry) -> Vec<CreateActionRow> {
+pub(crate) fn moderation_controls(entry: &GroupAuditLogEntry, timed_bans: bool) -> Vec<CreateActionRow> {
     let mut rows = vec![CreateActionRow::Buttons(vec![
         CreateButton::new(format!("edit-tags:{}", entry.id)).label("Edit tags"),
         CreateButton::new(format!("edit-desc:{}", entry.id)).label("Edit description"),
@@ -330,6 +372,15 @@ pub(crate) fn moderation_controls(entry: &GroupAuditLogEntry) -> Vec<CreateActio
                 .style(serenity::model::application::ButtonStyle::Success)
                 .label("Unban user"),
         ]));
+        if timed_bans {
+            rows.push(CreateActionRow::Buttons(vec![
+                CreateButton::new(format!("timed-ban:6:{target_id}")).label("Timed ban 6h"),
+                CreateButton::new(format!("timed-ban:24:{target_id}")).label("Timed ban 24h"),
+                CreateButton::new(format!("timed-ban:72:{target_id}")).label("Timed ban 3d"),
+                CreateButton::new(format!("timed-ban:168:{target_id}")).label("Timed ban 7d"),
+                CreateButton::new(format!("timed-ban-custom:{target_id}")).label("Timed ban…"),
+            ]));
+        }
     }
     rows
 }

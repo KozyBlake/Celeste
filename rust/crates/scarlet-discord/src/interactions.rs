@@ -182,6 +182,14 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction.data.custom_id.starts_with("timed-ban:")
+        || interaction.data.custom_id.starts_with("timed-ban-custom:")
+    {
+        if let Err(err) = handle_timed_ban_button(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling timed ban: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("group-request-") {
         if let Err(err) = handle_group_request(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error responding to group join request: {err}");
@@ -1019,6 +1027,12 @@ async fn create_instance(
 }
 
 pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
+    if interaction.data.custom_id.starts_with("timed-ban-custom:") {
+        if let Err(err) = handle_timed_ban_modal(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling custom timed ban: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("immediate-ban-edit-desc:") {
         if let Err(err) = handle_immediate_ban_description(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error handling immediate ban description: {err}");
@@ -1081,6 +1095,133 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
     }
+}
+
+fn parse_duration_millis(input: &str) -> Option<i64> {
+    let captures = regex::Regex::new(r"(?i)^(\d+(?:\.\d+)?)\s*([smhdw]?)$").unwrap()
+        .captures(input.trim())?;
+    let value: f64 = captures.get(1)?.as_str().parse().ok()?;
+    let unit = match captures.get(2).map(|m| m.as_str().to_ascii_lowercase()).as_deref() {
+        Some("s") => 1_000.0,
+        Some("m") => 60_000.0,
+        Some("d") => 86_400_000.0,
+        Some("w") => 604_800_000.0,
+        _ => 3_600_000.0,
+    };
+    let millis = (value * unit) as i64;
+    (millis > 0).then_some(millis)
+}
+
+fn format_duration(millis: i64) -> String {
+    let total_minutes = millis / 60_000;
+    let days = total_minutes / 1440;
+    let hours = (total_minutes % 1440) / 60;
+    let minutes = total_minutes % 60;
+    let mut output = String::new();
+    if days > 0 { output.push_str(&format!("{days}d")); }
+    if hours > 0 { output.push_str(&format!("{hours}h")); }
+    if minutes > 0 && days == 0 { output.push_str(&format!("{minutes}m")); }
+    if output.is_empty() { output = format!("{total_minutes}m"); }
+    output
+}
+
+async fn handle_timed_ban_button(ctx: &Context, interaction: &ComponentInteraction) -> serenity::Result<()> {
+    if interaction.data.custom_id.starts_with("timed-ban-custom:") {
+        let target_id = interaction.data.custom_id.strip_prefix("timed-ban-custom:").unwrap_or_default();
+        return interaction.create_response(
+            &ctx.http,
+            CreateInteractionResponse::Modal(CreateModal::new(
+                format!("timed-ban-custom:{target_id}"),
+                "Timed ban",
+            ).components(vec![CreateActionRow::InputText(CreateInputText::new(
+                InputTextStyle::Short,
+                "Duration (30m, 6h, 3d, 2w, or hours)",
+                format!("input-duration:{target_id}"),
+            ).required(true).placeholder("7d"))])),
+        ).await;
+    }
+    let parts = interaction.data.custom_id.splitn(3, ':').collect::<Vec<_>>();
+    let (Ok(hours), Some(target_id)) = (parts.get(1).unwrap_or(&"").parse::<i64>(), parts.get(2)) else {
+        return ephemeral_component(ctx, interaction, "Invalid timed-ban duration").await;
+    };
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+    ).await?;
+    let (message, ephemeral) = perform_timed_ban(
+        ctx,
+        interaction.user.id.to_string(),
+        interaction.member.as_ref(),
+        target_id,
+        hours * 3_600_000,
+    ).await;
+    let _ = interaction.delete_response(&ctx.http).await;
+    interaction.create_followup(
+        &ctx.http,
+        CreateInteractionResponseFollowup::new().content(message).ephemeral(ephemeral),
+    ).await.map(|_| ())
+}
+
+async fn handle_timed_ban_modal(ctx: &Context, interaction: &ModalInteraction) -> serenity::Result<()> {
+    let target_id = interaction.data.custom_id.strip_prefix("timed-ban-custom:").unwrap_or_default();
+    let Some(duration) = parse_duration_millis(&modal_text(interaction, &format!("input-duration:{target_id}"))) else {
+        return ephemeral_modal(ctx, interaction, "Couldn't read that duration. Try e.g. 30m, 6h, 3d, 2w, or a plain number of hours.").await;
+    };
+    interaction.create_response(&ctx.http, CreateInteractionResponse::Defer(
+        CreateInteractionResponseMessage::new().ephemeral(true),
+    )).await?;
+    let (message, ephemeral) = perform_timed_ban(ctx, interaction.user.id.to_string(), interaction.member.as_ref(), target_id, duration).await;
+    let _ = interaction.delete_response(&ctx.http).await;
+    interaction.create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(message).ephemeral(ephemeral)).await.map(|_| ())
+}
+
+async fn perform_timed_ban(
+    ctx: &Context,
+    snowflake: String,
+    member: Option<&serenity::model::guild::Member>,
+    target_id: &str,
+    duration: i64,
+) -> (String, bool) {
+    let settings = { ctx.data.read().await.get::<crate::data::SettingsKey>().cloned() };
+    if !settings.is_some_and(|settings| settings.timed_bans_enabled.get()) {
+        return ("Timed bans are disabled in Celeste's settings.".into(), true);
+    }
+    let context = match crate::commands::moderation_context_for_snowflake_with_override(
+        ctx, &snowflake, member, scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+        Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+    ).await {
+        Ok(context) => context,
+        Err(message) => return (message, true),
+    };
+    let name = match context.client.get_user(target_id).await {
+        Ok(user) => user.display_name.unwrap_or_else(|| target_id.to_string()),
+        Err(error) => return (format!("No VRChat user found with id {target_id} ({error})"), true),
+    };
+    let already_banned = match context.client.get_group_member(&context.group_id, target_id).await {
+        Ok(Some(member)) => crate::commands::vrchat_user_ban::is_banned_member(&member),
+        Ok(None) => false,
+        Err(error) => return (format!("Could not check ban status: {error}"), true),
+    };
+    let pending = { ctx.data.read().await.get::<crate::data::PendingModerationKey>().cloned() };
+    let Some(pending) = pending else { return ("Pending moderation state is unavailable.".into(), true) };
+    let expires_at = chrono::Utc::now().timestamp_millis() + duration;
+    let actor_id = context.actor_id.clone().unwrap_or_default();
+    if !already_banned {
+        if let Err(message) = crate::commands::vrchat_user_ban::execute_with_context(ctx, &context, target_id, true).await {
+            return (message, true);
+        }
+    }
+    if let Err(error) = pending.set_timed_ban(target_id, crate::pending_moderation::TimedBan { expires_at, actor_user_id: actor_id }) {
+        return (format!("The ban succeeded, but the automatic-unban timer could not be saved: {error}"), true);
+    }
+    let human = format_duration(duration);
+    let epoch = expires_at / 1000;
+    let message = if already_banned {
+        format!("{name} is already banned — scheduled automatic unban in {human} (<t:{epoch}:R>)")
+    } else {
+        format!("Banned {name} for {human} — automatic unban <t:{epoch}:R>")
+    };
+    (message, false)
 }
 
 async fn pending_ban_store(
@@ -1512,6 +1653,15 @@ mod tests {
             find_user_ids("abcdefghij, usr_12345678-1234-1234-1234-123456789abc\ninvalid"),
             ["abcdefghij", "usr_12345678-1234-1234-1234-123456789abc"]
         );
+    }
+
+    #[test]
+    fn timed_ban_duration_parser_matches_java_units() {
+        assert_eq!(parse_duration_millis("30m"), Some(1_800_000));
+        assert_eq!(parse_duration_millis("6"), Some(21_600_000));
+        assert_eq!(parse_duration_millis("2w"), Some(1_209_600_000));
+        assert_eq!(format_duration(3 * 86_400_000 + 2 * 3_600_000), "3d2h");
+        assert_eq!(parse_duration_millis("tomorrow"), None);
     }
 }
 

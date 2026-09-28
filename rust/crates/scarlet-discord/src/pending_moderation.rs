@@ -16,6 +16,13 @@ pub struct PendingBanInfo {
     pub tags: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedBan {
+    pub expires_at: i64,
+    pub actor_user_id: String,
+}
+
 #[derive(Debug)]
 pub struct PendingModeration {
     file: PathBuf,
@@ -67,6 +74,23 @@ impl PendingModeration {
         target: &str,
     ) -> anyhow::Result<Option<String>> {
         Self::open(data_dir).take_pending(event_type, target)
+    }
+
+    pub fn set_timed_ban(&self, target: &str, timed_ban: TimedBan) -> anyhow::Result<()> {
+        self.edit_timed_bans(|timed| { timed.insert(target.to_string(), timed_ban); })
+    }
+
+    pub fn remove_timed_ban(&self, target: &str) -> anyhow::Result<bool> {
+        self.edit_timed_bans(|timed| timed.remove(target).is_some())
+    }
+
+    pub fn timed_bans(&self) -> HashMap<String, TimedBan> {
+        let _file_guard = FILE_LOCK.lock().unwrap();
+        let mut value = self.value.lock().unwrap();
+        if let Some(fresh) = self.read_disk() { *value = fresh; }
+        value.get("timedBans").cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
     }
 
     pub fn is_ban_info_owner(&self, target: &str, owner: &str) -> bool {
@@ -144,6 +168,21 @@ impl PendingModeration {
         Ok(output)
     }
 
+    fn edit_timed_bans<T>(&self, edit: impl FnOnce(&mut HashMap<String, TimedBan>) -> T) -> anyhow::Result<T> {
+        let _file_guard = FILE_LOCK.lock().unwrap();
+        let mut value = self.value.lock().unwrap();
+        if let Some(fresh) = self.read_disk() { *value = fresh; }
+        let mut timed: HashMap<String, TimedBan> = value.get("timedBans").cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+        let output = edit(&mut timed);
+        value.as_object_mut().expect("object established by open").insert(
+            "timedBans".to_string(), serde_json::to_value(timed)?);
+        let text = serde_json::to_string_pretty(&*value)?;
+        scarlet_core::file_backups::write(&self.file, &text)?;
+        Ok(output)
+    }
+
     fn read_disk(&self) -> Option<serde_json::Value> {
         std::fs::read_to_string(&self.file).ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -187,5 +226,19 @@ mod tests {
             &std::fs::read_to_string(dir.path().join("pending_moderation_actions.json")).unwrap()
         ).unwrap();
         assert!(saved["pendingModActions"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn timed_bans_round_trip_in_java_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PendingModeration::open(dir.path());
+        store.set_timed_ban("usr_target", TimedBan {
+            expires_at: 1234,
+            actor_user_id: "usr_actor".into(),
+        }).unwrap();
+        let timed = store.timed_bans();
+        assert_eq!(timed["usr_target"].expires_at, 1234);
+        assert_eq!(timed["usr_target"].actor_user_id, "usr_actor");
+        assert!(store.remove_timed_ban("usr_target").unwrap());
     }
 }
