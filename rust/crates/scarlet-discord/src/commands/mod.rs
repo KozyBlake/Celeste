@@ -585,6 +585,18 @@ pub(crate) async fn moderation_context_for_snowflake_with_override(
             .to_string());
     }
 
+    let current_user = context.client.get_current_user().await
+        .map_err(|err| format!("Could not verify Celeste's VRChat group permissions: {err}"))?;
+    let self_has_permission = context.client
+        .user_has_group_permission(&context.group_id, &current_user.id, permission)
+        .await
+        .map_err(|err| format!("Could not verify Celeste's VRChat group permissions: {err}"))?;
+    if !self_has_permission {
+        return Err(format!(
+            "Celeste's VRChat account does not have the group permission `{permission}` required for this action."
+        ));
+    }
+
     Ok(ModerationContext { actor_id: Some(actor_vrc_id), ..context })
 }
 

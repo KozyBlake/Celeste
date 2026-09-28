@@ -71,7 +71,7 @@ async fn begin_immediate(
         return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {target_id}")).await;
     }
     match context.client.get_group_member(&context.group_id, target_id).await {
-        Ok(Some(member)) if member.banned_at.is_some() => {
+        Ok(Some(member)) if is_banned_member(&member) => {
             return super::reply_ephemeral(ctx, command, "This VRChat user is already banned").await;
         }
         Ok(_) => {}
@@ -164,13 +164,28 @@ pub(crate) async fn execute(
     )
     .await?;
 
+    execute_with_context(ctx, &context, target_id, ban).await
+}
+
+pub(crate) fn is_banned_member(member: &scarlet_vrchat::models::GroupMember) -> bool {
+    member.banned_at.is_some()
+        || member.membership_status.as_deref().is_some_and(|status| status.eq_ignore_ascii_case("banned"))
+}
+
+pub(crate) async fn execute_with_context(
+    ctx: &Context,
+    context: &super::ModerationContext,
+    target_id: &str,
+    ban: bool,
+) -> Result<String, String> {
+
     let display_name = match context.client.get_user(target_id).await {
         Ok(user) => user.display_name.unwrap_or_else(|| target_id.to_string()),
         Err(err) => return Err(format!("No VRChat user found with id {target_id} ({err})")),
     };
 
     let currently_banned = match context.client.get_group_member(&context.group_id, target_id).await {
-        Ok(Some(member)) => member.banned_at.is_some(),
+        Ok(Some(member)) => is_banned_member(&member),
         Ok(None) => false,
         Err(err) => return Err(format!("Could not check ban status: {err}")),
     };
@@ -227,5 +242,20 @@ mod tests {
         let option = options.iter().find(|option| option["name"] == "tag-immediately").unwrap();
         assert_eq!(option["type"], 5);
         assert_ne!(option["required"], true);
+    }
+
+    #[test]
+    fn recognizes_banned_members_from_either_api_field() {
+        let by_date = scarlet_vrchat::models::GroupMember {
+            banned_at: Some("2026-01-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        let by_status = scarlet_vrchat::models::GroupMember {
+            membership_status: Some("BANNED".into()),
+            ..Default::default()
+        };
+        assert!(is_banned_member(&by_date));
+        assert!(is_banned_member(&by_status));
+        assert!(!is_banned_member(&Default::default()));
     }
 }

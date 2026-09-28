@@ -1189,30 +1189,12 @@ async fn handle_vrchat_user_multi(
     let mut skipped = 0usize;
     let mut failed = Vec::new();
     for id in &ids {
-        if context.client.get_user(id).await.is_err() {
-            failed.push(format!("`{id}` (user does not appear to exist)"));
-            continue;
-        }
-        let is_banned = match context.client.get_group_member(&context.group_id, id).await {
-            Ok(Some(member)) => member.banned_at.is_some(),
-            Ok(None) => false,
-            Err(err) => {
-                failed.push(format!("`{id}` (status check failed: {err})"));
-                continue;
-            }
-        };
-        if is_banned == ban {
-            skipped += 1;
-            continue;
-        }
-        let result = if ban {
-            context.client.ban_from_group(&context.group_id, id).await
-        } else {
-            context.client.unban_from_group(&context.group_id, id).await
-        };
-        match result {
+        match crate::commands::vrchat_user_ban::execute_with_context(ctx, &context, id, ban).await {
             Ok(_) => changed += 1,
-            Err(err) => failed.push(format!("`{id}` ({err})")),
+            Err(message) if message.contains("already banned") || message.contains("not banned") => {
+                skipped += 1;
+            }
+            Err(message) => failed.push(format!("`{id}` ({message})")),
         }
     }
     let verb = if ban { "Banned" } else { "Unbanned" };
