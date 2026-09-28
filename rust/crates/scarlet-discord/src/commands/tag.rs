@@ -259,7 +259,16 @@ fn tag_access_denial(
     data: &scarlet_core::data::ScarletData,
     audit_id: &str,
 ) -> Option<String> {
-    let Some(member) = command.member.as_ref() else {
+    tag_access_denial_for(command.member.as_deref(), &command.user.id.to_string(), data, audit_id)
+}
+
+pub(crate) fn tag_access_denial_for(
+    member: Option<&serenity::model::guild::Member>,
+    snowflake: &str,
+    data: &scarlet_core::data::ScarletData,
+    audit_id: &str,
+) -> Option<String> {
+    let Some(member) = member else {
         return Some("Could not determine your guild permissions.".to_string());
     };
     let permissions = member.permissions.unwrap_or_else(Permissions::empty);
@@ -270,8 +279,7 @@ fn tag_access_denial(
     {
         return None;
     }
-    let snowflake = command.user.id.to_string();
-    let linked = data.global_get_snowflake_id(&snowflake);
+    let linked = data.global_get_snowflake_id(snowflake);
     if let Some(linked) = linked {
         let metadata = data.audit_entry_metadata(audit_id);
         let actor = metadata
@@ -290,7 +298,7 @@ fn tag_access_denial(
     }
 }
 
-async fn refresh_aux_message(
+pub(crate) async fn refresh_aux_message(
     ctx: &Context,
     metadata: &scarlet_core::data::AuditEntryMetadata,
     tags: &scarlet_core::moderation_tags::ModerationTags,
@@ -317,7 +325,11 @@ async fn refresh_aux_message(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let mut content = format!("Unclaimed\n### Tags:\n{tag_text}");
+    let mut content = if metadata.entry_redacted {
+        format!("# **__REDACTED__**\n\nUnclaimed\n### Tags:\n{tag_text}")
+    } else {
+        format!("Unclaimed\n### Tags:\n{tag_text}")
+    };
     if let Some(description) = metadata
         .entry_description
         .as_deref()

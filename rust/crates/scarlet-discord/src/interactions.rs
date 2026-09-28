@@ -3,7 +3,8 @@
 
 use serenity::builder::{
     CreateActionRow, CreateInputText, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, CreateModal,
+    CreateInteractionResponseMessage, CreateModal, CreateSelectMenu, CreateSelectMenuKind,
+    CreateSelectMenuOption,
 };
 use serenity::client::Context;
 use serenity::model::application::ActionRowComponent;
@@ -11,6 +12,7 @@ use serenity::model::application::{
     ComponentInteraction, ComponentInteractionDataKind, ModalInteraction,
 };
 use serenity::model::prelude::InputTextStyle;
+use serenity::model::Permissions;
 
 use scarlet_vrchat::client::{
     PERMISSION_GROUP_INSTANCE_AGE_GATED_CREATE, PERMISSION_GROUP_INSTANCE_OPEN_CREATE,
@@ -180,6 +182,17 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction.data.custom_id.starts_with("edit-tags:")
+        || interaction.data.custom_id.starts_with("select-tags")
+        || interaction.data.custom_id.starts_with("edit-desc:")
+        || interaction.data.custom_id.starts_with("event-redact:")
+        || interaction.data.custom_id.starts_with("event-unredact:")
+    {
+        if let Err(err) = handle_audit_edit_component(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling audit edit interaction: {err}");
+        }
+        return;
+    }
     // The Ban/Unban buttons Scarlet attaches to its instance-event embeds
     // (port of `ScarletDiscordUI.vrchatUserBan`/`vrchatUserUnban`). Without
     // these the buttons on every emitted embed would do nothing.
@@ -238,6 +251,148 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if let Err(err) = handle_instance_component(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling component interaction: {err}");
     }
+}
+
+async fn audit_edit_data(
+    ctx: &Context,
+) -> Option<(
+    std::sync::Arc<scarlet_core::data::ScarletData>,
+    std::sync::Arc<scarlet_core::moderation_tags::ModerationTags>,
+)> {
+    let data = ctx.data.read().await;
+    Some((
+        data.get::<crate::data::ScarletDataKey>()?.clone(),
+        data.get::<crate::data::ModerationTagsKey>()?.clone(),
+    ))
+}
+
+fn moderation_access(interaction: &ComponentInteraction) -> bool {
+    interaction.member.as_ref().is_some_and(|member| {
+        member.permissions.unwrap_or_else(Permissions::empty).intersects(
+            Permissions::MODERATE_MEMBERS | Permissions::MANAGE_GUILD | Permissions::ADMINISTRATOR,
+        )
+    })
+}
+
+async fn handle_audit_edit_component(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let custom_id = &interaction.data.custom_id;
+    let audit_id = custom_id.rsplit_once(':').map(|(_, id)| id).unwrap_or_default();
+    if audit_id.is_empty() {
+        return ephemeral_component(ctx, interaction, "Invalid audit event id.").await;
+    }
+    let Some((data, tags)) = audit_edit_data(ctx).await else {
+        return ephemeral_component(ctx, interaction, "Moderation data is unavailable.").await;
+    };
+    if !data.audit_entry_metadata_exists(audit_id) {
+        return ephemeral_component(ctx, interaction, "Failed to find the audit event.").await;
+    }
+
+    if custom_id.starts_with("event-redact:") || custom_id.starts_with("event-unredact:") {
+        if !moderation_access(interaction) {
+            return ephemeral_component(ctx, interaction, "You do not have permission to modify audit event moderation state.").await;
+        }
+        let redact = custom_id.starts_with("event-redact:");
+        let mut metadata = data.audit_entry_metadata(audit_id);
+        if metadata.entry_redacted == redact {
+            return ephemeral_component(
+                ctx,
+                interaction,
+                if redact { "Event is already redacted." } else { "Event isn't yet redacted." },
+            ).await;
+        }
+        metadata.entry_redacted = redact;
+        data.set_audit_entry_metadata(audit_id, metadata.clone());
+        crate::commands::tag::refresh_aux_message(ctx, &metadata, &tags).await;
+        return ephemeral_component(ctx, interaction, if redact { "Event redacted." } else { "Event unredacted." }).await;
+    }
+
+    if let Some(denial) = crate::commands::tag::tag_access_denial_for(
+        interaction.member.as_ref(),
+        &interaction.user.id.to_string(),
+        &data,
+        audit_id,
+    ) {
+        return ephemeral_component(ctx, interaction, denial).await;
+    }
+
+    if custom_id.starts_with("edit-desc:") {
+        let metadata = data.audit_entry_metadata(audit_id);
+        let mut input = CreateInputText::new(
+            InputTextStyle::Paragraph,
+            "Input description",
+            format!("input-desc:{audit_id}"),
+        )
+        .placeholder("Event description")
+        .required(true);
+        if let Some(description) = metadata.entry_description {
+            input = input.value(description);
+        }
+        return interaction.create_response(
+            &ctx.http,
+            CreateInteractionResponse::Modal(
+                CreateModal::new(format!("edit-desc:{audit_id}"), "Edit description")
+                    .components(vec![CreateActionRow::InputText(input)]),
+            ),
+        ).await;
+    }
+
+    if custom_id.starts_with("select-tags") {
+        let ComponentInteractionDataKind::StringSelect { values } = &interaction.data.kind else {
+            return ephemeral_component(ctx, interaction, "Expected tag selections.").await;
+        };
+        let page = custom_id.strip_prefix("select-tags-")
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(page, _)| page.parse::<usize>().ok())
+            .unwrap_or(0);
+        let all_tags = tags.get_tags();
+        let page_values: Vec<String> = all_tags.iter().skip(page * 25).take(25).map(|tag| tag.value.clone()).collect();
+        let remove: Vec<String> = page_values.into_iter().filter(|value| !values.contains(value)).collect();
+        let metadata = data.audit_entry_metadata_edit_tags(audit_id, &remove, values.clone());
+        crate::commands::tag::refresh_aux_message(ctx, &metadata, &tags).await;
+        let shown = metadata.entry_tags.iter().map(|value| tags.get_tag_label(value)).collect::<Vec<_>>();
+        return ephemeral_component(ctx, interaction, format!("### Setting tags:\n{}", if shown.is_empty() { "*(none)*".to_string() } else { shown.join(", ") })).await;
+    }
+
+    let all_tags = tags.get_tags();
+    if all_tags.is_empty() {
+        return ephemeral_component(ctx, interaction, "No moderation tags!").await;
+    }
+    let existing = data.audit_entry_metadata(audit_id).entry_tags;
+    let rows = all_tags.chunks(25).take(5).enumerate().map(|(page, chunk)| {
+        let options = chunk.iter().map(|tag| {
+            let label = if tag.label.is_empty() { &tag.value } else { &tag.label };
+            let mut option = CreateSelectMenuOption::new(label.chars().take(100).collect::<String>(), tag.value.clone())
+                .default_selection(existing.contains(&tag.value));
+            if !tag.description.is_empty() {
+                option = option.description(tag.description.chars().take(100).collect::<String>());
+            }
+            option
+        }).collect();
+        CreateActionRow::SelectMenu(
+            CreateSelectMenu::new(format!("select-tags-{page}:{audit_id}"), CreateSelectMenuKind::String { options })
+                .placeholder(format!("Select tags ({}-{})", page * 25 + 1, page * 25 + chunk.len()))
+                .min_values(0)
+                .max_values(chunk.len() as u8),
+        )
+    }).collect();
+    ephemeral_component_with_rows(ctx, interaction, "Select every tag that applies. Use `/tag add` in the thread to search all tags at once.", rows).await
+}
+
+async fn ephemeral_component_with_rows(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+    message: &str,
+    rows: Vec<CreateActionRow>,
+) -> serenity::Result<()> {
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Message(
+            CreateInteractionResponseMessage::new().content(message).components(rows).ephemeral(true),
+        ),
+    ).await
 }
 
 async fn handle_discord_member_action(
@@ -729,6 +884,12 @@ async fn create_instance(
 }
 
 pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
+    if interaction.data.custom_id.starts_with("edit-desc:") {
+        if let Err(err) = handle_audit_description_modal(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling audit description modal: {err}");
+        }
+        return;
+    }
     if interaction
         .data
         .custom_id
@@ -779,6 +940,28 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
     }
+}
+
+async fn handle_audit_description_modal(
+    ctx: &Context,
+    interaction: &ModalInteraction,
+) -> serenity::Result<()> {
+    let audit_id = interaction.data.custom_id.strip_prefix("edit-desc:").unwrap_or_default();
+    let Some((data, tags)) = audit_edit_data(ctx).await else {
+        return ephemeral_modal(ctx, interaction, "Moderation data is unavailable.").await;
+    };
+    if let Some(denial) = crate::commands::tag::tag_access_denial_for(
+        interaction.member.as_ref(),
+        &interaction.user.id.to_string(),
+        &data,
+        audit_id,
+    ) {
+        return ephemeral_modal(ctx, interaction, denial).await;
+    }
+    let description = modal_text(interaction, &format!("input-desc:{audit_id}"));
+    let metadata = data.audit_entry_metadata_set_description(audit_id, Some(description.clone()));
+    crate::commands::tag::refresh_aux_message(ctx, &metadata, &tags).await;
+    ephemeral_modal(ctx, interaction, format!("### Setting description:\n{description}")).await
 }
 
 async fn handle_setting_modal(
