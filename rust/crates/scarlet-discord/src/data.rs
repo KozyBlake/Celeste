@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use serenity::prelude::{TypeMap, TypeMapKey};
@@ -126,6 +126,10 @@ impl DiscordConfigStore {
             file,
             value: Mutex::new(value),
         }
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        self.file.parent().unwrap_or_else(|| Path::new("."))
     }
 
     pub fn map_value(&self, map_name: &str, key: &str) -> Option<String> {
@@ -304,6 +308,11 @@ impl TypeMapKey for DiscordConfigKey {
     type Value = Arc<DiscordConfigStore>;
 }
 
+pub struct DiscordPermissionsKey;
+impl TypeMapKey for DiscordPermissionsKey {
+    type Value = Arc<crate::permissions::DiscordPermissions>;
+}
+
 pub struct HttpKey;
 impl TypeMapKey for HttpKey {
     type Value = SharedHttp;
@@ -324,9 +333,18 @@ pub struct ProcessController {
 }
 
 impl ProcessController {
-    pub fn new() -> (Arc<Self>, tokio::sync::mpsc::UnboundedReceiver<ProcessRequest>) {
+    pub fn new() -> (
+        Arc<Self>,
+        tokio::sync::mpsc::UnboundedReceiver<ProcessRequest>,
+    ) {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        (Arc::new(Self { queued: AtomicBool::new(false), sender }), receiver)
+        (
+            Arc::new(Self {
+                queued: AtomicBool::new(false),
+                sender,
+            }),
+            receiver,
+        )
     }
 
     pub fn restart(&self) -> bool {
@@ -378,12 +396,16 @@ pub struct SharedState {
 
 impl SharedState {
     pub fn insert_into(self, data: &mut TypeMap) {
+        let discord_permissions = Arc::new(crate::permissions::DiscordPermissions::open(
+            self.discord_config.data_dir(),
+        ));
         data.insert::<VrChatClientKey>(self.vrchat_client);
         data.insert::<HttpKey>(self.http);
         data.insert::<ScarletDataKey>(self.scarlet_data);
         data.insert::<SettingsKey>(self.settings);
         data.insert::<AvatarSearchKey>(self.avatar_search);
         data.insert::<DiscordConfigKey>(self.discord_config);
+        data.insert::<DiscordPermissionsKey>(discord_permissions);
         data.insert::<ProcessControllerKey>(self.process_controller);
         data.insert::<StaffListKey>(self.staff_list);
         data.insert::<SecretStaffListKey>(self.secret_staff_list);

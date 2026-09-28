@@ -1,6 +1,7 @@
-# Every invocable slash command in the Java build, generated from
-# ScarletDiscordCommands.java's @SlashCmd annotations (leaves only -
-# a group like `vrchat-group` is not itself invocable).
+# Every invocable slash command in the Java build. Most are generated from
+# ScarletDiscordCommands.java's @SlashCmd annotations; the two
+# `scarlet-discord-permissions` leaves are generated separately by DPerms.
+# Leaves only - a group like `vrchat-group` is not itself invocable.
 #
 # `command_surface_matches_java` in commands/mod.rs checks the Rust
 # registration against this list, so anything missing is named rather
@@ -22,6 +23,8 @@ config-set suggested-moderation kick-count
 config-set suggested-moderation period-days
 discord-ban
 discord-kick
+scarlet-discord-permissions list
+scarlet-discord-permissions set
 discord-user-info
 discord-warn
 export-log

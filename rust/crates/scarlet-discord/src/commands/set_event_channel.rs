@@ -80,6 +80,14 @@ const EXTENDED_TYPES: &[&str] = &[
     "groupex.action.fail",
 ];
 
+pub(crate) fn audit_types() -> &'static [&'static str] {
+    AUDIT_TYPES
+}
+
+pub(crate) fn extended_types() -> &'static [&'static str] {
+    EXTENDED_TYPES
+}
+
 #[derive(Clone, Copy)]
 pub enum RouteKind {
     Audit,
@@ -182,7 +190,7 @@ fn is_message_channel(kind: ChannelType) -> bool {
             | ChannelType::Forum
     )
 }
-fn title(id: &str) -> String {
+pub(crate) fn title(id: &str) -> String {
     let known = match id {
         "group.instance.announcement" => Some("Announcement"),
         "group.calendarEvent.create" => Some("Event Create"),

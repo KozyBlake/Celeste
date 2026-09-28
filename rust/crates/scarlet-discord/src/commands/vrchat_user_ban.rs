@@ -31,7 +31,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         return super::reply_ephemeral(ctx, command, "A `vrchat-user-id` option is required.").await;
     };
 
-    match execute(ctx, &command.user.id.to_string(), target_id, true).await {
+    match execute(ctx, &command.user.id.to_string(), command.member.as_deref(), target_id, true).await {
         Ok(message) => command
             .create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(message))
             .await
@@ -51,13 +51,16 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 pub(crate) async fn execute(
     ctx: &Context,
     actor_snowflake: &str,
+    member: Option<&serenity::model::guild::Member>,
     target_id: &str,
     ban: bool,
 ) -> Result<String, String> {
-    let context = super::moderation_context_for_snowflake(
+    let context = super::moderation_context_for_snowflake_with_override(
         ctx,
         actor_snowflake,
+        member,
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+        Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
     )
     .await?;
 

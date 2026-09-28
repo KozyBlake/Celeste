@@ -1,7 +1,9 @@
 //! Port of the non-report-template `/config-set` command groups.
 
 use chrono::{NaiveTime, TimeZone, Utc};
-use serenity::builder::{CreateCommand, CreateCommandOption};
+use serenity::builder::{
+    CreateAutocompleteResponse, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+};
 use serenity::client::Context;
 use serenity::model::application::{
     CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue,
@@ -33,12 +35,94 @@ fn time_leaf() -> CreateCommandOption {
     )
     .add_sub_option(
         CreateCommandOption::new(CommandOptionType::String, "time-zone-id", "The time zone")
-            .required(true),
+            .required(true)
+            .set_autocomplete(true),
     )
     .add_sub_option(
         CreateCommandOption::new(CommandOptionType::String, "time-of-day", "The time of day")
-            .required(true),
+            .required(true)
+            .set_autocomplete(true),
     )
+}
+
+pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
+    let focused = command.data.autocomplete();
+    let mut response = CreateAutocompleteResponse::new();
+    if let Some(focused) = focused {
+        match focused.name {
+            "time-zone-id" => {
+                for value in time_zone_suggestions(focused.value) {
+                    response = response.add_string_choice(value.clone(), value);
+                }
+            }
+            "time-of-day" => {
+                for value in time_suggestions(focused.value) {
+                    response = response.add_string_choice(value.clone(), value);
+                }
+            }
+            _ => {}
+        }
+    }
+    command
+        .create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response))
+        .await
+}
+
+fn time_zone_suggestions(typing: &str) -> Vec<String> {
+    let typing = typing.trim();
+    let mut zones: Vec<String> = chrono_tz::TZ_VARIANTS
+        .iter()
+        .map(|zone| zone.name().to_string())
+        .collect();
+    if typing.is_empty() {
+        zones.sort();
+        zones.truncate(25);
+        return zones;
+    }
+    let needle = typing.to_lowercase();
+    zones.sort_by_key(|zone| levenshtein(&needle, &zone.to_lowercase()));
+    zones.insert(0, typing.to_string());
+    zones.truncate(25);
+    zones
+}
+
+fn time_suggestions(typing: &str) -> Vec<String> {
+    let typing = typing.trim();
+    if typing.is_empty() {
+        return (0..24).map(|hour| format!("{hour:02}:00")).collect();
+    }
+    let bytes = typing.as_bytes();
+    let valid = bytes.len() >= 2
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && (bytes.len() == 2
+            || (bytes.len() <= 5 && bytes[2] == b':' && bytes[3..].iter().all(u8::is_ascii_digit)));
+    if !valid {
+        return Vec::new();
+    }
+    let hour = &typing[..2];
+    let mut values: Vec<String> = (0..12)
+        .map(|step| format!("{hour}:{:02}", step * 5))
+        .collect();
+    if !values.iter().any(|value| value == typing) {
+        values.insert(0, typing.to_string());
+    }
+    values
+}
+
+fn levenshtein(left: &str, right: &str) -> usize {
+    let mut previous: Vec<usize> = (0..=right.chars().count()).collect();
+    let mut current = vec![0; previous.len()];
+    for (row, left_char) in left.chars().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.chars().enumerate() {
+            current[column + 1] = (previous[column + 1] + 1)
+                .min(current[column] + 1)
+                .min(previous[column] + usize::from(left_char != right_char));
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.chars().count()]
 }
 
 pub fn register() -> CreateCommand {
@@ -152,7 +236,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             settings.next_mod_summary.set(Some(next));
             format!(
                 "Set mod summary generation time: next summary at <t:{}:f>",
-                next.timestamp()
+                (next + chrono::Duration::hours(24)).timestamp()
             )
         }
         ("outstanding-moderation", "time-of-day") => {
@@ -163,7 +247,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
             settings.next_outstanding_mod.set(Some(next));
             format!(
                 "Set outstanding mod summary generation time: next summary at <t:{}:f>",
-                next.timestamp()
+                (next + chrono::Duration::hours(24)).timestamp()
             )
         }
         _ => return super::reply_ephemeral(ctx, command, "Unknown configuration action.").await,
@@ -244,6 +328,8 @@ fn string_option<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn parses_named_time_zone() {
         let zone: chrono_tz::Tz = "America/New_York".parse().unwrap();
@@ -265,5 +351,27 @@ mod tests {
             -14_400
         );
         assert!(super::parse_fixed_offset("UTC").is_none());
+    }
+
+    #[test]
+    fn time_autocomplete_matches_javas_hour_and_five_minute_choices() {
+        assert_eq!(time_suggestions("").len(), 24);
+        assert_eq!(time_suggestions("")[0], "00:00");
+        assert_eq!(time_suggestions("")[23], "23:00");
+        assert_eq!(
+            time_suggestions("09"),
+            vec![
+                "09", "09:00", "09:05", "09:10", "09:15", "09:20", "09:25", "09:30", "09:35",
+                "09:40", "09:45", "09:50", "09:55"
+            ]
+        );
+        assert!(time_suggestions("tomorrow").is_empty());
+    }
+
+    #[test]
+    fn time_zone_autocomplete_includes_typed_offsets_like_java() {
+        let suggestions = time_zone_suggestions("+05:30");
+        assert_eq!(suggestions.first().map(String::as_str), Some("+05:30"));
+        assert!(suggestions.len() <= 25);
     }
 }

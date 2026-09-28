@@ -19,6 +19,7 @@ pub mod config_set;
 pub mod discord_user_info;
 pub mod discord_warn;
 pub mod discord_member_action;
+pub mod discord_permissions;
 pub mod export_log;
 pub mod set_event_channel;
 pub mod set_tts_voice;
@@ -265,12 +266,49 @@ pub fn all_commands() -> Vec<serenity::builder::CreateCommand> {
         settings::register(),
         ticket_config::register_auto_response(),
         ticket_config::register_message(),
+        discord_permissions::register(),
     ];
     if scarlet_core::features::animated_emoji_enabled() {
         commands.push(animated_emoji::register());
         commands.push(animated_emoji::register_message());
     }
     commands
+}
+
+/// Every invocable slash-command path, used by Java-compatible Discord
+/// permission autocomplete as well as the command-surface tests.
+pub fn slash_command_paths() -> Vec<String> {
+    fn collect(output: &mut Vec<String>, prefix: &str, options: Option<&serde_json::Value>) {
+        let children: Vec<&serde_json::Value> = options
+            .and_then(serde_json::Value::as_array)
+            .map(|options| options.iter().filter(|option| {
+                matches!(option.get("type").and_then(serde_json::Value::as_u64), Some(1) | Some(2))
+            }).collect())
+            .unwrap_or_default();
+        if children.is_empty() {
+            output.push(prefix.to_string());
+        } else {
+            for child in children {
+                if let Some(name) = child.get("name").and_then(serde_json::Value::as_str) {
+                    collect(output, &format!("{prefix} {name}"), child.get("options"));
+                }
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    for command in all_commands() {
+        let Ok(value) = serde_json::to_value(command) else { continue };
+        if value.get("type").and_then(serde_json::Value::as_u64).is_some_and(|kind| kind != 1) {
+            continue;
+        }
+        if let Some(name) = value.get("name").and_then(serde_json::Value::as_str) {
+            collect(&mut output, name, value.get("options"));
+        }
+    }
+    output.sort();
+    output.dedup();
+    output
 }
 
 pub async fn register_global_commands(ctx: &Context) {
@@ -334,6 +372,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         settings::NAME => settings::run(ctx, command).await,
         ticket_config::AUTO_RESPONSE_NAME => ticket_config::run_auto_response(ctx, command).await,
         ticket_config::MESSAGE_NAME => ticket_config::run_message(ctx, command).await,
+        discord_permissions::NAME => discord_permissions::run(ctx, command).await,
         animated_emoji::NAME => animated_emoji::run(ctx, command).await,
         other => {
             tracing::warn!("Received unknown slash command: {}", other);
@@ -349,6 +388,8 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
     let result = match command.data.name.as_str() {
         settings::NAME => settings::autocomplete(ctx, command).await,
         tag::NAME => tag::autocomplete(ctx, command).await,
+        config_set::NAME => config_set::autocomplete(ctx, command).await,
+        discord_permissions::NAME => discord_permissions::autocomplete(ctx, command).await,
         _ => command
             .create_response(
                 &ctx.http,
@@ -370,10 +411,6 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
 /// (`globalMetadata_getSnowflakeId`), then confirm that account holds the
 /// given VRChat group permission (`checkMemberHasVRChatPermission`).
 ///
-/// **Not ported**: Java's `checkMemberHasScarletPermission` fallback (a
-/// per-server override that can grant a Celeste-specific permission
-/// without needing the matching VRChat group role -- the role-to-Discord
-/// mapping config it depends on isn't ported, see PORTING.md) and
 /// `pendingModActions` (a dedup lock preventing two concurrent actions on
 /// the same target). Returns `Err(message)` with a ready-to-send ephemeral
 /// reply on the first failed precondition.
@@ -436,6 +473,20 @@ pub(crate) async fn moderation_context_for_snowflake(
     snowflake: &str,
     permission: &str,
 ) -> Result<ModerationContext, String> {
+    moderation_context_for_snowflake_with_override(ctx, snowflake, None, permission, None).await
+}
+
+/// Ban/unban's Java implementation permits the Discord-side
+/// `groupex-bans-manage` override when the linked VRChat account does not
+/// hold `group-bans-manage`. Other group commands intentionally do not use
+/// this fallback.
+pub(crate) async fn moderation_context_for_snowflake_with_override(
+    ctx: &Context,
+    snowflake: &str,
+    member: Option<&serenity::model::guild::Member>,
+    permission: &str,
+    override_permission: Option<&str>,
+) -> Result<ModerationContext, String> {
     let scarlet_data = {
         ctx.data
             .read()
@@ -457,7 +508,20 @@ pub(crate) async fn moderation_context_for_snowflake(
         .user_has_group_permission(&context.group_id, &actor_vrc_id, permission)
         .await
         .map_err(|err| format!("Could not check your VRChat group permissions: {err}"))?;
-    if !has_permission {
+    let has_override = if has_permission {
+        true
+    } else if let (Some(member), Some(override_permission)) = (member, override_permission) {
+        let permissions = { ctx.data.read().await.get::<crate::data::DiscordPermissionsKey>().cloned() };
+        permissions.is_some_and(|permissions| permissions.check(
+            crate::permissions::PermissionType::Other,
+            member,
+            override_permission,
+            false,
+        ))
+    } else {
+        false
+    };
+    if !has_override {
         return Err("You do not have permission to perform this action.\n||(Your admin can grant your linked VRChat account the relevant group permission.)||"
             .to_string());
     }

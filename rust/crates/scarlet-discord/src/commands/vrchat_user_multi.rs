@@ -24,10 +24,12 @@ pub fn register(ban: bool) -> CreateCommand {
 }
 
 pub async fn run(ctx: &Context, command: &CommandInteraction, ban: bool) -> serenity::Result<()> {
-    if let Err(message) = super::moderation_context(
+    if let Err(message) = super::moderation_context_for_snowflake_with_override(
         ctx,
-        command,
+        &command.user.id.to_string(),
+        command.member.as_deref(),
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+        Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
     )
     .await
     {

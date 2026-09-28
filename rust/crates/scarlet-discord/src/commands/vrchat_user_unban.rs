@@ -27,7 +27,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 
     // Same implementation as the ban path, with `ban: false` — see
     // `vrchat_user_ban::execute`.
-    match super::vrchat_user_ban::execute(ctx, &command.user.id.to_string(), target_id, false).await {
+    match super::vrchat_user_ban::execute(ctx, &command.user.id.to_string(), command.member.as_deref(), target_id, false).await {
         Ok(message) => command
             .create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(message))
             .await

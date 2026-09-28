@@ -1066,10 +1066,12 @@ async fn handle_vrchat_user_multi(
     if ids.is_empty() {
         return ephemeral_modal(ctx, interaction, "No user ids found!").await;
     }
-    let context = match crate::commands::moderation_context_for_snowflake(
+    let context = match crate::commands::moderation_context_for_snowflake_with_override(
         ctx,
         &interaction.user.id.to_string(),
+        interaction.member.as_ref(),
         scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+        Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
     )
     .await
     {
@@ -1333,7 +1335,7 @@ async fn handle_embed_ban_button(
         .await?;
 
     let (content, ephemeral) =
-        match crate::commands::vrchat_user_ban::execute(ctx, &interaction.user.id.to_string(), &target_id, ban).await {
+        match crate::commands::vrchat_user_ban::execute(ctx, &interaction.user.id.to_string(), interaction.member.as_ref(), &target_id, ban).await {
             // Java announces a successful ban publicly and keeps every
             // refusal ephemeral.
             Ok(message) => (message, false),
