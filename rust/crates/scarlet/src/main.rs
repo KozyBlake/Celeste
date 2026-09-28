@@ -55,11 +55,13 @@ fn main() -> anyhow::Result<()> {
     // the event listener's audit emitter can post without a `Context`.
     let discord_http: scarlet_discord::data::SharedHttp = Arc::new(tokio::sync::RwLock::new(None));
     let discord_config = Arc::new(scarlet_discord::data::DiscordConfigStore::open(&data_dir));
+    let (process_controller, mut process_requests) = scarlet_discord::data::ProcessController::new();
 
     let shared = scarlet_discord::data::SharedState {
         vrchat_client: Arc::new(tokio::sync::RwLock::new(None)),
         http: discord_http.clone(),
         discord_config: discord_config.clone(),
+        process_controller,
         scarlet_data: Arc::new(scarlet_core::data::ScarletData::open(&data_dir)),
         settings: settings.clone(),
         staff_list: Arc::new(scarlet_core::staff_list::StaffList::open(&data_dir, "staff_list.json")),
@@ -80,6 +82,31 @@ fn main() -> anyhow::Result<()> {
 
     let tts = Arc::new(scarlet_ui::tts::TtsService::new());
     let pronoun_lists = Arc::new(scarlet_core::pronoun_lists::PronounLists::open(&data_dir));
+
+    // Give Discord enough time to deliver the command acknowledgement, then
+    // relaunch this exact executable with its original arguments. This is the
+    // Rust equivalent of Java's exit-code-69/self-relaunch path and works in
+    // both GUI and headless modes.
+    runtime.spawn(async move {
+        if let Some(scarlet_discord::data::ProcessRequest::Restart) = process_requests.recv().await {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if let Err(error) = std::fs::write("scarlet.version", scarlet_core::identity::VERSION) {
+                tracing::warn!(%error, "Failed to write scarlet.version before restart");
+            }
+            let relaunched = std::env::current_exe().and_then(|executable| {
+                let mut command = std::process::Command::new(executable);
+                command.args(std::env::args_os().skip(1));
+                command.spawn().map(|_| ())
+            });
+            match relaunched {
+                Ok(()) => std::process::exit(0),
+                Err(error) => {
+                    tracing::error!(%error, "Failed to relaunch Scarlet");
+                    std::process::exit(69);
+                }
+            }
+        }
+    });
 
     // The VRChat log tailer feeds the ported event listener, which drives
     // the instance table. `spawn_tailer` reports and then stops on a machine

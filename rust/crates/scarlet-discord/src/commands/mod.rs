@@ -24,6 +24,7 @@ pub mod set_event_channel;
 pub mod set_tts_voice;
 pub mod set_voice_channel;
 pub mod server_config;
+pub mod server_restart;
 pub mod settings;
 pub mod ticket_config;
 pub mod aux_webhooks;
@@ -214,6 +215,7 @@ pub async fn register_global_commands(ctx: &Context) {
         server_config::register_channel(server_config::ChannelSetting::ActionLog),
         server_config::register_account_age(),
         server_config::register_auto_invite(),
+        server_restart::register(),
         settings::register(),
         ticket_config::register_auto_response(),
         ticket_config::register_message(),
@@ -276,6 +278,7 @@ pub async fn dispatch(ctx: &Context, command: &CommandInteraction) {
         server_config::ACTION_LOG_NAME => server_config::run_channel(ctx, command, server_config::ChannelSetting::ActionLog).await,
         server_config::ACCOUNT_AGE_NAME => server_config::run_account_age(ctx, command).await,
         server_config::AUTO_INVITE_NAME => server_config::run_auto_invite(ctx, command).await,
+        server_restart::NAME => server_restart::run(ctx, command).await,
         settings::NAME => settings::run(ctx, command).await,
         ticket_config::AUTO_RESPONSE_NAME => ticket_config::run_auto_response(ctx, command).await,
         ticket_config::MESSAGE_NAME => ticket_config::run_message(ctx, command).await,

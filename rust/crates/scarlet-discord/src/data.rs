@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serenity::prelude::{TypeMap, TypeMapKey};
@@ -308,6 +309,43 @@ impl TypeMapKey for HttpKey {
     type Value = SharedHttp;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessRequest {
+    Restart,
+}
+
+/// Single-shot application lifecycle control used by `/server-restart`.
+/// The binary owns the receiver and performs the actual relaunch; keeping
+/// that process-level action outside the Discord crate also makes duplicate
+/// command invocations deterministic and testable.
+pub struct ProcessController {
+    queued: AtomicBool,
+    sender: tokio::sync::mpsc::UnboundedSender<ProcessRequest>,
+}
+
+impl ProcessController {
+    pub fn new() -> (Arc<Self>, tokio::sync::mpsc::UnboundedReceiver<ProcessRequest>) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        (Arc::new(Self { queued: AtomicBool::new(false), sender }), receiver)
+    }
+
+    pub fn restart(&self) -> bool {
+        if self.queued.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        if self.sender.send(ProcessRequest::Restart).is_err() {
+            self.queued.store(false, Ordering::Release);
+            return false;
+        }
+        true
+    }
+}
+
+pub struct ProcessControllerKey;
+impl TypeMapKey for ProcessControllerKey {
+    type Value = Arc<ProcessController>;
+}
+
 /// Every piece of shared app state a command handler might need, bundled so
 /// `connect_and_serve` (and its callers in `scarlet`/`scarlet-ui`) take one
 /// value instead of an ever-growing positional-argument list as more of
@@ -322,6 +360,7 @@ pub struct SharedState {
     /// same instance that background emitters read, so routing changes take
     /// effect immediately instead of only after a restart.
     pub discord_config: Arc<DiscordConfigStore>,
+    pub process_controller: Arc<ProcessController>,
     pub scarlet_data: Arc<scarlet_core::data::ScarletData>,
     pub settings: Arc<scarlet_core::settings::Settings>,
     pub staff_list: Arc<scarlet_core::staff_list::StaffList>,
@@ -340,6 +379,7 @@ impl SharedState {
         data.insert::<SettingsKey>(self.settings);
         data.insert::<AvatarSearchKey>(Arc::new(crate::avatar_search::AvatarSearch::default()));
         data.insert::<DiscordConfigKey>(self.discord_config);
+        data.insert::<ProcessControllerKey>(self.process_controller);
         data.insert::<StaffListKey>(self.staff_list);
         data.insert::<SecretStaffListKey>(self.secret_staff_list);
         data.insert::<ModerationTagsKey>(self.moderation_tags);
@@ -355,6 +395,14 @@ impl SharedState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn process_controller_queues_only_one_restart() {
+        let (controller, mut requests) = ProcessController::new();
+        assert!(controller.restart());
+        assert!(!controller.restart());
+        assert_eq!(requests.recv().await, Some(ProcessRequest::Restart));
+    }
 
     #[test]
     fn discord_config_preserves_unknown_java_fields() {
