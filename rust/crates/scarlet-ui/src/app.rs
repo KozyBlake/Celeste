@@ -1285,6 +1285,13 @@ impl eframe::App for ScarletApp {
                     let colour = if signed_in { egui::Color32::from_rgb(95, 200, 120) } else { egui::Color32::from_rgb(235, 165, 65) };
                     ui.colored_label(colour, vrchat_status);
                 }
+                // A dropped TTS announcement is otherwise silent in every
+                // sense: nothing plays and nothing is shown.
+                if let Some(problem) = self.state.tts_status() {
+                    ui.separator();
+                    ui.colored_label(egui::Color32::from_rgb(235, 165, 65), "TTS")
+                        .on_hover_text(&problem);
+                }
                 if let Some(announcement) = self.state.announcement() {
                     ui.separator();
                     ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Celeste announcement"));

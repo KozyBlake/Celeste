@@ -588,6 +588,53 @@ pub(crate) async fn moderation_context(
     moderation_context_for_snowflake(ctx, &command.user.id.to_string(), permission).await
 }
 
+/// Java's `closeInstance` is the one `vrchat-group` subcommand that does
+/// *not* go through `checkMemberAndSelfPerms`: it checks only the invoking
+/// member's `group_instance_manage`, with its own flat denial and no
+/// bot-side permission check at all (`ScarletDiscordCommands.java:3043-3047`).
+/// Requiring Celeste's own account to hold the permission here would refuse
+/// calls Java lets through.
+pub(crate) async fn member_only_moderation_context(
+    ctx: &Context,
+    command: &CommandInteraction,
+    permission: &str,
+    denial: &str,
+) -> Result<ModerationContext, String> {
+    let context = vrchat_context(ctx).await?;
+    let Some(member) = command.member.as_deref() else {
+        return Err("Could not determine your guild permissions.".to_string());
+    };
+    if !member_has_vrchat_permission(ctx, member, permission).await {
+        return Err(denial.to_string());
+    }
+    let scarlet_data = { ctx.data.read().await.get::<crate::data::ScarletDataKey>().cloned() };
+    let actor_id = scarlet_data
+        .and_then(|data| data.global_get_snowflake_id(&command.user.id.to_string()));
+    Ok(ModerationContext { actor_id, ..context })
+}
+
+/// [`moderation_context`] with Java's per-subcommand denial wording, which
+/// names both the permission and what it would have allowed
+/// ("You need the VRChat group permission `group-bans-manage` to list group
+/// bans."). `action` is the exact phrase Java passes
+/// `VrchatGroups.checkMemberAndSelfPerms` for that subcommand.
+pub(crate) async fn group_moderation_context(
+    ctx: &Context,
+    command: &CommandInteraction,
+    permission: &str,
+    action: &str,
+) -> Result<ModerationContext, String> {
+    moderation_context_for_snowflake_with_override(
+        ctx,
+        &command.user.id.to_string(),
+        command.member.as_deref(),
+        permission,
+        None,
+        Some(action),
+    )
+    .await
+}
+
 /// Modal/component counterpart to [`moderation_context`].
 pub(crate) async fn moderation_context_for_snowflake(
     ctx: &Context,
@@ -600,11 +647,22 @@ pub(crate) async fn moderation_context_for_snowflake(
 /// Java spells the ban/unban denial out in full, naming the exact override
 /// command an admin would run. `action` is the verb phrase Java uses
 /// ("ban users", "unban users").
-fn permission_denial(action: Option<&str>, override_permission: Option<&str>) -> String {
+fn permission_denial(
+    action: Option<&str>,
+    override_permission: Option<&str>,
+    permission: &str,
+) -> String {
     match (action, override_permission) {
+        // Ban/unban (`ScarletDiscordCommands.java:2290`), which is the only
+        // family with a Discord-side override to point at.
         (Some(action), Some(override_permission)) => format!(
             "You do not have permission to {action}.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/scarlet-discord-permissions type:Other name:{override_permission} value:Allow`)||"
         ),
+        // `VrchatGroups.checkMemberAndSelfPerms` (`:2572`), which names the
+        // exact permission an admin has to grant.
+        (Some(action), None) => {
+            format!("You need the VRChat group permission `{permission}` to {action}.")
+        }
         _ => "You do not have permission to perform this action.\n||(Your admin can grant your linked VRChat account the relevant group permission.)||".to_string(),
     }
 }
@@ -637,11 +695,29 @@ pub(crate) async fn moderation_context_for_snowflake_with_override(
         )
     })?;
 
-    let has_permission = context
+    // Java's `VrchatGroups.checkMemberAndSelfPerms` lets the group's owner
+    // through regardless of roles:
+    //
+    //     boolean memberAllowed = Objects.equals(vrcActorId, vrc.groupOwnerId)
+    //         || checkMemberHasVRChatPermission(permission, event.getMember());
+    //
+    // (ScarletDiscordCommands.java:2568). This is a *second*, command-layer
+    // owner check, separate from the one inside
+    // `checkSelfUserHasVRChatPermission`, and it was dropped along with it.
+    // Without it a group owner who never granted themselves an explicit role
+    // is denied every gated command in their own group.
+    let actor_owns_the_group = context
         .client
-        .user_has_group_permission(&context.group_id, &actor_vrc_id, permission)
+        .group_owner_id(&context.group_id)
         .await
-        .map_err(|err| format!("Could not check your VRChat group permissions: {err}"))?;
+        .is_some_and(|owner_id| owner_id == actor_vrc_id);
+
+    let has_permission = actor_owns_the_group
+        || context
+            .client
+            .user_has_group_permission(&context.group_id, &actor_vrc_id, permission)
+            .await
+            .map_err(|err| format!("Could not check your VRChat group permissions: {err}"))?;
     let has_override = if has_permission {
         true
     } else if let (Some(member), Some(override_permission)) = (member, override_permission) {
@@ -656,7 +732,7 @@ pub(crate) async fn moderation_context_for_snowflake_with_override(
         false
     };
     if !has_override {
-        return Err(permission_denial(denial_action, override_permission));
+        return Err(permission_denial(denial_action, override_permission, permission));
     }
 
     let current_user = context.client.get_current_user().await
@@ -736,6 +812,7 @@ mod tests {
         let message = super::permission_denial(
             Some("ban users"),
             Some(scarlet_core::permission::ScarletPermission::GroupexBansManage.id()),
+            scarlet_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
         );
         assert_eq!(
             message,
@@ -745,8 +822,19 @@ mod tests {
 
     #[test]
     fn commands_without_an_override_keep_the_generic_denial() {
-        assert!(super::permission_denial(None, None).starts_with("You do not have permission to perform this action."));
-        assert!(super::permission_denial(Some("ban users"), None).starts_with("You do not have permission to perform this action."));
+        assert!(super::permission_denial(None, None, "group-bans-manage")
+            .starts_with("You do not have permission to perform this action."));
+    }
+
+    /// `VrchatGroups.checkMemberAndSelfPerms` names both the permission and
+    /// what it would have allowed, so a moderator can tell their admin
+    /// exactly what to grant.
+    #[test]
+    fn group_denial_names_the_permission_and_the_action_like_java() {
+        assert_eq!(
+            super::permission_denial(Some("list group bans"), None, "group-bans-manage"),
+            "You need the VRChat group permission `group-bans-manage` to list group bans."
+        );
     }
 
     #[test]

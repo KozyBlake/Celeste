@@ -665,6 +665,18 @@ impl VrChatClient {
         self.get_group_cached(group_id, include_roles, crate::entity_cache::ALWAYS_FETCH).await
     }
 
+    /// Java keeps the configured group's owner in `ScarletVRChat.groupOwnerId`,
+    /// filled from `group.getOwnerId()` when the group is resolved at startup
+    /// (`ScarletVRChat.java:1284`). Resolving it on demand through the day-old
+    /// group cache costs nothing after the first call and avoids a startup
+    /// ordering dependency.
+    pub async fn group_owner_id(&self, group_id: &str) -> Option<String> {
+        self.get_group_cached(group_id, false, crate::entity_cache::within_1_day())
+            .await
+            .ok()
+            .and_then(|group| group.owner_id)
+    }
+
     /// Port of `getGroup(String groupId, Boolean includeRoles, long minEpoch)`.
     ///
     /// Note that Java caches by group id alone, ignoring `includeRoles`, so

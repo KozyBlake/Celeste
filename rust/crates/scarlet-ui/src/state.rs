@@ -33,6 +33,10 @@ type PendingUpdate = Box<dyn FnMut(&mut ConnectedPlayer) + Send>;
 #[derive(Default)]
 pub struct UiStateInner {
     pub connection_status: String,
+    /// Why the last TTS announcement didn't reach Discord voice, if it
+    /// didn't. Shown in the status bar so a misrouted announcement is
+    /// visible in the app instead of only in the log.
+    pub tts_status: Option<String>,
     pub players: HashMap<String, ConnectedPlayer>,
     /// Display order, kept separate from the map so `fire_sort` can reorder
     /// without touching player data — Java's "resort the table model" step.
@@ -232,6 +236,14 @@ impl UiState {
     pub fn ordered_players(&self) -> Vec<ConnectedPlayer> {
         let inner = self.0.lock().unwrap();
         inner.player_order.iter().filter_map(|id| inner.players.get(id).cloned()).collect()
+    }
+
+    pub fn set_tts_status(&self, status: Option<String>) {
+        self.0.lock().unwrap().tts_status = status;
+    }
+
+    pub fn tts_status(&self) -> Option<String> {
+        self.0.lock().unwrap().tts_status.clone()
     }
 
     pub fn connection_status(&self) -> String {

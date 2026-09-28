@@ -302,6 +302,7 @@ pub struct TtsSinkAdapter {
     service: std::sync::Arc<TtsService>,
     settings: std::sync::Arc<scarlet_core::settings::Settings>,
     discord: Option<scarlet_discord::voice_tts::DiscordVoiceTts>,
+    ui: Option<crate::UiState>,
 }
 
 impl TtsSinkAdapter {
@@ -309,8 +310,20 @@ impl TtsSinkAdapter {
         service: std::sync::Arc<TtsService>,
         settings: std::sync::Arc<scarlet_core::settings::Settings>,
         discord: Option<scarlet_discord::voice_tts::DiscordVoiceTts>,
+        ui: Option<crate::UiState>,
     ) -> Self {
-        TtsSinkAdapter { service, settings, discord }
+        TtsSinkAdapter { service, settings, discord, ui }
+    }
+
+    /// Copies the Discord voice route's last problem into the status bar.
+    /// The queue is asynchronous, so this reflects the *previous*
+    /// announcement -- enough to turn "TTS isn't coming through" into a
+    /// sentence naming the cause, without blocking the caller on playback.
+    fn publish_route_status(&self) {
+        let (Some(ui), Some(discord)) = (self.ui.as_ref(), self.discord.as_ref()) else {
+            return;
+        };
+        ui.set_tts_status(discord.last_problem());
     }
 
     /// Port of `TtsService.playPreparedAudio`'s routing decision.
@@ -330,12 +343,21 @@ impl TtsSinkAdapter {
             return;
         }
         match &self.discord {
-            Some(discord) => discord.submit(text, &voice),
+            Some(discord) => {
+                discord.submit(text, &voice);
+                self.publish_route_status();
+            }
             // Java logs exactly this and drops the utterance rather than
             // falling back to the speakers, because "not the local device"
             // is the thing the user asked for.
-            None => tracing::warn!("TTS({marker}): No audio output route available (Discord voice is not connected, and \
-                 \"use default audio device\" is off)"),
+            None => {
+                let problem = "TTS has no output route: Discord voice isn't available and \
+                               \"use default audio device\" is off.";
+                tracing::warn!("TTS({marker}): {problem}");
+                if let Some(ui) = self.ui.as_ref() {
+                    ui.set_tts_status(Some(problem.to_string()));
+                }
+            }
         }
     }
 }

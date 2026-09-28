@@ -9,6 +9,38 @@ use serenity::model::id::{ChannelId, GuildId};
 #[derive(Clone)]
 pub struct DiscordVoiceTts {
     sender: tokio::sync::mpsc::UnboundedSender<(String, String)>,
+    /// Why the last announcement didn't reach voice, if it didn't. Read by
+    /// the UI so "TTS isn't coming through on Discord" has an answer in the
+    /// app rather than only in the log.
+    status: Arc<std::sync::Mutex<TtsRouteStatus>>,
+}
+
+#[derive(Default)]
+struct TtsRouteStatus {
+    last_problem: Option<String>,
+}
+
+/// Logs `problem` the first time it is seen and whenever it changes, so a
+/// misconfiguration is loud once instead of once per announcement.
+fn report(status: &Arc<std::sync::Mutex<TtsRouteStatus>>, problem: &str) {
+    let mut status = match status.lock() {
+        Ok(status) => status,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if status.last_problem.as_deref() != Some(problem) {
+        tracing::warn!("{problem}");
+        status.last_problem = Some(problem.to_string());
+    }
+}
+
+fn clear(status: &Arc<std::sync::Mutex<TtsRouteStatus>>) {
+    let mut status = match status.lock() {
+        Ok(status) => status,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if status.last_problem.take().is_some() {
+        tracing::info!("Discord TTS is working again");
+    }
 }
 
 impl DiscordVoiceTts {
@@ -18,28 +50,51 @@ impl DiscordVoiceTts {
         runtime: tokio::runtime::Handle,
     ) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+        let status = Arc::new(std::sync::Mutex::new(TtsRouteStatus::default()));
+        let worker_status = status.clone();
         runtime.spawn(async move {
             while let Some((text, voice)) = receiver.recv().await {
-                let Some(guild_id) = config
-                    .string("guildSf")
-                    .and_then(|id| id.parse::<u64>().ok())
-                else {
+                // Every one of these used to be a bare `continue`, so a
+                // missing voice channel looked exactly like a working
+                // config that simply never spoke. Say why, once per
+                // distinct reason, and remember it for the status bar.
+                let guild_id = config.string("guildSf").and_then(|id| id.parse::<u64>().ok());
+                let Some(guild_id) = guild_id else {
+                    report(
+                        &worker_status,
+                        "No Discord server is configured, so TTS has nowhere to speak \
+                         (run the setup wizard, or set `guildSf`).",
+                    );
                     continue;
                 };
-                let Some(channel_id) = config
-                    .string("audioChannelSf")
-                    .and_then(|id| id.parse::<u64>().ok())
-                else {
+                let channel_id =
+                    config.string("audioChannelSf").and_then(|id| id.parse::<u64>().ok());
+                let Some(channel_id) = channel_id else {
+                    report(
+                        &worker_status,
+                        "No Discord voice channel is set, so TTS announcements are being \
+                         dropped - use `/set-voice-channel` to pick one.",
+                    );
                     continue;
                 };
-                if let Err(error) =
-                    synthesize_and_queue(manager.clone(), guild_id, channel_id, text, voice).await
+                match synthesize_and_queue(manager.clone(), guild_id, channel_id, text, voice).await
                 {
-                    tracing::warn!(%error, "Could not queue Discord TTS announcement");
+                    Ok(()) => clear(&worker_status),
+                    Err(error) => {
+                        report(&worker_status, &format!("Discord TTS failed: {error}"));
+                    }
                 }
             }
         });
-        Self { sender }
+        Self { sender, status }
+    }
+
+    /// The reason the last announcement didn't reach Discord voice, if any.
+    pub fn last_problem(&self) -> Option<String> {
+        match self.status.lock() {
+            Ok(status) => status.last_problem.clone(),
+            Err(poisoned) => poisoned.into_inner().last_problem.clone(),
+        }
     }
 
     pub fn submit(&self, text: &str, voice: &str) {
@@ -57,8 +112,19 @@ async fn synthesize_and_queue(
     text: String,
     voice: String,
 ) -> anyhow::Result<()> {
-    let output = std::env::temp_dir().join(format!("scarlet-tts-{}.wav", uuid::Uuid::new_v4()));
+    let output = std::env::temp_dir().join(format!("celeste-tts-{}.wav", uuid::Uuid::new_v4()));
     synthesize_wav(&output, &text, &voice).await?;
+    // A synthesizer that "succeeds" but writes nothing produces silence in
+    // voice, which is indistinguishable from TTS being broken. Catch it
+    // here where we can still say what happened.
+    match tokio::fs::metadata(&output).await {
+        Ok(meta) if meta.len() > 0 => {}
+        Ok(_) => {
+            let _ = tokio::fs::remove_file(&output).await;
+            anyhow::bail!("the speech synthesizer produced an empty audio file");
+        }
+        Err(error) => anyhow::bail!("the speech synthesizer wrote no audio file ({error})"),
+    }
     let call = manager
         .join(GuildId::new(guild_id), ChannelId::new(channel_id))
         .await?;
@@ -78,7 +144,12 @@ async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Resul
     {
         let executable = find_on_path("espeak-ng")
             .or_else(|| find_on_path("espeak"))
-            .ok_or_else(|| anyhow::anyhow!("Discord TTS requires eSpeak NG/eSpeak on Linux"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Discord TTS needs eSpeak NG on Linux and neither `espeak-ng` nor \
+                     `espeak` is on PATH (on Arch: `pacman -S espeak-ng`)"
+                )
+            })?;
         let mut command = tokio::process::Command::new(executable);
         command.arg("-w").arg(output);
         if !voice.trim().is_empty() {
@@ -138,6 +209,26 @@ fn find_on_path(executable: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A misconfiguration should be loud once, not once per announcement,
+    /// and should clear when it starts working.
+    #[test]
+    fn a_repeated_problem_is_only_recorded_once_and_clears_on_success() {
+        let status = Arc::new(std::sync::Mutex::new(TtsRouteStatus::default()));
+        report(&status, "no voice channel");
+        report(&status, "no voice channel");
+        assert_eq!(
+            status.lock().unwrap().last_problem.as_deref(),
+            Some("no voice channel")
+        );
+        report(&status, "something else");
+        assert_eq!(
+            status.lock().unwrap().last_problem.as_deref(),
+            Some("something else")
+        );
+        clear(&status);
+        assert!(status.lock().unwrap().last_problem.is_none());
+    }
 
     #[test]
     fn path_lookup_finds_a_known_shell() {

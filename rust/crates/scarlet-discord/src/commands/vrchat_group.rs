@@ -453,7 +453,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 }
 
 async fn audit_types(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_AUDIT_VIEW).await {
+    let context = match super::group_moderation_context(ctx, command, PERMISSION_GROUP_AUDIT_VIEW, "view audit event types").await {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
@@ -735,7 +735,7 @@ async fn search_members(
         .clamp(1, 100) as u32;
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_MEMBERS_VIEWALL).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_MEMBERS_VIEWALL, "search group members").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -785,7 +785,7 @@ async fn list_bans(
         .unwrap_or(25)
         .clamp(1, 100) as u32;
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_GROUP_BANS_MANAGE).await
+    let context = match super::group_moderation_context(ctx, command, PERMISSION_GROUP_BANS_MANAGE, "list group bans").await
     {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
@@ -832,7 +832,7 @@ async fn list_invites(
         .clamp(1, 100) as u32;
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE, "list group invites").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -880,7 +880,7 @@ async fn list_join_requests(
         .clamp(1, 100) as u32;
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_INVITES_MANAGE, "list group join requests").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -928,7 +928,7 @@ async fn list_join_requests(
 
 async fn view_announcement(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, "view group announcements").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -972,7 +972,7 @@ async fn create_announcement(
     let image_id = find_string(sub_options, "image-file-id");
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, "create group announcements").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -1023,7 +1023,7 @@ async fn delete_announcement(
     }
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, "delete group announcements").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -1070,7 +1070,7 @@ async fn list_posts(
         .clamp(1, 100) as u32;
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, "list group posts").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -1125,7 +1125,7 @@ async fn create_post(
     let role_id = find_string(sub_options, "post-role");
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, "create group posts").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -1184,7 +1184,7 @@ async fn delete_post(
     }
 
     let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE).await {
+        match super::group_moderation_context(ctx, command, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, "delete group posts").await {
             Ok(context) => context,
             Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
         };
@@ -1225,7 +1225,7 @@ async fn transfer_check(
         return super::reply_ephemeral(ctx, command, "`vrchat-user` is required.").await;
     };
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_ALL).await {
+    let context = match super::group_moderation_context(ctx, command, PERMISSION_ALL, "check group transfer eligibility").await {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
@@ -1315,7 +1315,7 @@ async fn transfer_start(
         .await;
     }
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_ALL).await {
+    let context = match super::group_moderation_context(ctx, command, PERMISSION_ALL, "transfer group ownership").await {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
@@ -1378,7 +1378,7 @@ async fn transfer_cancel(
         .await;
     }
 
-    let context = match super::moderation_context(ctx, command, PERMISSION_ALL).await {
+    let context = match super::group_moderation_context(ctx, command, PERMISSION_ALL, "cancel group ownership transfer").await {
         Ok(context) => context,
         Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
     };
@@ -1628,11 +1628,17 @@ async fn close_instance(
     let closed_at =
         close_in_minutes.map(|minutes| chrono::Utc::now() + chrono::Duration::minutes(minutes));
 
-    let context =
-        match super::moderation_context(ctx, command, PERMISSION_GROUP_INSTANCE_MANAGE).await {
-            Ok(context) => context,
-            Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
-        };
+    let context = match super::member_only_moderation_context(
+        ctx,
+        command,
+        PERMISSION_GROUP_INSTANCE_MANAGE,
+        "You do not have permission to close instances",
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(message) => return super::reply_ephemeral(ctx, command, &message).await,
+    };
 
     match context
         .client

@@ -160,6 +160,7 @@ fn main() -> anyhow::Result<()> {
                 shared.discord_config.clone(),
                 runtime.handle().clone(),
             )),
+            Some(ui_state.clone()),
         )),
         avatar_search: Arc::new(scarlet_discord::avatar_search::ListenerAvatarSearch::new(
             avatar_search.clone(),
