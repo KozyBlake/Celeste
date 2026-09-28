@@ -182,6 +182,12 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction.data.custom_id.starts_with("group-request-") {
+        if let Err(err) = handle_group_request(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error responding to group join request: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("import-watched-groups:") {
         if let Err(err) = handle_import_watched_groups(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error importing watched groups from message attachments: {err}");
@@ -263,6 +269,54 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
     if let Err(err) = handle_instance_component(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling component interaction: {err}");
     }
+}
+
+async fn handle_group_request(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let Some((operation, target_id)) = split_custom_id(&interaction.data.custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid group join request action.").await;
+    };
+    let (action, block, past_tense) = match operation {
+        "group-request-accept" => ("accept", None, "Accepted"),
+        "group-request-reject" => ("reject", Some(false), "Rejected"),
+        "group-request-block" => ("reject", Some(true), "Blocked"),
+        _ => return ephemeral_component(ctx, interaction, "Unknown group join request action.").await,
+    };
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+    ).await?;
+    let context = crate::commands::moderation_context_for_snowflake_with_override(
+        ctx,
+        &interaction.user.id.to_string(),
+        interaction.member.as_ref(),
+        scarlet_vrchat::client::PERMISSION_GROUP_INVITES_MANAGE,
+        None,
+    ).await;
+    let (message, ephemeral) = match context {
+        Ok(context) => {
+            let name = context.client.get_user(target_id).await.ok()
+                .and_then(|user| user.display_name)
+                .unwrap_or_else(|| target_id.to_string());
+            match context.client.respond_group_join_request(
+                &context.group_id,
+                target_id,
+                action,
+                block,
+            ).await {
+                Ok(()) => (format!("{past_tense} {name}'s join request"), false),
+                Err(error) => (format!("Failed to respond to {name}'s join request: {error}"), true),
+            }
+        }
+        Err(message) => (message, true),
+    };
+    let _ = interaction.delete_response(&ctx.http).await;
+    interaction.create_followup(
+        &ctx.http,
+        CreateInteractionResponseFollowup::new().content(message).ephemeral(ephemeral),
+    ).await.map(|_| ())
 }
 
 async fn handle_import_watched_groups(

@@ -627,6 +627,33 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// `PUT /groups/{groupId}/requests/{userId}` from the community OpenAPI
+    /// `respondGroupJoinRequest` operation.
+    pub async fn respond_group_join_request(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        action: &str,
+        block: Option<bool>,
+    ) -> Result<(), VrChatError> {
+        let mut body = serde_json::json!({ "action": action });
+        if let Some(block) = block {
+            body["block"] = serde_json::json!(block);
+        }
+        let response = self.http
+            .put(self.url(&format!("/groups/{group_id}/requests/{user_id}")))
+            .json(&body)
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(VrChatError::Api { status, body })
+        }
+    }
+
     /// Port of `banFromGroup(String targetUserId)`: `POST
     /// /groups/{groupId}/bans` with `{"userId": ...}`.
     pub async fn ban_from_group(
@@ -2271,6 +2298,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(requests[0].user_id.as_deref(), Some("usr_2"));
+    }
+
+    #[tokio::test]
+    async fn respond_group_join_request_sends_action_and_optional_block() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/groups/grp_1/requests/usr_1"))
+            .and(body_json(serde_json::json!({"action": "reject", "block": true})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        client.respond_group_join_request("grp_1", "usr_1", "reject", Some(true)).await.unwrap();
     }
 
     #[tokio::test]

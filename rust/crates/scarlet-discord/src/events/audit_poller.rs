@@ -154,7 +154,13 @@ impl AuditPoller {
                 None
             };
             let embed = entry_embed(&entry, target.as_ref());
-            match channel.send_message(&http, CreateMessage::new().embed(embed)).await {
+            let mut message = CreateMessage::new().embed(embed);
+            if entry.event_type == "group.request.create" {
+                if let Some(target_id) = entry.target_id.as_deref() {
+                    message = message.components(group_request_controls(target_id));
+                }
+            }
+            match channel.send_message(&http, message).await {
                 Ok(message) => {
                     metadata.guild_snowflake = self.config.string("guildSf");
                     metadata.channel_snowflake = Some(channel.get().to_string());
@@ -328,6 +334,20 @@ pub(crate) fn moderation_controls(entry: &GroupAuditLogEntry) -> Vec<CreateActio
     rows
 }
 
+fn group_request_controls(target_id: &str) -> Vec<CreateActionRow> {
+    vec![CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("group-request-accept:{target_id}"))
+            .style(serenity::model::application::ButtonStyle::Success)
+            .label("Accept"),
+        CreateButton::new(format!("group-request-reject:{target_id}"))
+            .style(serenity::model::application::ButtonStyle::Secondary)
+            .label("Reject"),
+        CreateButton::new(format!("group-request-block:{target_id}"))
+            .style(serenity::model::application::ButtonStyle::Danger)
+            .label("Block"),
+    ])]
+}
+
 pub(crate) fn thread_name(entry: &GroupAuditLogEntry) -> String {
     let value = entry
         .description
@@ -377,5 +397,14 @@ mod tests {
             assert!(is_moderation(event));
         }
         assert!(!is_moderation("group.member.join"));
+    }
+
+    #[test]
+    fn join_request_controls_offer_all_java_actions() {
+        let value = serde_json::to_value(group_request_controls("usr_1")).unwrap();
+        let text = value.to_string();
+        assert!(text.contains("group-request-accept:usr_1"));
+        assert!(text.contains("group-request-reject:usr_1"));
+        assert!(text.contains("group-request-block:usr_1"));
     }
 }
