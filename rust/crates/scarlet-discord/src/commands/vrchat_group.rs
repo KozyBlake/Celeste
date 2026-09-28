@@ -1208,11 +1208,12 @@ async fn delete_post(
     }
 }
 
-fn yes_no(value: bool) -> &'static str {
-    if value {
-        "Yes"
-    } else {
-        "No"
+fn yes_no(value: Option<bool>) -> &'static str {
+    // Java: nullable Boolean -> Unknown / Yes / No.
+    match value {
+        Some(true) => "Yes",
+        Some(false) => "No",
+        None => "Unknown",
     }
 }
 
@@ -1766,8 +1767,9 @@ mod tests {
 
     #[test]
     fn yes_no_formats_booleans() {
-        assert_eq!(yes_no(true), "Yes");
-        assert_eq!(yes_no(false), "No");
+        assert_eq!(yes_no(Some(true)), "Yes");
+        assert_eq!(yes_no(Some(false)), "No");
+        assert_eq!(yes_no(None), "Unknown");
     }
 
     #[test]

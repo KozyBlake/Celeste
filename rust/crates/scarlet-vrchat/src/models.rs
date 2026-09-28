@@ -328,16 +328,19 @@ pub struct GroupTransferable {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GroupTransferableRequirements {
-    #[serde(rename = "groupNotMonetized", default)]
-    pub group_not_monetized: bool,
-    #[serde(rename = "hasVRCPlus", default)]
-    pub has_vrc_plus: bool,
-    #[serde(rename = "hasVerifiedEmail", default)]
-    pub has_verified_email: bool,
-    #[serde(rename = "targetCanOwnMoreGroups", default)]
-    pub target_can_own_more_groups: bool,
-    #[serde(rename = "targetIsGroupMember", default)]
-    pub target_is_group_member: bool,
+    // Java's generated model exposes nullable `Boolean`s and the command
+    // renders a missing API field as "Unknown". `Option<bool>` preserves
+    // that distinction instead of turning absence into a hard failure.
+    #[serde(rename = "groupNotMonetized")]
+    pub group_not_monetized: Option<bool>,
+    #[serde(rename = "hasVRCPlus")]
+    pub has_vrc_plus: Option<bool>,
+    #[serde(rename = "hasVerifiedEmail")]
+    pub has_verified_email: Option<bool>,
+    #[serde(rename = "targetCanOwnMoreGroups")]
+    pub target_can_own_more_groups: Option<bool>,
+    #[serde(rename = "targetIsGroupMember")]
+    pub target_is_group_member: Option<bool>,
 }
 
 /// Hand-picked subset of `Instance`. Not confirmed field-by-field against

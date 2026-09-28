@@ -2857,8 +2857,30 @@ mod tests {
             .await
             .unwrap();
         let req = transferable.requirements.unwrap();
-        assert!(req.group_not_monetized);
-        assert!(!req.has_vrc_plus);
+        assert_eq!(req.group_not_monetized, Some(true));
+        assert_eq!(req.has_vrc_plus, Some(false));
+    }
+
+    #[tokio::test]
+    async fn group_transferability_preserves_missing_requirement_fields() {
+        // The bug this guards: serde defaults made an omitted field look
+        // like `false`, while Java reports a nullable Boolean as Unknown.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/transfer"))
+            .and(query_param("transferTargetId", "usr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requirements": { "groupNotMonetized": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let req = client.get_group_transferability("grp_1", "usr_1").await
+            .unwrap().requirements.unwrap();
+        assert_eq!(req.group_not_monetized, Some(true));
+        assert_eq!(req.has_vrc_plus, None);
+        assert_eq!(req.has_verified_email, None);
     }
 
     #[tokio::test]
