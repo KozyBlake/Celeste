@@ -264,6 +264,16 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
         }
         return;
     }
+    if interaction.data.custom_id.starts_with("discord-ban-confirm:")
+        || interaction.data.custom_id.starts_with("discord-kick-confirm:")
+        || interaction.data.custom_id == "discord-ban-cancel"
+        || interaction.data.custom_id == "discord-kick-cancel"
+    {
+        if let Err(err) = handle_legacy_discord_member_action(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling Java Discord moderation confirmation: {err}");
+        }
+        return;
+    }
     if interaction
         .data
         .custom_id
@@ -671,6 +681,81 @@ async fn handle_discord_member_action(
         )
         .await
         .map(|_| ())
+}
+
+async fn handle_legacy_discord_member_action(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    use crate::commands::discord_member_action::DiscordModerationDraft;
+
+    let custom_id = interaction.data.custom_id.as_str();
+    if custom_id == "discord-ban-cancel" || custom_id == "discord-kick-cancel" {
+        let title = if custom_id.starts_with("discord-ban") { "Ban" } else { "Kick" };
+        return interaction.create_response(
+            &ctx.http,
+            CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .content(format!("{title} cancelled."))
+                    .components(Vec::new()),
+            ),
+        ).await;
+    }
+
+    let Some((action, target_id, reason)) = parse_legacy_discord_member_action(custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid Discord member id.").await;
+    };
+    if !interaction.app_permissions.is_some_and(|permissions| permissions.contains(action.permission())) {
+        return ephemeral_component(
+            ctx,
+            interaction,
+            format!("The bot does not have the **{} Members** permission in this server.", action.title()),
+        ).await;
+    }
+    let Some(member) = interaction.member.as_ref() else {
+        return ephemeral_component(ctx, interaction, "Could not determine your server membership.").await;
+    };
+    let Some(guild_id) = interaction.guild_id else {
+        return ephemeral_component(ctx, interaction, "Could not find the configured Discord server.").await;
+    };
+    let target_id = serenity::model::id::UserId::new(target_id);
+    let target_name = guild_id.member(ctx, target_id).await.ok()
+        .map(|member| member.display_name().to_string())
+        .unwrap_or_else(|| target_id.to_string());
+    let draft = DiscordModerationDraft {
+        action,
+        owner_id: interaction.user.id,
+        guild_id,
+        target_id,
+        target_name,
+        reason,
+    };
+    interaction.create_response(
+        &ctx.http,
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)),
+    ).await?;
+    let message = match crate::commands::discord_member_action::perform(ctx, draft, member).await {
+        Ok(message) | Err(message) => message,
+    };
+    interaction.create_followup(
+        &ctx.http,
+        CreateInteractionResponseFollowup::new().content(message).ephemeral(true),
+    ).await.map(|_| ())
+}
+
+fn parse_legacy_discord_member_action(
+    custom_id: &str,
+) -> Option<(crate::commands::discord_member_action::MemberAction, u64, Option<String>)> {
+    use crate::commands::discord_member_action::MemberAction;
+    let mut parts = custom_id.splitn(3, ':');
+    let action = match parts.next()? {
+        "discord-ban-confirm" => MemberAction::Ban,
+        "discord-kick-confirm" => MemberAction::Kick,
+        _ => return None,
+    };
+    let target_id = parts.next()?.parse().ok()?;
+    let reason = parts.next().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+    Some((action, target_id, reason))
 }
 
 async fn handle_audit_aux_webhooks(
@@ -1713,6 +1798,20 @@ mod tests {
         assert_eq!(parse_duration_millis("2w"), Some(1_209_600_000));
         assert_eq!(format_duration(3 * 86_400_000 + 2 * 3_600_000), "3d2h");
         assert_eq!(parse_duration_millis("tomorrow"), None);
+    }
+
+    #[test]
+    fn parses_java_discord_moderation_confirmation_ids() {
+        use crate::commands::discord_member_action::MemberAction;
+        assert_eq!(
+            parse_legacy_discord_member_action("discord-ban-confirm:123:reason: with colon"),
+            Some((MemberAction::Ban, 123, Some("reason: with colon".into())))
+        );
+        assert_eq!(
+            parse_legacy_discord_member_action("discord-kick-confirm:456"),
+            Some((MemberAction::Kick, 456, None))
+        );
+        assert_eq!(parse_legacy_discord_member_action("discord-ban-confirm:not-a-user"), None);
     }
 }
 
