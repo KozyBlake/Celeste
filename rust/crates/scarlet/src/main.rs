@@ -105,6 +105,20 @@ fn main() -> anyhow::Result<()> {
     });
     runtime.spawn(scarlet_events::listener::run(listener, tailer_events));
 
+    // Java's main loop continuously polls the VRChat group audit endpoint.
+    // This is separate from the local output-log listener above: it is what
+    // creates durable moderation records and Discord moderation threads.
+    runtime.spawn(scarlet_discord::events::audit_poller::run(
+        scarlet_discord::events::audit_poller::AuditPoller::new(
+            shared.vrchat_client.clone(),
+            shared.http.clone(),
+            shared.discord_config.clone(),
+            shared.scarlet_data.clone(),
+            settings.clone(),
+            shared.secret_staff_list.clone(),
+        ),
+    ));
+
     // Report the VRChat session in the status bar. Whether the session
     // arrives from the setup wizard or from an unattended login differs by
     // launch path, so this watches the shared slot both fill rather than

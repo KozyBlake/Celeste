@@ -133,6 +133,15 @@ impl DiscordConfigStore {
             .map(str::to_string)
     }
 
+    pub fn string(&self, field: &str) -> Option<String> {
+        self.value
+            .lock()
+            .unwrap()
+            .get(field)?
+            .as_str()
+            .map(str::to_string)
+    }
+
     pub fn string_map(&self, map_name: &str) -> HashMap<String, String> {
         self.value
             .lock()

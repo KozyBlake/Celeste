@@ -232,6 +232,21 @@ credential login reuses an existing `twoFactorAuth` cookie.
 Alt-account jars (`<domain>.cookieStoreAlt`) are not ported, consistent with
 the rest of the alt-account support.
 
+**Update 33 (group audit polling)**: Rust now runs Java's missing
+`queryEmit` loop. It re-queries a five-minute overlap for VRChat's
+out-of-order ingestion, advances long backlogs in bounded 24-hour windows,
+honours `audit_catchup_max_days` and `audit_polling_interval`, persists the
+same `lastAuditQuery` cursor, deduplicates by audit id, writes compatible
+`gaud/<id>` metadata, and routes normal/secret-staff events through the
+configured Discord audit maps. Moderation events create threads and retain
+the audit id in their controls, which is the prerequisite for `/tag` and
+the description/redaction interactions. Non-moderation audit events use a
+generic complete embed for now; Java's event-specific decorations remain
+to be ported incrementally. The Discord routing store is also now one shared
+live instance: previously commands updated one in-memory `discord_bot.json`
+copy while background emitters continued reading a stale second copy until
+restart.
+
 ## Working rules for continuing this port
 
 - **Commit after every subsystem chunk that compiles**, not just at the end. This is the #1 fix versus the first attempt.

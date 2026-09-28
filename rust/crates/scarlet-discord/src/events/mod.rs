@@ -9,4 +9,5 @@
 //! thing that reads them is `onChannelCreate`.
 
 pub mod audit_emitter;
+pub mod audit_poller;
 pub mod ticket;
