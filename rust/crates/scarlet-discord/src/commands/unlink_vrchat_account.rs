@@ -5,15 +5,13 @@
 //! **Simplified**: Java replies in the invoking user's own Discord locale
 //! via `I18n.tr(userLocale, ...)`; no i18n/translation-string system is
 //! ported in this crate (a large, separate subsystem), so replies are
-//! plain English. `pendingVrcLinks` (in-flight bio-verification requests
-//! from `/link-vrchat-account`, itself not ported -- see PORTING.md) has
-//! nothing to clear here since it doesn't exist in this port either.
+//! plain English.
 
 use serenity::builder::CreateCommand;
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
 
-use crate::data::ScarletDataKey;
+use crate::data::{PendingVrChatLinksKey, ScarletDataKey};
 
 pub const NAME: &str = "unlink-vrchat-account";
 
@@ -33,13 +31,17 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         return super::reply_ephemeral(ctx, command, "You don't have a linked VRChat account.").await;
     };
 
+    if let Some(pending) = ctx.data.read().await.get::<PendingVrChatLinksKey>().cloned() {
+        pending.write().await.remove(&snowflake);
+    }
     scarlet_data.unlink_by_snowflake(&snowflake);
     super::reply_ephemeral(
         ctx,
         command,
         &format!(
             "Unlinked your Discord account from VRChat user [{linked_vrc_id}](<https://vrchat.com/home/user/{linked_vrc_id}>).\n\
-            This only removes the link record - it doesn't change your roles or VRChat group membership."
+            This only removes the link record - it doesn't change your roles or VRChat group membership.\n\
+            You can run `/link-vrchat-account` again to re-link and test."
         ),
     )
     .await

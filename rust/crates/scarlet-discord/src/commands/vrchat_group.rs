@@ -17,10 +17,8 @@
 //! per-item embeds (`discord.interactions.Pagination` with
 //! `MessageEmbed[]`) — still one entry per item with the same core fields,
 //! just plain text split via [`super::paginate_on_lines`].
-//! `create-announcement`/`create-post` drop the optional `image-file-id`
-//! option (VRChat file uploads aren't ported — a Discord attachment would
-//! need to be re-uploaded to VRChat's file API first, a separate
-//! not-yet-ported endpoint). `delete-announcement`/`delete-post` keep
+//! `create-announcement`/`create-post` pass Java's optional existing
+//! `image-file-id` through to VRChat. `delete-announcement`/`delete-post` keep
 //! Java's exact safety check: `confirm-delete` must be the literal string
 //! `DELETE`; `transfer-start`/`transfer-cancel` likewise require
 //! `confirm-group-id` to exactly match the configured group id.

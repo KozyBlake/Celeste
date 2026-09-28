@@ -18,7 +18,7 @@ use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedValue};
 use serenity::model::Permissions;
 
-use crate::data::ScarletDataKey;
+use crate::data::{PendingVrChatLinksKey, ScarletDataKey};
 
 pub const NAME: &str = "unlink-vrchat-account-for";
 
@@ -57,8 +57,12 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
 
     let mut any = false;
     let mut lines = Vec::new();
+    let pending = { ctx.data.read().await.get::<PendingVrChatLinksKey>().cloned() };
 
     if let Some(discord_user_id) = &discord_user_id {
+        if let Some(pending) = &pending {
+            pending.write().await.remove(discord_user_id);
+        }
         match scarlet_data.unlink_by_snowflake(discord_user_id) {
             Some(vrc_id) => {
                 any = true;
@@ -73,6 +77,9 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     if let Some(vrchat_user_id) = &vrchat_user_id {
         match scarlet_data.unlink_by_id(vrchat_user_id) {
             Some(snowflake) => {
+                if let Some(pending) = &pending {
+                    pending.write().await.remove(&snowflake);
+                }
                 any = true;
                 lines.push(format!(
                     "Unlinked VRChat user [{vrchat_user_id}](<https://vrchat.com/home/user/{vrchat_user_id}>) from <@{snowflake}>."
