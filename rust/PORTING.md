@@ -381,6 +381,56 @@ Known, deliberate deviations confirmed in this pass:
 Still to diff: `vrchat-group`, `watched-*`, `config`/`settings` and the
 reports families.
 
+## Entity caching (28 Sep 2026)
+
+`ScarletJsonCache` was ported but **nothing was wired to it**: every VRChat
+entity lookup in the Rust build was an unconditional HTTP request. Java runs
+all of them through per-kind disk caches with a max-age per call site
+(`ScarletVRChat.getUser(String, long)` and its identical siblings for
+groups, worlds, avatars, user groups and public profiles).
+
+This was not just slower. Watched-entity autocomplete resolves every watched
+entity's name **per keystroke**; Java answers that from disk, the port was
+answering it with up to 25 live API calls. Sustained, that is the kind of
+request rate VRChat suspends accounts over — the reason this was fixed ahead
+of the remaining command families.
+
+What landed:
+
+- `scarlet_vrchat::entity_cache` holds the per-kind caches (`usr`,
+  `pubprof`, `wrld`, `grp`, `gmem`, `avtr` — Java's kind strings, which are
+  the on-disk directory names and so part of data compatibility) plus the
+  shared read/record helpers. The layout is Java's:
+  `<data dir>/caches/<kind>/<id>.json` with a `known_404s.json` per kind, so
+  a Java install's caches are picked up as-is.
+- The caches are process-wide, installed from `main` right after the data
+  directory resolves, matching Java's
+  `static final File caches = new File(Scarlet.dir, "caches")`. A client
+  built without them (every test, the whole wiremock suite) behaves exactly
+  as before.
+- `get_user`, `get_avatar`, `get_world`, `get_group`, `get_user_groups` and
+  `get_public_profile` now follow Java's three steps: a new-enough cache
+  entry wins; a known 404 returns without fetching; otherwise fetch, then
+  record the value or the 404. Each gained a `*_cached(id, min_epoch)`
+  sibling, and `get_user_fresh` ports `getUserFresh`.
+- Call sites now pass the max-age Java passes them:
+  `ALWAYS_PREFER_CACHED` for `vrchat-user`/`vrchat-world`/watched-entity
+  autocomplete, `within_1_day()` for the staff-list rendering,
+  `/vrchat-user-info`, the moderation embeds, and the avatar-match scan
+  (which fans out over every avatar sharing a display name and was the
+  largest single burst of calls Celeste made).
+
+**One deliberate deviation.** Java's `ScarletJsonCache.getEntry` enforces
+`minEpoch` when loading from disk but *not* on an in-memory LRU hit: with no
+populator it returns the too-old entry anyway. So Java's `getUser(id)` —
+which is `getUser(id, ALWAYS_FETCH)` — silently stops fetching for as long
+as the entry stays in the LRU, which is presumably why `getUserFresh` had to
+exist. This port honours `min_epoch` on that path too, so `ALWAYS_FETCH`
+means what it is named. Reproducing the bug would have made every default
+call site serve a stale display name or ban state for the process lifetime;
+the caching benefit is unaffected, since it comes from the call sites that
+pass a real max-age.
+
 ## Working rules for continuing this port
 
 - **Commit after every subsystem chunk that compiles**, not just at the end. This is the #1 fix versus the first attempt.

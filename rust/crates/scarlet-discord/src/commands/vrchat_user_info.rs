@@ -48,7 +48,8 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         return super::reply_ephemeral(ctx, command, "Celeste isn't logged in to VRChat right now.").await;
     };
 
-    let display_name = match client.get_user(&vrc_id).await {
+    // Java `vrchatUserInfo`: `getUser(vrcId, within1day)`.
+    let display_name = match client.get_user_cached(&vrc_id, scarlet_vrchat::entity_cache::within_1_day()).await {
         Ok(user) => user.display_name.unwrap_or_else(|| vrc_id.clone()),
         Err(err) => {
             return super::reply_ephemeral(ctx, command, &format!("No VRChat user found with id {vrc_id} ({err})")).await;

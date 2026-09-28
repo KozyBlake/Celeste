@@ -1310,7 +1310,15 @@ impl ScarletEventListener {
         let client = self.vrchat().await;
         for candidate in &candidates {
             let Some(client) = client.as_ref() else { break };
-            let Ok(avatar) = client.get_avatar(&candidate.id).await else { continue };
+            // Java: `getAvatar(avatarId, within1day)` -- this loop fans out
+            // over every avatar sharing a display name, so an uncached scan
+            // is the single largest burst of API calls Celeste makes.
+            let Ok(avatar) = client
+                .get_avatar_cached(&candidate.id, scarlet_vrchat::entity_cache::within_1_day())
+                .await
+            else {
+                continue;
+            };
             if avatar.name != avatar_display_name {
                 continue;
             }

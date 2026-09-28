@@ -94,6 +94,13 @@ pub enum LoginOutcome {
 pub struct VrChatClient {
     http: Client,
     base_url: String,
+    /// The per-entity JSON caches `ScarletVRChat` keeps (`cachedUsers`,
+    /// `cachedGroups`, ...). `None` means "no caching at all": every lookup
+    /// fetches and nothing is recorded, which is what the wiremock tests
+    /// want and what a client built before the data directory is known
+    /// gets. See [`crate::entity_cache`] and
+    /// [`VrChatClient::with_entity_caches`].
+    caches: Option<Arc<crate::entity_cache::EntityCaches>>,
     /// The live cookie jar, kept so the session (VRChat's `auth` cookie and
     /// the `twoFactorAuth` cookie that follows a verified code) can be saved
     /// and restored across restarts — see [`VrChatClient::export_cookies`].
@@ -162,8 +169,25 @@ impl VrChatClient {
         Ok(VrChatClient {
             http,
             base_url,
+            // Java's caches are a static shared by every `ScarletVRChat`,
+            // so a client picks them up rather than being handed them.
+            caches: crate::entity_cache::shared(),
             cookies,
         })
+    }
+
+    /// Attaches Java's on-disk entity caches, rooted at `caches_root`
+    /// (`<data dir>/caches`, matching `new File(Scarlet.dir, "caches")`).
+    /// Without this the client always fetches, so the application calls it
+    /// once the data directory is resolved.
+    pub fn with_entity_caches(mut self, caches_root: &std::path::Path) -> Self {
+        self.caches = Some(Arc::new(crate::entity_cache::EntityCaches::new(caches_root)));
+        self
+    }
+
+    /// Whether entity caching is active, for the status line and tests.
+    pub fn has_entity_caches(&self) -> bool {
+        self.caches.is_some()
     }
 
     /// The current session as `Set-Cookie` lines, one per cookie, for
@@ -439,13 +463,60 @@ impl VrChatClient {
     }
 
     /// Port of `getUser(String userId)`: `GET /users/{userId}`.
+    /// Port of `getUser(String userId)`, i.e. `getUser(userId,
+    /// Long.MAX_VALUE)`: no cached entry is ever new enough, so this always
+    /// fetches — but it still short-circuits on a known 404 and still
+    /// records the result, exactly as Java does.
     pub async fn get_user(&self, user_id: &str) -> Result<crate::models::User, VrChatError> {
-        let response = self
-            .http
-            .get(self.url(&format!("/users/{user_id}")))
-            .send()
-            .await?;
-        Self::parse_response(response).await
+        self.get_user_cached(user_id, crate::entity_cache::ALWAYS_FETCH).await
+    }
+
+    /// Port of `getUser(String userId, long minEpoch)`. Call sites that
+    /// tolerate stale data (autocomplete, list rendering) pass
+    /// [`ALWAYS_PREFER_CACHED`](crate::entity_cache::ALWAYS_PREFER_CACHED)
+    /// and then cost nothing after the first fetch.
+    pub async fn get_user_cached(
+        &self,
+        user_id: &str,
+        min_epoch: i64,
+    ) -> Result<crate::models::User, VrChatError> {
+        let cache = self.caches.as_ref().map(|caches| &caches.users);
+        match crate::entity_cache::decide(cache, user_id, min_epoch) {
+            crate::entity_cache::CacheDecision::Hit(user) => return Ok(user),
+            crate::entity_cache::CacheDecision::Known404 => return Err(Self::known_404("user", user_id)),
+            crate::entity_cache::CacheDecision::Miss => {}
+        }
+        let result = async {
+            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+            Self::parse_response(response).await
+        }
+        .await;
+        crate::entity_cache::record(cache, user_id, &result);
+        result
+    }
+
+    /// Port of `getUserFresh(String userId)`: bypasses the cache read,
+    /// refreshes the entry and clears any stale 404.
+    pub async fn get_user_fresh(&self, user_id: &str) -> Result<crate::models::User, VrChatError> {
+        let cache = self.caches.as_ref().map(|caches| &caches.users);
+        let result = async {
+            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+            Self::parse_response(response).await
+        }
+        .await;
+        crate::entity_cache::record(cache, user_id, &result);
+        result
+    }
+
+    /// The error a known-404 short-circuit produces. Java returns `null`
+    /// here; the port's getters are `Result`, and every caller already
+    /// treats an error as "no such entity", so this keeps the shape without
+    /// making every call site handle a third case.
+    fn known_404(kind: &str, id: &str) -> VrChatError {
+        VrChatError::Api {
+            status: StatusCode::NOT_FOUND,
+            body: format!("{kind} `{id}` is in the known-404 cache"),
+        }
     }
 
     /// Fetches the public-profile shape that carries `bio` in current API
@@ -454,13 +525,36 @@ impl VrChatClient {
         &self,
         user_id: &str,
     ) -> Result<crate::models::PublicProfile, VrChatError> {
-        let response = self
-            .http
-            .get(self.url(&format!("/users/{user_id}/profile")))
-            .query(&[("asSelf", "false"), ("withGroupsAndWorlds", "false")])
-            .send()
-            .await?;
-        Self::parse_response(response).await
+        self.get_public_profile_cached(user_id, crate::entity_cache::ALWAYS_FETCH).await
+    }
+
+    /// Port of `getPublicProfile(String userId, long minEpoch)`
+    /// (`cachedPublicProfiles`, kind `pubprof`).
+    pub async fn get_public_profile_cached(
+        &self,
+        user_id: &str,
+        min_epoch: i64,
+    ) -> Result<crate::models::PublicProfile, VrChatError> {
+        let cache = self.caches.as_ref().map(|caches| &caches.public_profiles);
+        match crate::entity_cache::decide(cache, user_id, min_epoch) {
+            crate::entity_cache::CacheDecision::Hit(profile) => return Ok(profile),
+            crate::entity_cache::CacheDecision::Known404 => {
+                return Err(Self::known_404("public profile for", user_id))
+            }
+            crate::entity_cache::CacheDecision::Miss => {}
+        }
+        let result = async {
+            let response = self
+                .http
+                .get(self.url(&format!("/users/{user_id}/profile")))
+                .query(&[("asSelf", "false"), ("withGroupsAndWorlds", "false")])
+                .send()
+                .await?;
+            Self::parse_response(response).await
+        }
+        .await;
+        crate::entity_cache::record(cache, user_id, &result);
+        result
     }
 
     /// Port of `getUserGroups(String userId)`: `GET /users/{userId}/groups`.
@@ -474,12 +568,32 @@ impl VrChatClient {
         &self,
         user_id: &str,
     ) -> Result<Vec<crate::models::LimitedUserGroup>, VrChatError> {
-        let response = self
-            .http
-            .get(self.url(&format!("/users/{user_id}/groups")))
-            .send()
-            .await?;
-        Self::parse_response(response).await
+        self.get_user_groups_cached(user_id, crate::entity_cache::ALWAYS_FETCH).await
+    }
+
+    /// Port of `getUserGroups(String userId, long minEpoch)` (`cachedUserGroups`,
+    /// kind `gmem`).
+    pub async fn get_user_groups_cached(
+        &self,
+        user_id: &str,
+        min_epoch: i64,
+    ) -> Result<Vec<crate::models::LimitedUserGroup>, VrChatError> {
+        let cache = self.caches.as_ref().map(|caches| &caches.user_groups);
+        match crate::entity_cache::decide(cache, user_id, min_epoch) {
+            crate::entity_cache::CacheDecision::Hit(groups) => return Ok(groups),
+            crate::entity_cache::CacheDecision::Known404 => {
+                return Err(Self::known_404("user groups for", user_id))
+            }
+            crate::entity_cache::CacheDecision::Miss => {}
+        }
+        let result = async {
+            let response =
+                self.http.get(self.url(&format!("/users/{user_id}/groups"))).send().await?;
+            Self::parse_response(response).await
+        }
+        .await;
+        crate::entity_cache::record(cache, user_id, &result);
+        result
     }
 
     /// Captures the unabridged user JSON used by moderation audit snapshots.
@@ -548,11 +662,39 @@ impl VrChatClient {
         group_id: &str,
         include_roles: bool,
     ) -> Result<crate::models::Group, VrChatError> {
-        let mut request = self.http.get(self.url(&format!("/groups/{group_id}")));
-        if include_roles {
-            request = request.query(&[("includeRoles", "true")]);
+        self.get_group_cached(group_id, include_roles, crate::entity_cache::ALWAYS_FETCH).await
+    }
+
+    /// Port of `getGroup(String groupId, Boolean includeRoles, long minEpoch)`.
+    ///
+    /// Note that Java caches by group id alone, ignoring `includeRoles`, so
+    /// a cache hit populated without roles satisfies a later call that asked
+    /// for them. That is Java's behaviour and callers already tolerate an
+    /// absent role list, so it is reproduced rather than "fixed".
+    pub async fn get_group_cached(
+        &self,
+        group_id: &str,
+        include_roles: bool,
+        min_epoch: i64,
+    ) -> Result<crate::models::Group, VrChatError> {
+        let cache = self.caches.as_ref().map(|caches| &caches.groups);
+        match crate::entity_cache::decide(cache, group_id, min_epoch) {
+            crate::entity_cache::CacheDecision::Hit(group) => return Ok(group),
+            crate::entity_cache::CacheDecision::Known404 => {
+                return Err(Self::known_404("group", group_id))
+            }
+            crate::entity_cache::CacheDecision::Miss => {}
         }
-        Self::parse_response(request.send().await?).await
+        let result = async {
+            let mut request = self.http.get(self.url(&format!("/groups/{group_id}")));
+            if include_roles {
+                request = request.query(&[("includeRoles", "true")]);
+            }
+            Self::parse_response(request.send().await?).await
+        }
+        .await;
+        crate::entity_cache::record(cache, group_id, &result);
+        result
     }
 
     /// Port of `getGroupRoles(String groupId)`: `GET /groups/{groupId}/roles`.
@@ -1033,22 +1175,58 @@ impl VrChatClient {
 
     /// Port of `getWorld(String worldId)`: `GET /worlds/{worldId}`.
     pub async fn get_world(&self, world_id: &str) -> Result<crate::models::World, VrChatError> {
-        let response = self
-            .http
-            .get(self.url(&format!("/worlds/{world_id}")))
-            .send()
-            .await?;
-        Self::parse_response(response).await
+        self.get_world_cached(world_id, crate::entity_cache::ALWAYS_FETCH).await
+    }
+
+    /// Port of `getWorld(String worldId, long minEpoch)`.
+    pub async fn get_world_cached(
+        &self,
+        world_id: &str,
+        min_epoch: i64,
+    ) -> Result<crate::models::World, VrChatError> {
+        let cache = self.caches.as_ref().map(|caches| &caches.worlds);
+        match crate::entity_cache::decide(cache, world_id, min_epoch) {
+            crate::entity_cache::CacheDecision::Hit(world) => return Ok(world),
+            crate::entity_cache::CacheDecision::Known404 => {
+                return Err(Self::known_404("world", world_id))
+            }
+            crate::entity_cache::CacheDecision::Miss => {}
+        }
+        let result = async {
+            let response = self.http.get(self.url(&format!("/worlds/{world_id}"))).send().await?;
+            Self::parse_response(response).await
+        }
+        .await;
+        crate::entity_cache::record(cache, world_id, &result);
+        result
     }
 
     /// Port of `getAvatar(String avatarId)`: `GET /avatars/{avatarId}`.
     pub async fn get_avatar(&self, avatar_id: &str) -> Result<crate::models::Avatar, VrChatError> {
-        let response = self
-            .http
-            .get(self.url(&format!("/avatars/{avatar_id}")))
-            .send()
-            .await?;
-        Self::parse_response(response).await
+        self.get_avatar_cached(avatar_id, crate::entity_cache::ALWAYS_FETCH).await
+    }
+
+    /// Port of `getAvatar(String avatarId, long minEpoch)`.
+    pub async fn get_avatar_cached(
+        &self,
+        avatar_id: &str,
+        min_epoch: i64,
+    ) -> Result<crate::models::Avatar, VrChatError> {
+        let cache = self.caches.as_ref().map(|caches| &caches.avatars);
+        match crate::entity_cache::decide(cache, avatar_id, min_epoch) {
+            crate::entity_cache::CacheDecision::Hit(avatar) => return Ok(avatar),
+            crate::entity_cache::CacheDecision::Known404 => {
+                return Err(Self::known_404("avatar", avatar_id))
+            }
+            crate::entity_cache::CacheDecision::Miss => {}
+        }
+        let result = async {
+            let response = self.http.get(self.url(&format!("/avatars/{avatar_id}"))).send().await?;
+            Self::parse_response(response).await
+        }
+        .await;
+        crate::entity_cache::record(cache, avatar_id, &result);
+        result
     }
 
     /// Port of `VrchatSearch.world` / `WorldsApi.searchWorlds`: `GET
@@ -1577,6 +1755,138 @@ mod tests {
     /// deserializes to `None` and silently disables the new-account
     /// advisory rather than failing, which is exactly the kind of bug a
     /// mock-server test catches and a compile does not.
+    /// A temp directory for one test's caches. Tests must not share a
+    /// caches root, and must not use the process-wide `entity_cache::install`
+    /// (a `OnceLock` — the first test to touch it would decide for all).
+    fn temp_cache_root(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "celeste-entity-cache-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// The bug this guards: with no cache wired up, watched-entity
+    /// autocomplete re-fetched every watched entity on every keystroke.
+    /// Java answers those from `ScarletJsonCache` with
+    /// `ALWAYS_PREFER_CACHED`, so the API is touched once per entity, ever.
+    #[tokio::test]
+    async fn always_prefer_cached_fetches_once_however_often_it_is_asked() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_1",
+                "displayName": "Someone",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let root = temp_cache_root("prefer-cached");
+        let client = VrChatClient::with_base_url(&format!("{}/", server.uri()))
+            .unwrap()
+            .with_entity_caches(&root);
+        assert!(client.has_entity_caches());
+
+        for _ in 0..8 {
+            let user = client
+                .get_user_cached("usr_1", crate::entity_cache::ALWAYS_PREFER_CACHED)
+                .await
+                .unwrap();
+            assert_eq!(user.display_name.as_deref(), Some("Someone"));
+        }
+        // wiremock verifies `.expect(1)` when the server drops.
+        drop(server);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Java's `getUser(userId)` is `getUser(userId, Long.MAX_VALUE)`: no
+    /// cached entry is ever new enough, so it always fetches. Keeping that
+    /// means wiring the cache doesn't quietly staleify call sites that
+    /// wanted current data.
+    #[tokio::test]
+    async fn the_default_getter_still_fetches_every_time() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_1",
+                "displayName": "Someone",
+            })))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let root = temp_cache_root("always-fetch");
+        let client = VrChatClient::with_base_url(&format!("{}/", server.uri()))
+            .unwrap()
+            .with_entity_caches(&root);
+        for _ in 0..3 {
+            client.get_user("usr_1").await.unwrap();
+        }
+        drop(server);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Java's `cachedUsers.add404` / `is404`: a 404 is remembered and the
+    /// id is never re-fetched, even through the always-fetch getter. That
+    /// is what stops a watch list full of deleted users from generating
+    /// traffic forever.
+    #[tokio::test]
+    async fn a_404_is_remembered_and_never_refetched() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_gone"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let root = temp_cache_root("known-404");
+        let client = VrChatClient::with_base_url(&format!("{}/", server.uri()))
+            .unwrap()
+            .with_entity_caches(&root);
+        for _ in 0..5 {
+            assert!(client.get_user("usr_gone").await.is_err());
+        }
+        drop(server);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Without a caches root the client behaves exactly as it did before
+    /// caching existed — which is what the rest of this test module and the
+    /// wiremock suite rely on.
+    #[tokio::test]
+    async fn a_client_without_caches_is_unchanged() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/usr_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_1",
+                "displayName": "Someone",
+            })))
+            .expect(4)
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&format!("{}/", server.uri())).unwrap();
+        assert!(!client.has_entity_caches());
+        for _ in 0..4 {
+            client
+                .get_user_cached("usr_1", crate::entity_cache::ALWAYS_PREFER_CACHED)
+                .await
+                .unwrap();
+        }
+        drop(server);
+    }
+
     #[tokio::test]
     async fn get_user_reads_date_joined_pronouns_and_tags() {
         let server = MockServer::start().await;

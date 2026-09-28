@@ -55,6 +55,13 @@ fn main() -> anyhow::Result<()> {
         tracing::warn!("Another Celeste config also exists at {} - it is not being used", other.display());
     }
 
+    // Java's `ScarletJsonCache` caches live at `<Scarlet.dir>/caches` and
+    // are shared process-wide. Install them before anything builds a VRChat
+    // client, or that client fetches every entity every time — which for
+    // watched-entity autocomplete meant one API call per watched entity per
+    // keystroke, a request rate VRChat suspends accounts over.
+    scarlet_vrchat::entity_cache::install(&data_dir);
+
     let settings = Arc::new(Settings::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(scarlet_core::identity::VERSION) {
         tracing::info!("Version changed since last run (or first run)");

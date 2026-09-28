@@ -11,6 +11,7 @@
 
 pub mod basic_auth;
 pub mod client;
+pub mod entity_cache;
 pub mod log_tail;
 pub mod models;
 pub mod totp;

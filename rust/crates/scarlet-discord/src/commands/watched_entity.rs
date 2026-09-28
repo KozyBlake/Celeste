@@ -13,6 +13,7 @@
 //! `import`. Note Java names the deletion subcommand
 //! `remove` here (unlike `watched-group`'s `delete-watched-group`).
 
+use scarlet_vrchat::entity_cache::ALWAYS_PREFER_CACHED;
 use serenity::builder::{
     CreateActionRow, CreateAttachment, CreateAutocompleteResponse, CreateCommand,
     CreateCommandOption, CreateInputText, CreateInteractionResponse,
@@ -79,15 +80,38 @@ impl EntityKind {
         }
     }
 
+    /// Java's `_getEntityName(_getEntity(id, minEpoch))`. Every call site
+    /// that renders a *list* of watched entities passes
+    /// `ScarletJsonCache.ALWAYS_PREFER_CACHED`, so after the first lookup
+    /// the name comes off disk and costs no API call — which is what keeps
+    /// autocomplete from firing one request per watched entity per
+    /// keystroke.
+    async fn fetch_name_cached(
+        &self,
+        client: &scarlet_vrchat::client::VrChatClient,
+        id: &str,
+        min_epoch: i64,
+    ) -> Option<String> {
+        match self {
+            EntityKind::User => client
+                .get_user_cached(id, min_epoch)
+                .await
+                .ok()
+                .and_then(|u| u.display_name),
+            EntityKind::Avatar => {
+                client.get_avatar_cached(id, min_epoch).await.ok().map(|a| a.name)
+            }
+        }
+    }
+
+    /// `fetch_name_cached` with Java's `ALWAYS_FETCH`, for the call sites
+    /// that genuinely want current data.
     async fn fetch_name(
         &self,
         client: &scarlet_vrchat::client::VrChatClient,
         id: &str,
     ) -> Option<String> {
-        match self {
-            EntityKind::User => client.get_user(id).await.ok().and_then(|u| u.display_name),
-            EntityKind::Avatar => client.get_avatar(id).await.ok().map(|a| a.name),
-        }
+        self.fetch_name_cached(client, id, scarlet_vrchat::entity_cache::ALWAYS_FETCH).await
     }
 
     /// Whether the entity still exists in VRChat -- used only by `add`
@@ -98,6 +122,23 @@ impl EntityKind {
             EntityKind::Avatar => client.get_avatar(id).await.is_ok(),
         }
     }
+}
+
+/// Java registers `entity-priority` with `setRequiredRange(-100L, 100L)`, so
+/// Discord itself refuses an out-of-range value before the command is ever
+/// dispatched. serenity 0.12's `min_int_value` takes a `u64` and so cannot
+/// express a negative minimum, which means the range has to be enforced
+/// here instead; [`check_priority_range`] rejects with the same effect the
+/// user sees in Java (the value simply doesn't take).
+const PRIORITY_MIN: i64 = -100;
+const PRIORITY_MAX: i64 = 100;
+
+/// `None` when `priority` is inside Java's registered range, otherwise the
+/// message to reply with.
+fn check_priority_range(priority: i64) -> Option<String> {
+    (!(PRIORITY_MIN..=PRIORITY_MAX).contains(&priority)).then(|| {
+        format!("`entity-priority` must be between {PRIORITY_MIN} and {PRIORITY_MAX}.")
+    })
 }
 
 fn group_type_option(name: &str) -> CreateCommandOption {
@@ -172,11 +213,14 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
                 "entity-tags",
                 "A list of tags, separated by one of ',', ';', '/'",
             ))
-            .add_sub_option(CreateCommandOption::new(
-                CommandOptionType::Integer,
-                "entity-priority",
-                "The priority of this entity (-100 to 100)",
-            ))
+            // Java: `_entityPriority` ... `.setRequiredRange(-100L, 100L)`.
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "entity-priority",
+                    "The priority of this entity (-100 to 100)",
+                )
+            )
             .add_sub_option(CreateCommandOption::new(
                 CommandOptionType::String,
                 "entity-message",
@@ -322,6 +366,9 @@ pub(crate) fn register_generic(name: &str, description: &str, kind: EntityKind) 
         )
 }
 
+/// Java's `_vrchatEntity` autocomplete resolves every watched entity's name
+/// with `ScarletJsonCache.ALWAYS_PREFER_CACHED`, so a cached name is used
+/// whatever its age and only a never-before-seen entity costs a request.
 pub(crate) async fn autocomplete(
     ctx: &Context,
     command: &CommandInteraction,
@@ -338,7 +385,9 @@ pub(crate) async fn autocomplete(
     for entity in entities.get_all() {
         if !query.is_empty() && !entity.id.to_lowercase().contains(&query) {
             let name = match &client {
-                Some(client) => kind.fetch_name(client, &entity.id).await,
+                Some(client) => {
+                    kind.fetch_name_cached(client, &entity.id, ALWAYS_PREFER_CACHED).await
+                }
                 None => None,
             };
             if !name.as_deref().is_some_and(|name| name.to_lowercase().contains(&query)) {
@@ -351,9 +400,12 @@ pub(crate) async fn autocomplete(
             );
         } else {
             let name = match &client {
-                Some(client) => kind.fetch_name(client, &entity.id).await,
+                Some(client) => {
+                    kind.fetch_name_cached(client, &entity.id, ALWAYS_PREFER_CACHED).await
+                }
                 None => None,
-            }.unwrap_or_else(|| entity.id.clone());
+            }
+            .unwrap_or_else(|| entity.id.clone());
             response = response.add_string_choice(
                 format!("{name} ({})", entity.id).chars().take(100).collect::<String>(),
                 entity.id,
@@ -691,7 +743,11 @@ async fn run_add(
         return super::reply_ephemeral(ctx, command, "`entity-type` is required.").await;
     };
     let entity_tags = find_string(sub_options, "entity-tags");
-    let entity_priority = find_int(sub_options, "entity-priority").unwrap_or(0) as i32;
+    let entity_priority = find_int(sub_options, "entity-priority").unwrap_or(0);
+    if let Some(message) = check_priority_range(entity_priority) {
+        return super::reply_ephemeral(ctx, command, &message).await;
+    }
+    let entity_priority = entity_priority as i32;
     let message = find_string(sub_options, "entity-message");
 
     let context = match super::vrchat_context(ctx).await {
@@ -968,6 +1024,9 @@ async fn run_set_priority(
     let Some(priority) = find_int(sub_options, "entity-priority") else {
         return super::reply_ephemeral(ctx, command, "`entity-priority` is required.").await;
     };
+    if let Some(message) = check_priority_range(priority) {
+        return super::reply_ephemeral(ctx, command, &message).await;
+    }
     if entities.get_watched_entity(id).is_none() {
         return super::reply_ephemeral(
             ctx,
@@ -1215,6 +1274,16 @@ async fn run_remove_tag(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn priority_range_matches_javas_registered_range() {
+        // Java: `.setRequiredRange(-100L, 100L)`.
+        assert!(check_priority_range(0).is_none());
+        assert!(check_priority_range(-100).is_none());
+        assert!(check_priority_range(100).is_none());
+        assert!(check_priority_range(-101).is_some());
+        assert!(check_priority_range(101).is_some());
+    }
+
     use super::*;
 
     #[test]

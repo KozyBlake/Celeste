@@ -338,7 +338,8 @@ async fn handle_group_request(
     ).await;
     let (message, ephemeral) = match context {
         Ok(context) => {
-            let name = context.client.get_user(target_id).await.ok()
+            // Java (ScarletDiscordUI): `getUser(vrcTargetId, within1day)`.
+            let name = context.client.get_user_cached(target_id, scarlet_vrchat::entity_cache::within_1_day()).await.ok()
                 .and_then(|user| user.display_name)
                 .unwrap_or_else(|| target_id.to_string());
             match context.client.respond_group_join_request(
@@ -608,7 +609,7 @@ async fn handle_manager_notes_button(
         Ok(context) => context,
         Err(message) => return ephemeral_component(ctx, interaction, message).await,
     };
-    let user = match context.client.get_user(target_id).await {
+    let user = match context.client.get_user_cached(target_id, scarlet_vrchat::entity_cache::within_1_day()).await {
         Ok(user) => user,
         Err(_) => return ephemeral_component(ctx, interaction, format!("No VRChat user found with id {target_id}")).await,
     };
@@ -1476,7 +1477,7 @@ async fn perform_timed_ban(
         Ok(context) => context,
         Err(message) => return (message, true),
     };
-    let name = match context.client.get_user(target_id).await {
+    let name = match context.client.get_user_cached(target_id, scarlet_vrchat::entity_cache::within_1_day()).await {
         Ok(user) => user.display_name.unwrap_or_else(|| target_id.to_string()),
         Err(error) => return (format!("No VRChat user found with id {target_id} ({error})"), true),
     };
@@ -1826,7 +1827,7 @@ async fn handle_manager_notes_modal(
     ).await;
     let message = match context {
         Ok(context) => {
-            match context.client.get_user(target_id).await {
+            match context.client.get_user_cached(target_id, scarlet_vrchat::entity_cache::within_1_day()).await {
                 Ok(_) => {
                     let notes = modal_text(interaction, &format!("manager-notes:{target_id}"));
                     match context.client.update_group_member_notes(&context.group_id, target_id, &notes).await {

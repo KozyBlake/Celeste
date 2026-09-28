@@ -22,7 +22,9 @@ pub async fn respond(ctx: &Context, command: &CommandInteraction) -> serenity::R
     match focused.name {
         "vrchat-user" | "vrchat-user-id" => {
             let users = if query.starts_with("usr_") {
-                client.get_user(query).await.ok().map(|user| vec![(
+                // Java's `_vrchatUser` completer: `getUser(value, Long.MIN_VALUE)`
+                // -- a cached profile of any age answers a keystroke.
+                client.get_user_cached(query, scarlet_vrchat::entity_cache::ALWAYS_PREFER_CACHED).await.ok().map(|user| vec![(
                     user.id,
                     user.display_name.unwrap_or_else(|| query.to_string()),
                 )]).unwrap_or_default()
@@ -70,7 +72,14 @@ pub async fn respond(ctx: &Context, command: &CommandInteraction) -> serenity::R
         }
         "vrchat-world" => {
             let worlds = if query.starts_with("wrld_") {
-                client.get_world(query).await.ok().into_iter().collect()
+                // Java's `_vrchatWorld` completer resolves through the
+                // world cache for the same reason.
+                client
+                    .get_world_cached(query, scarlet_vrchat::entity_cache::ALWAYS_PREFER_CACHED)
+                    .await
+                    .ok()
+                    .into_iter()
+                    .collect()
             } else if query.is_empty() {
                 Vec::new()
             } else {

@@ -219,7 +219,23 @@ where
                 entries.put(id.to_string(), fresh.clone());
                 return Some(fresh);
             }
-            Some(_) => {}
+            // DEVIATION (deliberate). Java falls through here and, with no
+            // populator, returns the too-old in-memory entry anyway --
+            // `loadEntry` enforces `minEpoch` when reading from disk, but
+            // the `entries` LRU hit does not. The visible effect is that
+            // `getUser(id)` (which is `getUser(id, ALWAYS_FETCH)`) stops
+            // fetching after the first call for as long as the entry stays
+            // in the LRU, which is presumably why `getUserFresh` had to
+            // exist at all.
+            //
+            // Honouring `min_epoch` on this path too is what the constant
+            // is named for, and it is the safe direction: the alternative
+            // silently serves a stale display name or ban state to every
+            // call site that asked for current data. The caching benefit is
+            // unaffected, because it comes from the call sites that pass a
+            // real max-age (`within1day`, `ALWAYS_PREFER_CACHED`), and
+            // those still hit above.
+            Some(_) => entry = None,
         }
 
         if let Some(populate) = populate {
@@ -325,6 +341,33 @@ where
 
 #[cfg(test)]
 mod tests {
+    /// Guards the deliberate deviation documented in `get_entry_impl`: an
+    /// in-memory entry that is older than `min_epoch` must not satisfy the
+    /// read, so `ALWAYS_FETCH` really does always miss.
+    #[test]
+    fn a_too_old_in_memory_entry_does_not_satisfy_the_read() {
+        let root = std::env::temp_dir().join(format!(
+            "celeste-json-cache-minepoch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache: ScarletJsonCache<String> = ScarletJsonCache::new(&root, "test");
+        cache.put("a", "value".to_string());
+
+        // Warm (any age accepted) hits; ALWAYS_FETCH must not.
+        assert_eq!(cache.get_min_epoch("a", ALWAYS_PREFER_CACHED).as_deref(), Some("value"));
+        assert_eq!(cache.get_min_epoch("a", ALWAYS_FETCH), None);
+        // ... and asking again doesn't resurrect it from the LRU either.
+        assert_eq!(cache.get_min_epoch("a", ALWAYS_FETCH), None);
+        assert_eq!(cache.get_min_epoch("a", ALWAYS_PREFER_CACHED).as_deref(), Some("value"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::*;
     use serde::Deserialize;
 

@@ -163,7 +163,12 @@ async fn run_list(ctx: &Context, command: &CommandInteraction, sub_options: &[Re
     for id in &ids {
         let (display_name, member) = match &context {
             Some(context) => {
-                let user = context.client.get_user(id).await.ok();
+                // Java `_StaffList._list`: `getUser($, within1day)`.
+                let user = context
+                    .client
+                    .get_user_cached(id, scarlet_vrchat::entity_cache::within_1_day())
+                    .await
+                    .ok();
                 let member = context.client.get_group_member(&context.group_id, id).await.ok().flatten();
                 (user.and_then(|u| u.display_name), member)
             }
