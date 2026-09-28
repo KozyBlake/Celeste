@@ -182,6 +182,12 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction.data.custom_id.starts_with("immediate-ban-") {
+        if let Err(err) = handle_immediate_ban_component(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling immediate ban interaction: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("edit-tags:")
         || interaction.data.custom_id.starts_with("select-tags")
         || interaction.data.custom_id.starts_with("edit-desc:")
@@ -884,6 +890,12 @@ async fn create_instance(
 }
 
 pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
+    if interaction.data.custom_id.starts_with("immediate-ban-edit-desc:") {
+        if let Err(err) = handle_immediate_ban_description(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling immediate ban description: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("edit-desc:") {
         if let Err(err) = handle_audit_description_modal(ctx, interaction).await {
             tracing::error!(custom_id = %interaction.data.custom_id, "Error handling audit description modal: {err}");
@@ -939,6 +951,92 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     }
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
+    }
+}
+
+async fn pending_ban_store(
+    ctx: &Context,
+) -> Option<std::sync::Arc<crate::pending_moderation::PendingModeration>> {
+    ctx.data.read().await.get::<crate::data::PendingModerationKey>().cloned()
+}
+
+async fn handle_immediate_ban_component(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+) -> serenity::Result<()> {
+    let Some((operation, target_id)) = split_custom_id(&interaction.data.custom_id) else {
+        return ephemeral_component(ctx, interaction, "Invalid pending ban.").await;
+    };
+    let Some(pending) = pending_ban_store(ctx).await else {
+        return ephemeral_component(ctx, interaction, "Pending moderation state is unavailable.").await;
+    };
+    if !pending.is_ban_info_owner(target_id, &interaction.user.id.to_string()) {
+        return ephemeral_component(ctx, interaction, "You do not own this pending ban.").await;
+    }
+
+    match operation {
+        "immediate-ban-select-tags" => {
+            let ComponentInteractionDataKind::StringSelect { values } = &interaction.data.kind else {
+                return ephemeral_component(ctx, interaction, "Expected tag selections.").await;
+            };
+            match pending.set_ban_info_tags(target_id, values.clone()) {
+                Ok(true) => interaction.create_response(&ctx.http, CreateInteractionResponse::Acknowledge).await,
+                Ok(false) => ephemeral_component(ctx, interaction, "No pending ban").await,
+                Err(error) => ephemeral_component(ctx, interaction, format!("Could not save tags: {error}")).await,
+            }
+        }
+        "immediate-ban-edit-desc" => interaction.create_response(
+            &ctx.http,
+            CreateInteractionResponse::Modal(CreateModal::new(
+                format!("immediate-ban-edit-desc:{target_id}"),
+                "Edit description",
+            ).components(vec![CreateActionRow::InputText(CreateInputText::new(
+                InputTextStyle::Paragraph,
+                "Input description",
+                format!("input-desc:{target_id}"),
+            ).required(true).placeholder("Event description"))])),
+        ).await,
+        "immediate-ban-cancel" => {
+            let _ = pending.take_ban_info(target_id);
+            interaction.create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new().content("Pending ban cancelled.").components(Vec::new()),
+            )).await
+        }
+        "immediate-ban-confirm" => {
+            let result = crate::commands::vrchat_user_ban::execute(
+                ctx,
+                &interaction.user.id.to_string(),
+                interaction.member.as_ref(),
+                target_id,
+                true,
+            ).await;
+            match result {
+                Ok(message) => interaction.create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(
+                    CreateInteractionResponseMessage::new().content(message).components(Vec::new()),
+                )).await,
+                Err(message) => ephemeral_component(ctx, interaction, message).await,
+            }
+        }
+        _ => ephemeral_component(ctx, interaction, "Unknown pending-ban action.").await,
+    }
+}
+
+async fn handle_immediate_ban_description(
+    ctx: &Context,
+    interaction: &ModalInteraction,
+) -> serenity::Result<()> {
+    let target_id = interaction.data.custom_id.strip_prefix("immediate-ban-edit-desc:").unwrap_or_default();
+    let Some(pending) = pending_ban_store(ctx).await else {
+        return ephemeral_modal(ctx, interaction, "Pending moderation state is unavailable.").await;
+    };
+    if !pending.is_ban_info_owner(target_id, &interaction.user.id.to_string()) {
+        return ephemeral_modal(ctx, interaction, "You do not own this pending ban.").await;
+    }
+    let description = modal_text(interaction, &format!("input-desc:{target_id}"));
+    match pending.set_ban_info_description(target_id, description) {
+        Ok(true) => interaction.create_response(&ctx.http, CreateInteractionResponse::Acknowledge).await,
+        Ok(false) => ephemeral_modal(ctx, interaction, "No pending ban").await,
+        Err(error) => ephemeral_modal(ctx, interaction, format!("Could not save description: {error}")).await,
     }
 }
 

@@ -178,6 +178,7 @@ fn main() -> anyhow::Result<()> {
             shared.scarlet_data.clone(),
             settings.clone(),
             shared.secret_staff_list.clone(),
+            shared.moderation_tags.clone(),
         ),
     ));
 

@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use scarlet_core::data::{AuditEntryMetadata, ScarletData};
+use scarlet_core::moderation_tags::ModerationTags;
 use scarlet_core::settings::Settings;
 use scarlet_core::staff_list::StaffList;
 use scarlet_vrchat::models::GroupAuditLogEntry;
@@ -35,6 +36,7 @@ pub struct AuditPoller {
     data: Arc<ScarletData>,
     settings: Arc<Settings>,
     secret_staff: Arc<StaffList>,
+    moderation_tags: Arc<ModerationTags>,
 }
 
 impl AuditPoller {
@@ -45,8 +47,9 @@ impl AuditPoller {
         data: Arc<ScarletData>,
         settings: Arc<Settings>,
         secret_staff: Arc<StaffList>,
+        moderation_tags: Arc<ModerationTags>,
     ) -> Self {
-        Self { vrchat, http, config, data, settings, secret_staff }
+        Self { vrchat, http, config, data, settings, secret_staff, moderation_tags }
     }
 
     fn group_id(&self) -> Option<String> {
@@ -98,6 +101,25 @@ impl AuditPoller {
             entry: Some(serde_json::to_value(&entry)?),
             ..AuditEntryMetadata::default()
         };
+        if entry.event_type == "group.user.ban" {
+            if let Some(target_id) = entry.target_id.as_deref() {
+                match crate::pending_moderation::PendingModeration::take_from_dir(
+                    self.config.data_dir(),
+                    target_id,
+                ) {
+                    Ok(Some(info)) => {
+                        if let Some(tags) = info.tags {
+                            metadata.entry_tags.add_all(tags);
+                        }
+                        metadata.entry_description = info.description
+                            .map(|description| description.trim().to_string())
+                            .filter(|description| !description.is_empty());
+                    }
+                    Ok(None) => {}
+                    Err(error) => tracing::warn!(%error, target_id, "Could not consume pending ban metadata"),
+                }
+            }
+        }
         let secret = entry.actor_id.as_deref().is_some_and(|id| self.secret_staff.is_id(id));
         let map = if secret { "auditType2secretChannelSf" } else { "auditType2channelSf" };
         let channel = self
@@ -132,7 +154,7 @@ impl AuditPoller {
                             Ok(thread) => {
                                 metadata.thread_snowflake = Some(thread.id.get().to_string());
                                 let aux = CreateMessage::new()
-                                    .content("Unclaimed")
+                                    .content(self.moderation_aux_content(&metadata))
                                     .components(moderation_controls(&entry));
                                 if let Ok(aux_message) = thread.id.send_message(&http, aux).await {
                                     metadata.aux_message_snowflake = Some(aux_message.id.get().to_string());
@@ -150,6 +172,23 @@ impl AuditPoller {
         // overlap polling cannot repeatedly process the same event.
         self.data.set_audit_entry_metadata(&entry.id, metadata);
         Ok(())
+    }
+
+    fn moderation_aux_content(&self, metadata: &AuditEntryMetadata) -> String {
+        let claimed = metadata.has_tags() || metadata.has_description();
+        let mut content = if claimed { String::new() } else { "Unclaimed".to_string() };
+        if metadata.has_tags() {
+            content.push_str("\n### Tags:\n");
+            content.push_str(&metadata.entry_tags.iter()
+                .map(|tag| self.moderation_tags.get_tag_label(tag))
+                .collect::<Vec<_>>()
+                .join(", "));
+        }
+        if let Some(description) = metadata.entry_description.as_deref() {
+            content.push_str("\n### Description:\n");
+            content.push_str(description);
+        }
+        content.trim_start().to_string()
     }
 }
 

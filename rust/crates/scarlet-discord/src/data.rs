@@ -313,6 +313,11 @@ impl TypeMapKey for DiscordPermissionsKey {
     type Value = Arc<crate::permissions::DiscordPermissions>;
 }
 
+pub struct PendingModerationKey;
+impl TypeMapKey for PendingModerationKey {
+    type Value = Arc<crate::pending_moderation::PendingModeration>;
+}
+
 pub struct HttpKey;
 impl TypeMapKey for HttpKey {
     type Value = SharedHttp;
@@ -399,6 +404,9 @@ impl SharedState {
         let discord_permissions = Arc::new(crate::permissions::DiscordPermissions::open(
             self.discord_config.data_dir(),
         ));
+        let pending_moderation = Arc::new(crate::pending_moderation::PendingModeration::open(
+            self.discord_config.data_dir(),
+        ));
         data.insert::<VrChatClientKey>(self.vrchat_client);
         data.insert::<HttpKey>(self.http);
         data.insert::<ScarletDataKey>(self.scarlet_data);
@@ -406,6 +414,7 @@ impl SharedState {
         data.insert::<AvatarSearchKey>(self.avatar_search);
         data.insert::<DiscordConfigKey>(self.discord_config);
         data.insert::<DiscordPermissionsKey>(discord_permissions);
+        data.insert::<PendingModerationKey>(pending_moderation);
         data.insert::<ProcessControllerKey>(self.process_controller);
         data.insert::<StaffListKey>(self.staff_list);
         data.insert::<SecretStaffListKey>(self.secret_staff_list);
