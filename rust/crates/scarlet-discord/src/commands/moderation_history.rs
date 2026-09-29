@@ -626,26 +626,10 @@ fn format_entry_line(id: &str, timestamp: i64, description: &str, url: Option<&s
 }
 
 fn audit_type_title(event_type: &str) -> String {
-    match event_type {
-        "group.instance.warn" => "Instance Warn".into(),
-        "group.instance.mute" => "Instance Mute".into(),
-        "group.instance.kick" => "Instance Kick".into(),
-        "group.member.remove" => "Member Remove".into(),
-        "group.user.ban" => "User Ban".into(),
-        "group.user.unban" => "User Unban".into(),
-        _ => event_type
-            .split(['.', '_', '-'])
-            .filter(|part| !part.is_empty() && *part != "group")
-            .map(|part| {
-                let mut chars = part.chars();
-                chars
-                    .next()
-                    .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
-    }
+    // Keep every command on the canonical Java `GroupAuditType.title` table.
+    // Re-deriving this from the id changes names such as calendarEvent and
+    // instance.announcement into "CalendarEvent" and "Instance Announcement".
+    super::vrchat_group::audit_type_title(event_type)
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
@@ -724,8 +708,9 @@ mod tests {
         assert_eq!(audit_type_title("group.user.ban"), "User Ban");
         assert_eq!(
             audit_type_title("group.calendarEvent.create"),
-            "CalendarEvent Create"
+            "Event Create"
         );
+        assert_eq!(audit_type_title("group.instance.announcement"), "Announcement");
     }
 
     #[test]

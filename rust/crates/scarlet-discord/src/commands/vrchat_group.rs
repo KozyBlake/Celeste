@@ -501,7 +501,7 @@ async fn audit_types(ctx: &Context, command: &CommandInteraction) -> serenity::R
     .await
 }
 
-fn audit_type_title(event_type: &str) -> String {
+pub(crate) fn audit_type_title(event_type: &str) -> String {
     match event_type {
         "group.instance.close" => "Instance Close",
         "group.instance.create" => "Instance Create",
