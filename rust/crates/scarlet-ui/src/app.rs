@@ -595,6 +595,9 @@ impl ScarletApp {
 
         ui.add_space(7.0);
         ui.horizontal_wrapped(|ui| {
+            self.tab_bar(ui);
+            ui.separator();
+
             ui.add_enabled(false, egui::Button::new(egui::RichText::new("+ Create instance").strong()))
                 .on_hover_text("Instance creation is still being ported");
 
@@ -630,19 +633,22 @@ impl ScarletApp {
             });
 
             ui.separator();
-            self.tab_bar(ui);
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
-                    self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
-                }
-                let tts_on = self.state.tts_enabled();
-                let button = egui::Button::new(if tts_on { "Voice: On" } else { "Voice: Off" }).selected(tts_on);
-                if ui.add(button).clicked() {
-                    self.state.set_tts_enabled(!tts_on);
-                    self.tts.set_paused(tts_on);
-                }
-            });
+            let tts_on = self.state.tts_enabled();
+            let voice_colour = if tts_on {
+                egui::Color32::from_rgb(91, 196, 125)
+            } else {
+                ui.visuals().weak_text_color()
+            };
+            let button = egui::Button::new(
+                egui::RichText::new(if tts_on { "Voice: On" } else { "Voice: Off" }).color(voice_colour),
+            );
+            if ui.add(button).clicked() {
+                self.state.set_tts_enabled(!tts_on);
+                self.tts.set_paused(tts_on);
+            }
+            if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
+                self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
+            }
         });
     }
 
@@ -723,16 +729,33 @@ impl ScarletApp {
         if !show_cli && self.tab == Tab::Cli {
             self.tab = Tab::Instance;
         }
+        let tabs = [(Tab::Instance, "Instance"), (Tab::Settings, "Settings"), (Tab::Cli, "CLI")];
         ui.horizontal(|ui| {
-            if ui.add(egui::Button::new("Instance").selected(self.tab == Tab::Instance)).clicked() {
-                self.tab = Tab::Instance;
-            }
-            if ui.add(egui::Button::new("Settings").selected(self.tab == Tab::Settings)).clicked() {
-                self.tab = Tab::Settings;
-            }
-            if show_cli {
-                if ui.add(egui::Button::new("CLI").selected(self.tab == Tab::Cli)).clicked() {
-                    self.tab = Tab::Cli;
+            for (tab, label) in tabs {
+                if tab == Tab::Cli && !show_cli {
+                    continue;
+                }
+                let selected = self.tab == tab;
+                let text = if selected {
+                    egui::RichText::new(label).strong().color(egui::Color32::from_rgb(112, 181, 247))
+                } else {
+                    egui::RichText::new(label)
+                };
+                let response = ui.add_sized(
+                    [76.0, 28.0],
+                    egui::Button::new(text).frame(false),
+                );
+                if response.clicked() {
+                    self.tab = tab;
+                }
+                if selected {
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(response.rect.left() + 9.0, response.rect.bottom() - 1.0),
+                            egui::pos2(response.rect.right() - 9.0, response.rect.bottom() - 1.0),
+                        ],
+                        egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(63, 139, 211)),
+                    );
                 }
             }
         });
@@ -850,6 +873,7 @@ impl ScarletApp {
             return self.instance_empty_state(ui);
         }
         let (present, left, total) = self.state.status_counts();
+        let compact_height = ui.available_height() < 300.0;
         let instance = self.state.instance();
         let instance_name = instance
             .as_ref()
@@ -858,36 +882,40 @@ impl ScarletApp {
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(22, 27, 35))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::symmetric(14.0, 11.0))
+            .inner_margin(if compact_height {
+                egui::Margin::symmetric(12.0, 7.0)
+            } else {
+                egui::Margin::symmetric(14.0, 11.0)
+            })
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("CURRENT INSTANCE").small().color(egui::Color32::from_rgb(103, 170, 235)));
-                        ui.label(egui::RichText::new(&instance_name).strong().size(18.0));
-                        if let Some(instance) = &instance {
-                            ui.add(egui::Label::new(egui::RichText::new(&instance.location).small().weak().monospace()).truncate())
-                                .on_hover_text(&instance.location);
-                        }
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("{total} total")).small().weak());
-                        if left > 0 {
-                            ui.label(egui::RichText::new(format!("{left} left")).color(egui::Color32::from_rgb(168, 174, 185)));
-                        }
-                        ui.label(egui::RichText::new(format!("{present} present")).color(egui::Color32::from_rgb(91, 196, 125)));
-                    });
-                });
+                ui.set_min_width(ui.available_width());
+                ui.label(egui::RichText::new("CURRENT INSTANCE").small().color(egui::Color32::from_rgb(103, 170, 235)));
+                ui.label(egui::RichText::new(&instance_name).strong().size(18.0));
+                if !compact_height {
+                    if let Some(instance) = &instance {
+                    ui.add(egui::Label::new(egui::RichText::new(&instance.location).small().weak().monospace()).truncate())
+                        .on_hover_text(&instance.location);
+                    }
+                }
                 if let Some(instance) = &instance {
                     ui.add_space(7.0);
                     ui.separator();
                     ui.add_space(5.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let kind = if instance.is_group_instance { "Group instance" } else { "Public or private instance" };
                         ui.label(egui::RichText::new(kind).small().strong());
                         ui.separator();
                         ui.label(egui::RichText::new(format!("Joined {}", instance.joined.format("%b %-d at %H:%M"))).small().weak());
                         ui.separator();
-                        ui.label(egui::RichText::new("Drag headers to reorder  |  Right-click for columns").small().weak());
+                        ui.label(egui::RichText::new(format!("{present} present")).color(egui::Color32::from_rgb(91, 196, 125)));
+                        if left > 0 {
+                            ui.label(egui::RichText::new(format!("{left} left")).color(egui::Color32::from_rgb(168, 174, 185)));
+                        }
+                        ui.label(egui::RichText::new(format!("{total} total")).small().weak());
+                        if !compact_height {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Drag headers to reorder  |  Right-click for columns").small().weak());
+                        }
                     });
                 }
             });
@@ -914,6 +942,7 @@ impl ScarletApp {
         let mut toggle_column = None;
         let mut width_update = None;
         let active_sort = self.table_sort;
+        let player_panel_height = ui.available_height();
 
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(23, 28, 36))
@@ -921,28 +950,51 @@ impl ScarletApp {
             .rounding(egui::Rounding::same(10.0))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-        ui.horizontal(|ui| {
+        ui.set_min_width(ui.available_width());
+        ui.set_min_height((player_panel_height - 24.0).max(0.0));
+        ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new("Player details").strong().size(15.0));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(format!("{} visible columns", column_order.len())).small().weak());
-            });
+            ui.separator();
+            ui.label(egui::RichText::new(format!("{} visible columns", column_order.len())).small().weak());
         });
         ui.add_space(8.0);
+        let table_panel_height = ui.available_height();
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(13, 16, 22))
             .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(38, 46, 58)))
             .rounding(egui::Rounding::same(7.0))
             .inner_margin(egui::Margin::same(6.0))
             .show(ui, |ui| {
-        egui::ScrollArea::horizontal().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        ui.set_min_height((table_panel_height - 12.0).max(0.0));
+        let table_view_width = ui.available_width();
+        let table_view_height = ui.available_height();
+        egui::ScrollArea::horizontal()
+            .auto_shrink([false, false])
+            .min_scrolled_width(table_view_width)
+            .max_height(table_view_height)
+            .show(ui, |ui| {
             // `Column::auto()` sizes to content, which is what let a long
             // VRChat id wrap over five lines. A fixed initial width that
             // clips (and can still be dragged wider) is the Swing
             // `JTable`'s behaviour.
-            let mut table = TableBuilder::new(ui).striped(true);
+            let natural_width = column_order
+                .iter()
+                .map(|column| column_widths.get(column).copied().unwrap_or_else(|| column.initial_width()).max(column.min_width()))
+                .sum::<f32>();
+            let width_scale = if natural_width > 0.0 {
+                (table_view_width / natural_width).max(1.0)
+            } else {
+                1.0
+            };
+            let mut table = TableBuilder::new(ui)
+                .striped(true)
+                .min_scrolled_height(table_view_height)
+                .max_scroll_height(table_view_height)
+                .auto_shrink([false, false]);
             for column in &column_order {
                 let width = column_widths.get(column).copied().unwrap_or_else(|| column.initial_width());
-                table = table.column(Column::exact(width.max(column.min_width())).clip(true));
+                table = table.column(Column::exact(width.max(column.min_width()) * width_scale).clip(true));
             }
 
             table
