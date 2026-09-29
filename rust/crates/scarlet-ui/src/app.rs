@@ -340,7 +340,6 @@ pub struct ScarletApp {
     /// `ScarletUI.infoStats`), and the pending Ban confirmation (port of the
     /// row's Ban action, which Java also confirms before acting).
     avatar_stats_open: Option<AvatarStatsView>,
-    logo: Option<egui::TextureHandle>,
     group_action_confirm: Option<(GroupAction, String, String)>,
     import_groups_url_open: bool,
     import_groups_url: String,
@@ -461,7 +460,6 @@ impl ScarletApp {
             settings_category: SettingCategory::General,
             settings_search: String::new(),
             avatar_stats_open: None,
-            logo: None,
             group_action_confirm: None,
             import_groups_url_open: false,
             import_groups_url: String::new(),
@@ -568,9 +566,6 @@ impl ScarletApp {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if let Some(logo) = self.logo_texture(ui.ctx()) {
-                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(30.0, 30.0)));
-            }
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(scarlet_core::identity::NAME).strong().size(18.0));
                 ui.label(
@@ -855,29 +850,46 @@ impl ScarletApp {
             return self.instance_empty_state(ui);
         }
         let (present, left, total) = self.state.status_counts();
-        let instance_name = self
-            .state
-            .instance()
-            .map(|instance| instance.world_name.unwrap_or(instance.location))
-            .unwrap_or_else(|| "Current session".to_string());
+        let instance = self.state.instance();
+        let instance_name = instance
+            .as_ref()
+            .and_then(|instance| instance.world_name.clone())
+            .unwrap_or_else(|| "Current instance".to_string());
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(22, 27, 35))
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .inner_margin(egui::Margin::symmetric(14.0, 11.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("Instance roster").strong().size(16.0));
-                        ui.label(egui::RichText::new(instance_name).small().weak());
+                        ui.label(egui::RichText::new("CURRENT INSTANCE").small().color(egui::Color32::from_rgb(103, 170, 235)));
+                        ui.label(egui::RichText::new(&instance_name).strong().size(18.0));
+                        if let Some(instance) = &instance {
+                            ui.add(egui::Label::new(egui::RichText::new(&instance.location).small().weak().monospace()).truncate())
+                                .on_hover_text(&instance.location);
+                        }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("{total} session total")).small().weak());
+                        ui.label(egui::RichText::new(format!("{total} total")).small().weak());
                         if left > 0 {
                             ui.label(egui::RichText::new(format!("{left} left")).color(egui::Color32::from_rgb(168, 174, 185)));
                         }
                         ui.label(egui::RichText::new(format!("●  {present} present")).color(egui::Color32::from_rgb(91, 196, 125)));
                     });
                 });
+                if let Some(instance) = &instance {
+                    ui.add_space(7.0);
+                    ui.separator();
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        let kind = if instance.is_group_instance { "Group instance" } else { "Public or private instance" };
+                        ui.label(egui::RichText::new(kind).small().strong());
+                        ui.separator();
+                        ui.label(egui::RichText::new(format!("Joined {}", instance.joined.format("%b %-d at %H:%M"))).small().weak());
+                        ui.separator();
+                        ui.label(egui::RichText::new("Drag headers to reorder  •  Right-click for columns").small().weak());
+                    });
+                }
             });
         ui.add_space(8.0);
         let column_order = self.column_order.clone();
@@ -923,18 +935,29 @@ impl ScarletApp {
                 .header(28.0, |mut header| {
                     for (index, column) in column_order.iter().enumerate() {
                         header.col(|ui| {
-                            let (drop_zone, dropped) = ui.dnd_drop_zone::<usize, _>(egui::Frame::none(), |ui| {
-                                ui.dnd_drag_source(egui::Id::new("instance_column_header").with(index), index, |ui| {
+                            // A plain label is the drop target. egui's stock
+                            // `dnd_drop_zone` always paints every target as a
+                            // filled widget, which produced the row of little
+                            // grey boxes around otherwise ordinary headings.
+                            let response = ui.dnd_drag_source(
+                                egui::Id::new("instance_column_header").with(index),
+                                index,
+                                |ui| {
                                     let marker = match active_sort {
                                         Some(TableSort { column: sorted, ascending: true }) if sorted == *column => " ▲",
                                         Some(TableSort { column: sorted, ascending: false }) if sorted == *column => " ▼",
                                         _ => "",
                                     };
-                                    ui.strong(format!("{}{marker}", column.label()));
-                                })
-                                .response
-                            });
-                            let response = drop_zone.inner;
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!("{}{marker}", column.label()))
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(197, 205, 218)),
+                                        )
+                                        .sense(egui::Sense::click_and_drag()),
+                                    );
+                                },
+                            ).response;
                             if column.sortable() && response.clicked() {
                                 clicked_sort = Some(*column);
                             }
@@ -973,7 +996,7 @@ impl ScarletApp {
                                 });
                                 width_update = Some((*column, (start + resize.drag_delta().x).max(column.min_width()), resize.drag_stopped()));
                             }
-                            if let Some(dragged_from) = dropped {
+                            if let Some(dragged_from) = response.dnd_release_payload::<usize>() {
                                 swap = Some((*dragged_from, index));
                             }
                         });
@@ -1057,45 +1080,35 @@ impl ScarletApp {
         }
     }
 
-    /// What the Instance tab shows before anyone has been logged: the logo,
-    /// and which of the two reasons applies — no instance open, or an
+    /// What the Instance tab shows before anyone has been logged, including
+    /// which of the two reasons applies — no instance open, or an
     /// instance open that nobody has joined yet. Java shows a plain "No
     /// instance loaded" card here.
     fn instance_empty_state(&mut self, ui: &mut egui::Ui) {
-        let logo = self.logo_texture(ui.ctx());
         ui.vertical_centered(|ui| {
-            ui.add_space(48.0);
-            if let Some(logo) = logo {
-                ui.add(egui::Image::new(&logo).max_width(96.0).tint(egui::Color32::from_white_alpha(70)));
-                ui.add_space(12.0);
-            }
+            ui.add_space(62.0);
             match self.state.instance() {
                 Some(instance) => {
                     let where_ = instance.world_name.clone().unwrap_or_else(|| instance.location.clone());
-                    ui.label(egui::RichText::new(format!("In {where_}")).size(15.0));
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Nobody has joined yet \u{2014} players appear here as they arrive.").weak());
+                    ui.label(egui::RichText::new("INSTANCE READY").small().color(egui::Color32::from_rgb(103, 170, 235)));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(where_).strong().size(22.0));
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(egui::RichText::new(&instance.location).small().weak().monospace()).truncate())
+                        .on_hover_text(&instance.location);
+                    ui.add_space(14.0);
+                    ui.label(egui::RichText::new("Waiting for players").strong().size(15.0));
+                    ui.label(egui::RichText::new("The roster and moderation details will appear automatically as people join.").weak());
                 }
                 None => {
-                    ui.label(egui::RichText::new(scarlet_core::i18n::tr("ui.statusNoInstance", &[]).trim()).size(15.0));
-                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("WAITING FOR VRCHAT").small().color(egui::Color32::from_rgb(232, 169, 76)));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("No instance detected").strong().size(22.0));
+                    ui.add_space(8.0);
                     ui.label(egui::RichText::new(scarlet_core::i18n::tr("ui.playerDataWillAppear", &[])).weak());
                 }
             }
         });
-    }
-
-    /// The logo, uploaded to the renderer once and reused.
-    fn logo_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        if let Some(handle) = &self.logo {
-            return Some(handle.clone());
-        }
-        const LOGO_PNG: &[u8] = include_bytes!("../../../assets/celeste.png");
-        let icon = image_from_png(LOGO_PNG)?;
-        let image = egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba);
-        let handle = ctx.load_texture("celeste-logo", image, egui::TextureOptions::LINEAR);
-        self.logo = Some(handle.clone());
-        Some(handle)
     }
 
     /// Port of `ScarletUI.infoStats`: what Celeste knows about the avatar a
@@ -2075,30 +2088,6 @@ fn row_foreground(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Co
     player.pronouns_flagged.then(|| egui::Color32::from_rgb(235, 190, 80))
 }
 
-fn app_icon() -> std::sync::Arc<egui::IconData> {
-    const ICON_PNG: &[u8] = include_bytes!("../../../assets/celeste.png");
-    // A failure here must never stop the window opening, so fall back to an
-    // empty icon rather than unwrapping.
-    match image_from_png(ICON_PNG) {
-        Some(icon) => std::sync::Arc::new(icon),
-        None => std::sync::Arc::new(egui::IconData { rgba: vec![0; 4], width: 1, height: 1 }),
-    }
-}
-
-fn image_from_png(bytes: &[u8]) -> Option<egui::IconData> {
-    let decoder = png::Decoder::new(bytes);
-    let mut reader = decoder.read_info().ok()?;
-    let mut buffer = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buffer).ok()?;
-    buffer.truncate(info.buffer_size());
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => buffer,
-        png::ColorType::Rgb => buffer.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-        _ => return None,
-    };
-    Some(egui::IconData { rgba, width: info.width, height: info.height })
-}
-
 pub fn run(
     state: UiState,
     shared: scarlet_discord::data::SharedState,
@@ -2109,7 +2098,9 @@ pub fn run(
     let bounds = shared.settings.ui_bounds.get_or_null().filter(|bounds| {
         bounds.width > 0 && bounds.height > 0
     });
-    let mut viewport = egui::ViewportBuilder::default().with_icon(app_icon());
+    // Use the platform's neutral default until Celeste has replacement
+    // artwork; the bundled image belongs to the old Scarlet branding.
+    let mut viewport = egui::ViewportBuilder::default();
     if let Some(bounds) = bounds {
         viewport = viewport
             .with_position([bounds.x as f32, bounds.y as f32])
