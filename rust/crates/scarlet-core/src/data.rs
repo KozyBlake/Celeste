@@ -344,6 +344,9 @@ impl ScarletData {
     pub fn user_metadata(&self, user_id: &str) -> UserMetadata {
         self.users.get(user_id)
     }
+    pub fn user_metadata_exists(&self, user_id: &str) -> bool {
+        self.users.exists(user_id)
+    }
     pub fn set_user_metadata(&self, user_id: &str, value: UserMetadata) {
         self.users.put(user_id, value);
     }

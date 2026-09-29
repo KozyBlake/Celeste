@@ -56,6 +56,16 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         }
     };
 
+    if !scarlet_data.user_metadata_exists(&vrc_id) {
+        return super::reply_ephemeral(
+            ctx,
+            command,
+            &format!(
+                "No VRChat user metadata found for [{display_name}](https://vrchat.com/home/user/{vrc_id})"
+            ),
+        )
+        .await;
+    }
     let user_meta = scarlet_data.user_metadata(&vrc_id);
     let mut lines =
         vec![format!("VRChat user metadata for [{display_name}](<https://vrchat.com/home/user/{vrc_id}>):")];
@@ -86,16 +96,77 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     if !user_meta.evidence_submissions.is_empty() {
         lines.push("### Evidence submissions:".to_string());
         for submission in &user_meta.evidence_submissions {
-            let file_name = submission.file_name.as_deref().unwrap_or("(unnamed)");
-            let url = submission.url.as_deref().unwrap_or("");
-            let mut line = format!("[`{file_name}`](<{url}>)");
-            if let Some(proxy) = &submission.proxy_url {
-                line.push_str(&format!(" [(proxy)](<{proxy}>)"));
-            }
-            lines.push(line);
+            lines.push(evidence_line(&scarlet_data, submission));
         }
     }
 
     let pages = super::paginate_on_lines(&lines.join("\n"), 2000);
     super::send_pages(ctx, command, pages).await
+}
+
+fn evidence_line(
+    scarlet_data: &scarlet_core::data::ScarletData,
+    submission: &scarlet_core::data::EvidenceSubmission,
+) -> String {
+    let file_name = submission.file_name.as_deref().unwrap_or("(unnamed)");
+    let url = submission.url.as_deref().unwrap_or("");
+    let mut line = format!("[`{file_name}`](<{url}>)");
+    if let Some(proxy) = &submission.proxy_url {
+        line.push_str(&format!(" [(proxy)](<{proxy}>)"));
+    }
+    if let Some(audit_entry_id) = submission.audit_entry_id.as_deref() {
+        let entry = scarlet_data.audit_entry_metadata(audit_entry_id);
+        match entry.some_url() {
+            Some(url) => line.push_str(&format!(" for [`{audit_entry_id}`](<{url}>)")),
+            None => line.push_str(&format!(" for `{audit_entry_id}`")),
+        }
+    }
+    if let Some(display_name) = submission.submitter_display_name.as_deref() {
+        line.push_str(&format!(" from {display_name}"));
+        if let Some(snowflake) = submission.submitter_snowflake.as_deref() {
+            line.push_str(&format!(" (<@{snowflake}>)"));
+        }
+    } else if let Some(snowflake) = submission.submitter_snowflake.as_deref() {
+        line.push_str(&format!(" from <@{snowflake}>"));
+    }
+    if let Some(time) = submission.submission_time.as_ref() {
+        line.push_str(&format!(" at <t:{}:f>", time.timestamp()));
+    }
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evidence_lines_include_every_java_clause() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = scarlet_core::data::ScarletData::open(dir.path());
+        data.set_audit_entry_metadata(
+            "audit_1",
+            scarlet_core::data::AuditEntryMetadata {
+                guild_snowflake: Some("1".into()),
+                channel_snowflake: Some("2".into()),
+                message_snowflake: Some("3".into()),
+                ..Default::default()
+            },
+        );
+        let submission = scarlet_core::data::EvidenceSubmission {
+            audit_entry_id: Some("audit_1".into()),
+            submitter_snowflake: Some("4".into()),
+            submitter_display_name: Some("Moderator".into()),
+            submission_time: Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()),
+            file_name: Some("proof.png".into()),
+            url: Some("https://example.invalid/proof".into()),
+            proxy_url: Some("https://example.invalid/proxy".into()),
+            ..Default::default()
+        };
+        let line = evidence_line(&data, &submission);
+        assert!(line.contains("proof.png"));
+        assert!(line.contains("(proxy)"));
+        assert!(line.contains("[`audit_1`](<https://discord.com/channels/1/2/3>)"));
+        assert!(line.contains("from Moderator (<@4>)"));
+        assert!(line.contains("at <t:1700000000:f>"));
+    }
 }
