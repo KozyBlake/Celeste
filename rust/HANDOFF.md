@@ -86,13 +86,12 @@ differs between them is consequence, not whether they're real.
 B13, B3, and A6 are fixed in Rust with regression coverage; see the audit for
 the exact compatibility changes.
 
-**2. Things that make the app usable.** Table sorting (B5), complete and
-persistent columns (B6), and window geometry (B15) were fixed on 2026-09-28.
-The remaining UI structure gaps are:
-- Settings tab guesses section grouping by id prefix; Java has 19
-  explicitly ordered named sections.
-- The notification matrix is flattened into ~27 loose toggles instead
-  of Java's per-event grid.
+**2. Things that make the app usable — completed 2026-09-28.** Table sorting
+(B5), complete and persistent columns (B6), window geometry (B15), intentional
+Settings section cards, and the per-event Voice/Desktop notification matrix are
+implemented. The owner explicitly prefers a modern Rust UI rather than a
+visual Swing clone; use Java as the behavioral and information-architecture
+reference while continuing the Rust design language.
 
 **3. Discoverability regressions.** Audit event choices/autocomplete (A5),
 `/aux-webhooks remove`, and `/export-log` were restored on 2026-09-28. B2

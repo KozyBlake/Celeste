@@ -1278,32 +1278,117 @@ impl ScarletApp {
         DROPPED_PREFIXES.iter().any(|prefix| id.starts_with(prefix)) || DROPPED_IDS.contains(&id)
     }
 
-    /// A readable group heading from a setting's id, so a category of forty
-    /// entries reads as a handful of short lists instead of one wall.
-    /// Java's Swing UI had only the category sidebar; this is the "1:1 plus
-    /// fixes" part.
+    /// Intentional sections based on Java's `SETTINGS_SECTIONS`, while the
+    /// six-category sidebar remains the more compact Rust navigation.
     fn setting_group(id: &str) -> &'static str {
-        const GROUPS: [(&str, &str); 14] = [
-            ("tts_", "Text to speech"),
-            ("advisory_", "Advisories"),
-            ("toast_", "Desktop notifications"),
-            ("notify_", "Desktop notifications"),
-            ("discord_ping_", "Discord pings"),
-            ("discord_", "Discord"),
-            ("enforce_instances", "Instance enforcement"),
-            ("auto_invite", "Auto-invite"),
-            ("ui_", "Appearance"),
-            ("cache_", "Cache"),
-            ("audit_", "Audit polling"),
-            ("moderation_", "Moderation"),
-            ("instance_", "Instances"),
-            ("vrchat_", "VRChat"),
+        if matches!(id, "ui_language" | "ui_left_player_dim_percent" | "ui_accent_headers") {
+            "Appearance"
+        } else if id.starts_with("ui_") || matches!(id, "vibecoded_notice_acknowledged" | "discord_setup_prompted") {
+            "Interface"
+        } else if id.starts_with("enforce_instances")
+            || matches!(id, "vrchat_client_launch_on_instance_create" | "instance_follow_fast_poll_seconds")
+        {
+            "Instance enforcement"
+        } else if id.starts_with("advisory_") {
+            "Advisories"
+        } else if id.starts_with("tts_") {
+            "Text to speech"
+        } else if id.starts_with("toast_") || id.starts_with("notify_") {
+            "Desktop notifications"
+        } else if id.starts_with("discord_ping_outstanding_") {
+            "Outstanding moderation"
+        } else if matches!(
+            id,
+            "verified_role_snowflake"
+                | "members_role_snowflake"
+                | "auto_invite_group_on_verify"
+                | "link_vrchat_manual_verify_message"
+                | "auto_invite_group_id"
+                | "announce_verify_complete"
+        ) {
+            "Verification"
+        } else if id.starts_with("discord_") || id.starts_with("moderation_summary_") {
+            "Discord"
+        } else if id.starts_with("attempt_avatar_") || id.starts_with("custom_avatar_") {
+            "Avatar search"
+        } else if id.starts_with("cache_") {
+            "Cache cleanup"
+        } else if id.starts_with("audit_")
+            || id.starts_with("moderation_")
+            || id.starts_with("heuristic")
+            || id.starts_with("outstanding")
+            || matches!(id, "timed_bans_enabled" | "auto_close_bot_instance_minutes")
+        {
+            "Moderation"
+        } else {
+            "General"
+        }
+    }
+
+    fn notification_matrix_id(id: &str) -> bool {
+        const IDS: [&str; 16] = [
+            "tts_announce_watched_users",
+            "toast_notify_watched_users",
+            "tts_announce_watched_groups",
+            "toast_notify_watched_groups",
+            "tts_announce_watched_avatars",
+            "toast_notify_watched_avatars",
+            "tts_announce_new_players",
+            "toast_notify_new_players",
+            "tts_announce_mixed_character_names",
+            "toast_notify_mixed_character_names",
+            "tts_announce_votes_to_kick",
+            "toast_notify_votes_to_kick",
+            "tts_announce_suspicious_pronouns",
+            "toast_notify_suspicious_pronouns",
+            "toast_notify_moderation",
+            "toast_notify_staff",
         ];
-        GROUPS
-            .iter()
-            .find(|(prefix, _)| id.starts_with(prefix))
-            .map(|(_, label)| *label)
-            .unwrap_or("Other")
+        IDS.contains(&id)
+    }
+
+    fn render_notification_matrix(ui: &mut egui::Ui, descriptors: &[std::sync::Arc<dyn SettingDescriptor>]) {
+        const ROWS: [(&str, Option<&str>, Option<&str>); 9] = [
+            ("Watched user", Some("tts_announce_watched_users"), Some("toast_notify_watched_users")),
+            ("Watched group", Some("tts_announce_watched_groups"), Some("toast_notify_watched_groups")),
+            ("Watched avatar", Some("tts_announce_watched_avatars"), Some("toast_notify_watched_avatars")),
+            ("New player", Some("tts_announce_new_players"), Some("toast_notify_new_players")),
+            ("Mixed-character name", Some("tts_announce_mixed_character_names"), Some("toast_notify_mixed_character_names")),
+            ("Vote to kick", Some("tts_announce_votes_to_kick"), Some("toast_notify_votes_to_kick")),
+            ("Suspicious pronouns", Some("tts_announce_suspicious_pronouns"), Some("toast_notify_suspicious_pronouns")),
+            ("Moderation action", None, Some("toast_notify_moderation")),
+            ("Staff activity", None, Some("toast_notify_staff")),
+        ];
+        let find = |id: &str| descriptors.iter().find(|descriptor| descriptor.id() == id);
+        egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
+            ui.label(egui::RichText::new("Event notifications").strong().size(15.0));
+            ui.label(egui::RichText::new("Choose how each event should get your attention.").small().weak());
+            ui.add_space(8.0);
+            egui::Grid::new("notification_matrix")
+                .num_columns(3)
+                .spacing([24.0, 7.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.strong("Event");
+                    ui.strong("Voice");
+                    ui.strong("Desktop");
+                    ui.end_row();
+                    for (label, voice_id, desktop_id) in ROWS {
+                        ui.label(label);
+                        for id in [voice_id, desktop_id] {
+                            if let Some(descriptor) = id.and_then(find) {
+                                let mut enabled = descriptor.get_as_string() == "true";
+                                if ui.checkbox(&mut enabled, "").changed() {
+                                    descriptor.set_from_string(&enabled.to_string(), "ui");
+                                }
+                            } else {
+                                ui.weak("—");
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
     }
 
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
@@ -1365,13 +1450,41 @@ impl ScarletApp {
 
             // A search looks across every category; otherwise this is the
             // selected one.
-            let rows: Vec<_> = if query.is_empty() {
+            let mut rows: Vec<_> = if query.is_empty() {
                 visible.iter().filter(|d| d.category() == category).copied().collect()
             } else {
                 visible.clone()
             };
+            let show_notification_matrix = query.is_empty() && category == SettingCategory::Notifications;
+            if show_notification_matrix {
+                rows.retain(|descriptor| !Self::notification_matrix_id(descriptor.id()));
+            }
 
-            if rows.is_empty() {
+            const SECTION_ORDER: [&str; 15] = [
+                "Appearance",
+                "Interface",
+                "Instance enforcement",
+                "Moderation",
+                "Advisories",
+                "Text to speech",
+                "Desktop notifications",
+                "Discord",
+                "Verification",
+                "Outstanding moderation",
+                "Avatar search",
+                "Cache cleanup",
+                "VRChat credentials",
+                "CLI",
+                "General",
+            ];
+            rows.sort_by_key(|descriptor| {
+                SECTION_ORDER
+                    .iter()
+                    .position(|section| *section == Self::setting_group(descriptor.id()))
+                    .unwrap_or(SECTION_ORDER.len())
+            });
+
+            if rows.is_empty() && !show_notification_matrix {
                 ui.add_space(12.0);
                 ui.weak(if query.is_empty() {
                     "No settings in this category.".to_string()
@@ -1382,34 +1495,45 @@ impl ScarletApp {
             }
 
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                let mut current_group = "";
-                for descriptor in rows {
-                    let group = Self::setting_group(descriptor.id());
-                    if group != current_group {
-                        current_group = group;
-                        ui.add_space(10.0);
-                        ui.label(egui::RichText::new(group.to_uppercase()).small().weak());
-                        ui.add_space(2.0);
-                    }
-
-                    // One row: name and id on the left, the control on the
-                    // right, at a fixed width so controls line up down the
-                    // column instead of wandering with the label length.
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(ui.available_width() - CONTROL_WIDTH);
-                            ui.label(descriptor.name());
-                            ui.label(egui::RichText::new(descriptor.id()).small().weak().monospace())
-                                .on_hover_text("Use this id with /settings edit in Discord");
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            self.render_setting_control(ui, descriptor);
-                        });
-                    });
-                    ui.add_space(2.0);
-                    ui.separator();
+                if show_notification_matrix {
+                    ui.add_space(10.0);
+                    Self::render_notification_matrix(ui, &all);
+                    ui.add_space(12.0);
                 }
-                ui.add_space(12.0);
+
+                let mut start = 0;
+                while start < rows.len() {
+                    let group = Self::setting_group(rows[start].id());
+                    let mut end = start + 1;
+                    while end < rows.len() && Self::setting_group(rows[end].id()) == group {
+                        end += 1;
+                    }
+                    egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
+                        ui.label(egui::RichText::new(group).strong().size(15.0));
+                        ui.add_space(5.0);
+                        for (offset, descriptor) in rows[start..end].iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.set_width((ui.available_width() - CONTROL_WIDTH).max(120.0));
+                                    ui.label(descriptor.name());
+                                    ui.label(egui::RichText::new(descriptor.id()).small().weak().monospace())
+                                        .on_hover_text("Use this id with /settings edit in Discord");
+                                });
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    self.render_setting_control(ui, descriptor);
+                                });
+                            });
+                            if offset + 1 < end - start {
+                                ui.add_space(3.0);
+                                ui.separator();
+                                ui.add_space(3.0);
+                            }
+                        }
+                    });
+                    ui.add_space(10.0);
+                    start = end;
+                }
+                ui.add_space(4.0);
             });
         });
     }
@@ -2031,5 +2155,22 @@ mod tests {
         assert!(!order.contains(&ColumnId::Unban));
         assert_eq!(widths[&ColumnId::Name], 222.0);
         assert_eq!(widths[&ColumnId::Id], 333.0);
+    }
+
+    #[test]
+    fn settings_use_intentional_sections_instead_of_prefix_guessing() {
+        assert_eq!(ScarletApp::setting_group("ui_language"), "Appearance");
+        assert_eq!(ScarletApp::setting_group("ui_confirm_group_invite"), "Interface");
+        assert_eq!(ScarletApp::setting_group("verified_role_snowflake"), "Verification");
+        assert_eq!(ScarletApp::setting_group("discord_ping_outstanding_user_ban"), "Outstanding moderation");
+        assert_eq!(ScarletApp::setting_group("custom_avatar_search_providers"), "Avatar search");
+    }
+
+    #[test]
+    fn notification_matrix_owns_shared_event_toggles() {
+        assert!(ScarletApp::notification_matrix_id("tts_announce_watched_users"));
+        assert!(ScarletApp::notification_matrix_id("toast_notify_staff"));
+        assert!(!ScarletApp::notification_matrix_id("tts_voice_name"));
+        assert!(!ScarletApp::notification_matrix_id("notify_desktop_enabled"));
     }
 }
