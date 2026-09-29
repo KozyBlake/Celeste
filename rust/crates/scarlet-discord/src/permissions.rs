@@ -259,7 +259,8 @@ fn default_allowed(kind: PermissionType, permission: &str) -> bool {
         ),
         PermissionType::ButtonPress => matches!(
             permission,
-            "pagination"
+            "settings"
+                | "pagination"
                 | "pagination-first"
                 | "pagination-last"
                 | "pagination-select"
@@ -299,7 +300,8 @@ fn default_allowed(kind: PermissionType, permission: &str) -> bool {
         ),
         PermissionType::StringSelect => matches!(
             permission,
-            "pagination-submission"
+            "settings"
+                | "pagination-submission"
                 | "select-tags"
                 | "select-tags-1"
                 | "select-tags-2"
@@ -319,7 +321,8 @@ fn default_allowed(kind: PermissionType, permission: &str) -> bool {
         ),
         PermissionType::ModalSubmit => matches!(
             permission,
-            "pagination-select"
+            "settings"
+                | "pagination-select"
                 | "watched-group-set-notes"
                 | "watched-entity-set-notes"
                 | "vrchat-user-edit-manager-notes"
@@ -406,5 +409,12 @@ mod tests {
     fn custom_ids_use_only_the_operation_prefix() {
         assert_eq!(operation("vrchat-user-ban:usr_123"), "vrchat-user-ban");
         assert_eq!(operation("plain"), "plain");
+    }
+
+    #[test]
+    fn authorized_settings_flows_can_submit_their_editor() {
+        assert!(default_allowed(PermissionType::ButtonPress, "settings"));
+        assert!(default_allowed(PermissionType::StringSelect, "settings"));
+        assert!(default_allowed(PermissionType::ModalSubmit, "settings"));
     }
 }

@@ -182,6 +182,16 @@ fn split_custom_id(custom_id: &str) -> Option<(&str, &str)> {
 }
 
 pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteraction) {
+    if interaction
+        .data
+        .custom_id
+        .starts_with(crate::commands::settings::MODAL_PREFIX)
+    {
+        if let Err(err) = crate::commands::settings::component(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error updating setting: {err}");
+        }
+        return;
+    }
     if interaction.data.custom_id.starts_with("timed-ban:")
         || interaction.data.custom_id.starts_with("timed-ban-custom:")
     {
