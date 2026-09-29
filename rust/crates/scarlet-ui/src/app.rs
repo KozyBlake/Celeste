@@ -6,9 +6,9 @@
 //! as `propstable` in the Java source, and the status bar text format — all
 //! driven by real state ([`crate::state::UiState`] for players/status,
 //! [`scarlet_core::settings`] for the Settings tab), not fixtures. What
-//! isn't ported: several toolbar buttons' actual behavior (Create Instance,
-//! Import Groups, Sync Discord are logged as not-yet-wired
-//! rather than faked), and most of the CLI command interpreter. The table's
+//! isn't ported: the Create Instance toolbar action and most of the CLI
+//! command interpreter. Import Groups and Sync Discord are wired to their
+//! real stores/services. The table's
 //! Ban/Unban/Invite actions call the shared VRChat client. TTS pause/resume, skip, and the
 //! CLI `tts <text>` command are backed by the real platform TTS service.
 //!
@@ -692,7 +692,7 @@ impl ScarletApp {
                     ui.close_menu();
                 }
                 if ui.button("Sync Discord").clicked() {
-                    self.state.append_cli_output("Sync Discord: not wired up yet.");
+                    self.sync_discord_commands();
                     ui.close_menu();
                 }
                 ui.separator();
@@ -719,6 +719,33 @@ impl ScarletApp {
             }
             if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
                 self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
+            }
+        });
+    }
+
+    /// Port of `ScarletUI.discordUpdateCommandList` ->
+    /// `ScarletDiscordJDA.updateCommandList`. The gateway publishes its HTTP
+    /// handle into `SharedHttp`, so the desktop action can perform the same
+    /// global command reconciliation without owning serenity's `Context`.
+    fn sync_discord_commands(&self) {
+        let http = self.discord_http.clone();
+        let state = self.state.clone();
+        state.append_cli_output("Sync Discord: pushing the current command list...");
+        self.runtime_handle.spawn(async move {
+            let http = http.read().await.clone();
+            let Some(http) = http else {
+                state.append_cli_output(
+                    "Sync Discord failed: the Discord bot is not connected.",
+                );
+                return;
+            };
+            match scarlet_discord::commands::register_global_commands_http(&http).await {
+                Ok(count) => state.append_cli_output(format!(
+                    "Sync Discord complete: registered {count} global commands."
+                )),
+                Err(error) => state.append_cli_output(format!(
+                    "Sync Discord failed: {error}"
+                )),
             }
         });
     }

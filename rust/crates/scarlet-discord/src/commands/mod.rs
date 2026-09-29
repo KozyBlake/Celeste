@@ -374,13 +374,23 @@ pub fn message_command_names() -> Vec<String> {
 }
 
 pub async fn register_global_commands(ctx: &Context) {
-    let commands = all_commands();
-
-    if let Err(err) =
-        serenity::model::application::Command::set_global_commands(&ctx.http, commands).await
-    {
+    if let Err(err) = register_global_commands_http(&ctx.http).await {
         tracing::error!("Failed to register global slash commands: {}", err);
     }
+}
+
+/// Pushes the current command inventory through an already-connected HTTP
+/// handle. Java exposes the same operation through the desktop “Sync
+/// Discord” button (`ScarletDiscordJDA.updateCommandList`).
+pub async fn register_global_commands_http(
+    http: &serenity::http::Http,
+) -> serenity::Result<usize> {
+    let registered = serenity::model::application::Command::set_global_commands(
+        http,
+        all_commands(),
+    )
+    .await?;
+    Ok(registered.len())
 }
 
 /// Dispatches an incoming command interaction to its handler by name.
