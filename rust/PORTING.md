@@ -270,6 +270,28 @@ the accompanying code. Six-digit one-time codes are never cached. Email OTP
 has no reusable secret, so its verified session cookie remains the only
 cacheable credential for that method.
 
+**Update 36 (desktop parity pass)**: the disabled Create Instance toolbar
+button is now a complete asynchronous picker. It supports Java's eight group
+and personal access modes, four regions, avatar-performance gate, optional
+display name, queue/age gate, and all six content switches; validates world
+URLs/ids and names; checks the signed-in account's exact group permissions;
+validates the world; creates the instance; records pending audit attribution;
+and returns an openable/copyable launch link. The desktop CLI now implements
+Java's user-facing operations (including localized aliases, logout, restart,
+account linking, and guarded file/URL watched-group imports). Intentionally
+excluded diagnostic/training/translation commands are recognized and explain
+their status rather than falling through as unknown. Backed Java settings
+actions were restored for pronoun-list editing, process/data-folder controls,
+Discord setup reset, and complete VRChat credential/session/TOTP reset.
+
+**Update 37 (DAVE status correction)**: Discord voice is already DAVE-capable.
+Songbird 0.6's default `driver` feature includes the Rust `davey` MLS engine,
+advertises the supported DAVE protocol version during voice connection, and
+encrypts outgoing audio in the mixer. Celeste registers the same shared
+Songbird manager used by Discord voice TTS. The old `scarlet-dave` data-only
+crate remains historical scaffolding and is not the live engine; the earlier
+“DAVE is unported” note predates the Songbird 0.6 upgrade.
+
 
 ## The Celeste rename (28 Sep 2026)
 
