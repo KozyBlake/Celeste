@@ -2152,9 +2152,78 @@ impl ScarletApp {
                     ui.add_space(10.0);
                     start = end;
                 }
+                if query.is_empty() {
+                    self.render_settings_actions(ui, category);
+                }
                 ui.add_space(4.0);
             });
         });
+    }
+
+    /// Java registers these as `FileValuedVoid` rows. They are UI actions,
+    /// not stored values, so keep them beside the registry-backed controls.
+    fn render_settings_actions(&mut self, ui: &mut egui::Ui, category: SettingCategory) {
+        if !matches!(category, SettingCategory::General | SettingCategory::System | SettingCategory::Discord) {
+            return;
+        }
+        ui.add_space(2.0);
+        egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
+            ui.label(egui::RichText::new("Actions").strong().size(15.0));
+            ui.add_space(5.0);
+            match category {
+                SettingCategory::General => {
+                    ui.label("Pronoun validation lists");
+                    ui.horizontal(|ui| {
+                        if ui.button("Edit good list").clicked() {
+                            let lists = scarlet_core::pronoun_lists::PronounLists::open(&self.data_dir);
+                            if let Err(error) = open::that(&lists.good_file) { self.state.append_cli_output(format!("Could not open good_pronoun.json: {error}")); }
+                        }
+                        if ui.button("Edit bad list").clicked() {
+                            let lists = scarlet_core::pronoun_lists::PronounLists::open(&self.data_dir);
+                            if let Err(error) = open::that(&lists.bad_file) { self.state.append_cli_output(format!("Could not open bad_pronoun.json: {error}")); }
+                        }
+                    });
+                    ui.label(egui::RichText::new("Restart Celeste after editing so the live validator reloads them.").small().weak());
+                }
+                SettingCategory::System => {
+                    if ui.button("Restart Celeste").clicked() {
+                        self.state.append_cli_output(if self.process_controller.restart() { "Restarting Celeste..." } else { "Restart is already queued" });
+                    }
+                    if ui.button("Open data folder").clicked() {
+                        if let Err(error) = open::that(&self.data_dir) { self.state.append_cli_output(format!("Could not open data folder: {error}")); }
+                    }
+                }
+                SettingCategory::Discord => {
+                    if ui.button("Reset Discord connection settings").on_hover_text("Clears the stored bot token and guild ID; setup will ask again next launch.").clicked() {
+                        if let Some(settings) = &self.settings {
+                            use scarlet_core::settings::registry::registry_string_encrypted;
+                            registry_string_encrypted(settings.encrypted.clone(), "discord.token").clear();
+                            registry_string_encrypted(settings.encrypted.clone(), "discord.guild_id").clear();
+                            settings.discord_setup_prompted.set(Some(false), "ui");
+                            self.state.append_cli_output("Cleared Discord token and guild ID. Restart Celeste to configure them again.");
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if category == SettingCategory::System {
+                ui.separator();
+                if ui.button("Reset VRChat credentials and session").clicked() {
+                    if let Some(settings) = &self.settings {
+                        use scarlet_core::settings::registry::registry_string_encrypted;
+                        registry_string_encrypted(settings.encrypted.clone(), scarlet_vrchat::client::USERNAME_KEY).clear();
+                        registry_string_encrypted(settings.encrypted.clone(), scarlet_vrchat::client::PASSWORD_KEY).clear();
+                        registry_string_encrypted(settings.encrypted.clone(), scarlet_vrchat::client::TOTP_SECRET_KEY).clear();
+                        scarlet_vrchat::client::clear_session(settings);
+                        let slot = self.vrchat_slot.clone();
+                        self.runtime_handle.spawn(async move { *slot.write().await = None; });
+                        self.state.refresh_vrchat_api_status("VRChat: credentials reset");
+                        self.state.append_cli_output("Cleared VRChat credentials, cached 2FA secret, and session. Restart Celeste to sign in again.");
+                    }
+                }
+            }
+        });
+        ui.add_space(10.0);
     }
 
     /// The control for one setting, sized so the column lines up.
