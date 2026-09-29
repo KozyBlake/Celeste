@@ -191,13 +191,13 @@ events.
 - One `Entering Room:` line is now parsed that Java ignores, purely so the
   status bar can name the world instead of showing a `wrld_` id.
 
-Still not ported in this area, tracked not hidden: avatar info hydration
-(needs the avatar-search providers and four more VRChat endpoints — the
-avatar *name* shows, its performance rating doesn't), the Discord
-`emitExtended*` implementations (the listener calls them, `NoopAuditEmitter`
-is wired in), the bundled alert tones before the nuisance and mixed-name
-announcements (no audio-file playback in the Rust TTS service yet), and
-alt-account group lookups.
+The initially recorded gaps in this area have since narrowed: avatar info
+hydration is backed by the avatar-search providers and VRChat file-analysis
+endpoints, and `main` wires `DiscordAuditEmitter` rather than the no-op
+emitter. The bundled WAV alerts before nuisance-rank and mixed-character-name
+announcements are now queued ahead of speech on both the local audio-player
+route and Discord voice, matching Java's serial playback behavior. Alt-account
+group lookups remain unported.
 
 **New dependencies** added for the above, all pure Rust and
 cross-compilation-friendly: `unicode-script`, `unicode-normalization`,

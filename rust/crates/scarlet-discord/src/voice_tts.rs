@@ -8,11 +8,16 @@ use serenity::model::id::{ChannelId, GuildId};
 
 #[derive(Clone)]
 pub struct DiscordVoiceTts {
-    sender: tokio::sync::mpsc::UnboundedSender<(String, String)>,
+    sender: tokio::sync::mpsc::UnboundedSender<VoiceRequest>,
     /// Why the last announcement didn't reach voice, if it didn't. Read by
     /// the UI so "TTS isn't coming through on Discord" has an answer in the
     /// app rather than only in the log.
     status: Arc<std::sync::Mutex<TtsRouteStatus>>,
+}
+
+enum VoiceRequest {
+    Speak { text: String, voice: String },
+    Audio { bytes: &'static [u8], name: &'static str },
 }
 
 #[derive(Default)]
@@ -49,11 +54,11 @@ impl DiscordVoiceTts {
         config: Arc<crate::data::DiscordConfigStore>,
         runtime: tokio::runtime::Handle,
     ) -> Self {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<VoiceRequest>();
         let status = Arc::new(std::sync::Mutex::new(TtsRouteStatus::default()));
         let worker_status = status.clone();
         runtime.spawn(async move {
-            while let Some((text, voice)) = receiver.recv().await {
+            while let Some(request) = receiver.recv().await {
                 // Every one of these used to be a bare `continue`, so a
                 // missing voice channel looked exactly like a working
                 // config that simply never spoke. Say why, once per
@@ -77,8 +82,15 @@ impl DiscordVoiceTts {
                     );
                     continue;
                 };
-                match synthesize_and_queue(manager.clone(), guild_id, channel_id, text, voice).await
-                {
+                let result = match request {
+                    VoiceRequest::Speak { text, voice } => {
+                        synthesize_and_queue(manager.clone(), guild_id, channel_id, text, voice).await
+                    }
+                    VoiceRequest::Audio { bytes, name } => {
+                        queue_bundled_audio(manager.clone(), guild_id, channel_id, bytes, name).await
+                    }
+                };
+                match result {
                     Ok(()) => clear(&worker_status),
                     Err(error) => {
                         report(&worker_status, &format!("Discord TTS failed: {error}"));
@@ -101,8 +113,34 @@ impl DiscordVoiceTts {
         if text.trim().is_empty() {
             return;
         }
-        let _ = self.sender.send((text.to_string(), voice.to_string()));
+        let _ = self.sender.send(VoiceRequest::Speak {
+            text: text.to_string(),
+            voice: voice.to_string(),
+        });
     }
+
+    /// Queue a bundled WAV before a spoken warning. The worker and
+    /// Songbird queue preserve submission order, matching Java's single
+    /// playback executor.
+    pub fn submit_audio(&self, bytes: &'static [u8], name: &'static str) {
+        let _ = self.sender.send(VoiceRequest::Audio { bytes, name });
+    }
+}
+
+async fn queue_bundled_audio(
+    manager: Arc<songbird::Songbird>,
+    guild_id: u64,
+    channel_id: u64,
+    bytes: &'static [u8],
+    name: &'static str,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(bytes.starts_with(b"RIFF") && bytes.len() > 44, "bundled alert is not a valid WAV");
+    let output = std::env::temp_dir().join(format!(
+        "celeste-{name}-{}.wav",
+        uuid::Uuid::new_v4()
+    ));
+    tokio::fs::write(&output, bytes).await?;
+    queue_audio_file(manager, guild_id, channel_id, output).await
 }
 
 async fn synthesize_and_queue(
@@ -125,6 +163,15 @@ async fn synthesize_and_queue(
         }
         Err(error) => anyhow::bail!("the speech synthesizer wrote no audio file ({error})"),
     }
+    queue_audio_file(manager, guild_id, channel_id, output).await
+}
+
+async fn queue_audio_file(
+    manager: Arc<songbird::Songbird>,
+    guild_id: u64,
+    channel_id: u64,
+    output: PathBuf,
+) -> anyhow::Result<()> {
     let call = manager
         .join(GuildId::new(guild_id), ChannelId::new(channel_id))
         .await?;

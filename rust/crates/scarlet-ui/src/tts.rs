@@ -10,6 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+const MIXED_CHARACTER_ALERT: &[u8] =
+    include_bytes!("../../../../src/main/resources/tts/mixed-character-alert.wav");
+const NUISANCE_ALERT: &[u8] =
+    include_bytes!("../../../../src/main/resources/tts/bl_sfx_siren_chirp.wav");
+
 #[derive(Debug, Clone)]
 enum Engine {
     Espeak(PathBuf),
@@ -212,6 +217,7 @@ fn resolve_player_prefix() -> Option<Vec<String>> {
 
 enum Request {
     Speak { text: String, voice: String },
+    Audio { path: PathBuf },
     Shutdown,
 }
 
@@ -221,12 +227,16 @@ pub struct TtsService {
     shutting_down: Arc<AtomicBool>,
     active: Arc<Mutex<Option<Child>>>,
     engine_name: Option<&'static str>,
+    mixed_character_alert: Option<PathBuf>,
+    nuisance_alert: Option<PathBuf>,
 }
 
 impl TtsService {
     pub fn new() -> Self {
         let engine = Engine::detect();
         let engine_name = engine.as_ref().map(Engine::name);
+        let mixed_character_alert = extract_alert("mixed-character-alert.wav", MIXED_CHARACTER_ALERT);
+        let nuisance_alert = extract_alert("bl_sfx_siren_chirp.wav", NUISANCE_ALERT);
         let (sender, receiver) = mpsc::channel();
         let paused = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
@@ -248,6 +258,8 @@ impl TtsService {
             shutting_down,
             active,
             engine_name,
+            mixed_character_alert,
+            nuisance_alert,
         }
     }
 
@@ -278,6 +290,40 @@ impl TtsService {
             .map_err(|_| "The TTS worker stopped.".to_string())
     }
 
+    fn submit_audio(&self, path: Option<&PathBuf>) -> Result<(), String> {
+        if self.paused.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let path = path
+            .cloned()
+            .ok_or_else(|| "The bundled alert sound could not be prepared.".to_string())?;
+        self.sender
+            .send(Request::Audio { path })
+            .map_err(|_| "The TTS worker stopped.".to_string())
+    }
+
+    /// Java's `submitMixedCharacterNameJoinAlert`: alert first, then the
+    /// localized warning, on the same serial playback queue.
+    pub fn submit_mixed_character_alert(
+        &self,
+        text: impl Into<String>,
+        voice: impl Into<String>,
+    ) -> Result<(), String> {
+        self.submit_audio(self.mixed_character_alert.as_ref())?;
+        self.submit(text, voice)
+    }
+
+    /// Java's `submitNuisanceJoinAlert`: siren chirp first, then the joined
+    /// user's combined announcement, without overlapping either clip.
+    pub fn submit_nuisance_alert(
+        &self,
+        text: impl Into<String>,
+        voice: impl Into<String>,
+    ) -> Result<(), String> {
+        self.submit_audio(self.nuisance_alert.as_ref())?;
+        self.submit(text, voice)
+    }
+
     pub fn skip(&self) -> bool {
         let mut active = self.active.lock().unwrap();
         active.as_mut().is_some_and(|child| child.kill().is_ok())
@@ -302,11 +348,15 @@ fn worker(
         if shutting_down.load(Ordering::SeqCst) {
             break;
         }
-        let Request::Speak { text, voice } = request else {
-            break;
+        let spawned = match request {
+            Request::Speak { text, voice } => {
+                let Some(engine) = &engine else { continue };
+                engine.spawn(&text, &voice)
+            }
+            Request::Audio { path } => spawn_audio_file(&path),
+            Request::Shutdown => break,
         };
-        let Some(engine) = &engine else { continue };
-        match engine.spawn(&text, &voice) {
+        match spawned {
             Ok(child) => *active.lock().unwrap() = Some(child),
             Err(err) => {
                 tracing::warn!("Could not start TTS engine: {err}");
@@ -338,6 +388,73 @@ fn worker(
             std::thread::sleep(Duration::from_millis(40));
         }
     }
+}
+
+fn extract_alert(name: &str, bytes: &[u8]) -> Option<PathBuf> {
+    if !bytes.starts_with(b"RIFF") || bytes.len() <= 44 {
+        tracing::warn!(name, "Bundled TTS alert is not a valid WAV file");
+        return None;
+    }
+    let directory = std::env::temp_dir().join("celeste-sfx");
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        tracing::warn!(%error, "Could not create the temporary alert-sound directory");
+        return None;
+    }
+    let path = directory.join(name);
+    if std::fs::write(&path, bytes).is_err() {
+        tracing::warn!(path = %path.display(), "Could not extract a bundled TTS alert");
+        return None;
+    }
+    Some(path)
+}
+
+fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
+    #[cfg(target_os = "linux")]
+    {
+        let prefix = resolve_player_prefix().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no WAV player is available (tried pw-play, paplay, and aplay)",
+            )
+        })?;
+        let (player, args) = prefix.split_first().expect("non-empty player command");
+        return Command::new(player)
+            .args(args)
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let player = find_on_path("afplay").ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "afplay is unavailable")
+        })?;
+        return Command::new(player).arg(path).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let player = find_on_path("pwsh")
+            .or_else(|| find_on_path("powershell"))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "PowerShell is unavailable")
+            })?;
+        return Command::new(player)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$p=[System.Media.SoundPlayer]::new($args[0]); $p.PlaySync()",
+            ])
+            .arg(path)
+            .spawn();
+    }
+    #[allow(unreachable_code)]
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "WAV alert playback is unsupported on this operating system",
+    ))
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
@@ -410,6 +527,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn java_alert_assets_are_bundled_as_playable_wav_files() {
+        for bytes in [MIXED_CHARACTER_ALERT, NUISANCE_ALERT] {
+            assert!(bytes.starts_with(b"RIFF"));
+            assert_eq!(&bytes[8..12], b"WAVE");
+            assert!(bytes.len() > 44);
+        }
+    }
+
+    #[test]
     fn current_system_detects_an_engine_when_one_is_available() {
         if [
             "espeak-ng",
@@ -436,13 +562,6 @@ mod tests {
 /// once) so changing it in the Settings tab takes effect immediately, the
 /// same way Java's `ttsVoiceName.get()` call inside each announcement does.
 ///
-/// **Gap, tracked not hidden:** Java precedes the nuisance-rank and
-/// mixed-character-name announcements with bundled alert tones
-/// (`BL_SFX_*.mp3`, played through `submitAlertThenSpeak`). This service has
-/// no audio-file playback yet, so those two calls speak the announcement
-/// without its chime. The distinction a moderator relies on — that a
-/// nuisance-rank join *sounds* different — is therefore not reproduced yet;
-/// see PORTING.md.
 pub struct TtsSinkAdapter {
     service: std::sync::Arc<TtsService>,
     settings: std::sync::Arc<scarlet_core::settings::Settings>,
@@ -513,12 +632,33 @@ impl scarlet_events::TtsSink for TtsSinkAdapter {
     }
 
     fn speak_after_nuisance_alert(&self, marker: &str, text: &str) {
-        // No chime yet (see the type's docs); the announcement itself still
-        // goes out, which is the part that carries the information.
-        self.speak_now(marker, text);
+        let voice = self.settings.tts_voice_name.get();
+        if self.settings.tts_use_default_audio_device.get() {
+            if let Err(err) = self.service.submit_nuisance_alert(text, voice) {
+                tracing::debug!("TTS({marker}): {err}");
+            }
+        } else if let Some(discord) = &self.discord {
+            discord.submit_audio(NUISANCE_ALERT, "nuisance-alert");
+            discord.submit(text, &voice);
+            self.publish_route_status();
+        } else {
+            self.speak_now(marker, text);
+        }
     }
 
     fn speak_mixed_character_name_alert(&self, marker: &str) {
-        self.speak_now(marker, &scarlet_core::i18n::tr("adv.ttsMixedCharAlert", &[]));
+        let text = scarlet_core::i18n::tr("adv.ttsMixedCharAlert", &[]);
+        let voice = self.settings.tts_voice_name.get();
+        if self.settings.tts_use_default_audio_device.get() {
+            if let Err(err) = self.service.submit_mixed_character_alert(text, voice) {
+                tracing::debug!("TTS({marker}): {err}");
+            }
+        } else if let Some(discord) = &self.discord {
+            discord.submit_audio(MIXED_CHARACTER_ALERT, "mixed-character-alert");
+            discord.submit(&text, &voice);
+            self.publish_route_status();
+        } else {
+            self.speak_now(marker, &text);
+        }
     }
 }
