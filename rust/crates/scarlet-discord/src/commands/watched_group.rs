@@ -5,22 +5,17 @@
 //! `set-priority`, `set-message`, `set-notes`, `set-tags`, `add-tag`,
 //! `remove-tag`, `export`, `import`, and the component-backed `remove-menu`.
 //!
-//! **Simplified**: `vrchat-group` is a plain string option rather than
-//! Java's autocomplete-resolved id (see the `commands` module docs). Every
-//! Java handler here also calls `this.vrchatGroup(event, groupId)`, which
-//! only fetches the group to *cache* it for that autocomplete's "last
-//! edited" suggestion -- with no autocomplete wired up, that call has no
-//! Rust-observable effect, so it's dropped everywhere except where a
-//! handler's reply actually needs the group's name (`add`/
-//! `delete-watched-group`/`view`), where `vrchat_context`'s client is used
-//! to fetch it directly. `group-priority`'s `-100..=100` range (Java's
+//! `vrchat-group` autocompletes from the current watched list using Java's
+//! `ALWAYS_PREFER_CACHED` policy, while still accepting a pasted group id
+//! for `add`. `group-priority`'s `-100..=100` range (Java's
 //! `setRequiredRange(-100L, 100L)`) is enforced in the handler because
 //! serenity 0.12 can't represent a negative option minimum. Not gated (matches Java's
 //! `@DefaultPerms`-only `WatchedGroup_`).
 
 use serenity::builder::{
-    CreateActionRow, CreateAttachment, CreateCommand, CreateCommandOption, CreateInputText,
-    CreateInteractionResponse, CreateInteractionResponseFollowup, CreateModal,
+    CreateActionRow, CreateAttachment, CreateAutocompleteResponse, CreateCommand,
+    CreateCommandOption, CreateInputText, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, CreateModal,
 };
 use serenity::client::Context;
 use serenity::model::application::{
@@ -34,6 +29,79 @@ use scarlet_core::watched_groups::{WatchedGroup, WatchedGroupType};
 use crate::data::WatchedGroupsKey;
 
 pub const NAME: &str = "watched-group";
+
+/// Java's watched-group completer only offers groups already on the watch
+/// list (plus an explicitly typed group id). Resolving labels uses
+/// `ALWAYS_PREFER_CACHED`, so autocomplete and remove-menu do not refetch
+/// every watched group on every interaction.
+pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
+    let query = command
+        .data
+        .autocomplete()
+        .map(|option| option.value.trim().to_lowercase())
+        .unwrap_or_default();
+    let watched = { ctx.data.read().await.get::<WatchedGroupsKey>().cloned() };
+    let client = {
+        let slot = ctx.data.read().await.get::<crate::data::VrChatClientKey>().cloned();
+        match slot {
+            Some(slot) => slot.read().await.clone(),
+            None => None,
+        }
+    };
+    let mut response = CreateAutocompleteResponse::new();
+    let mut choices = Vec::new();
+    if let Some(watched) = watched {
+        for group in watched.get_all() {
+            let name = match &client {
+                Some(client) => client
+                    .get_group_cached(
+                        &group.id,
+                        false,
+                        scarlet_vrchat::entity_cache::ALWAYS_PREFER_CACHED,
+                    )
+                    .await
+                    .ok()
+                    .map(|group| group.name),
+                None => None,
+            }
+            .unwrap_or_else(|| group.id.clone());
+            if query.is_empty()
+                || group.id.to_lowercase().contains(&query)
+                || name.to_lowercase().contains(&query)
+            {
+                choices.push((group.id, name));
+            }
+        }
+    }
+    // An id pasted for a not-yet-watched group is still useful to `add`.
+    if query.starts_with("grp_") && !choices.iter().any(|(id, _)| id == &query) {
+        if let Some(client) = &client {
+            if let Ok(group) = client
+                .get_group_cached(
+                    &query,
+                    false,
+                    scarlet_vrchat::entity_cache::ALWAYS_PREFER_CACHED,
+                )
+                .await
+            {
+                choices.push((group.id, group.name));
+            }
+        }
+    }
+    choices.sort_by(|left, right| left.1.to_lowercase().cmp(&right.1.to_lowercase()));
+    for (id, name) in choices.into_iter().take(25) {
+        response = response.add_string_choice(group_choice_label(&name, &id), id);
+    }
+    command
+        .create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response))
+        .await
+}
+
+fn group_choice_label(name: &str, id: &str) -> String {
+    let suffix = format!(" ({id})");
+    let keep = 100usize.saturating_sub(suffix.chars().count());
+    format!("{}{}", name.chars().take(keep).collect::<String>(), suffix)
+}
 
 fn group_id_option() -> CreateCommandOption {
     CreateCommandOption::new(
@@ -427,7 +495,11 @@ async fn run_remove_menu(
         let name = match &context {
             Some(context) => context
                 .client
-                .get_group(&group.id, false)
+                .get_group_cached(
+                    &group.id,
+                    false,
+                    scarlet_vrchat::entity_cache::ALWAYS_PREFER_CACHED,
+                )
                 .await
                 .ok()
                 .map(|group| group.name),
@@ -983,5 +1055,13 @@ mod tests {
         assert!(check_priority_range(100).is_none());
         assert!(check_priority_range(-101).is_some());
         assert!(check_priority_range(101).is_some());
+    }
+
+    #[test]
+    fn autocomplete_labels_fit_discord_and_keep_the_group_id() {
+        let id = "grp_12345678-1234-1234-1234-123456789012";
+        let label = group_choice_label(&"x".repeat(200), id);
+        assert!(label.chars().count() <= 100);
+        assert!(label.ends_with(&format!(" ({id})")));
     }
 }

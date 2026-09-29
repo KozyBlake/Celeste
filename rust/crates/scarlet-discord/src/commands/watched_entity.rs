@@ -4,8 +4,8 @@
 //! `scarlet_core::watched_entities::WatchedEntities`. See
 //! [`super::watched_user`]/[`super::watched_avatar`] for the thin
 //! per-entity-kind wrappers, and [`super::watched_group`]'s docs for the
-//! simplifications (`entity-priority`'s `-100..=100` range not enforced at the Discord-option
-//! level).
+//! simplifications (`entity-priority`'s `-100..=100` range is enforced in
+//! the handler because serenity cannot encode a negative option minimum).
 //!
 //! Ported subcommands: `list`, `add`, `remove`, `view`, `set-critical`,
 //! `set-silent`, `set-type`, `set-priority`, `set-message`, `set-tags`,
@@ -616,7 +616,9 @@ async fn run_remove_menu(
     let mut entries = Vec::new();
     for entity in entities.get_all() {
         let name = match &context {
-            Some(context) => kind.fetch_name(&context.client, &entity.id).await,
+            Some(context) => kind
+                .fetch_name_cached(&context.client, &entity.id, ALWAYS_PREFER_CACHED)
+                .await,
             None => None,
         }
         .unwrap_or_else(|| entity.id.clone());
@@ -811,7 +813,9 @@ async fn run_remove(
         .await;
     }
     let name = match super::vrchat_context(ctx).await {
-        Ok(context) => kind.fetch_name(&context.client, id).await,
+        Ok(context) => kind
+            .fetch_name_cached(&context.client, id, ALWAYS_PREFER_CACHED)
+            .await,
         Err(_) => None,
     }
     .unwrap_or_else(|| id.to_string());

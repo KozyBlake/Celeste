@@ -462,10 +462,11 @@ pub async fn dispatch_autocomplete(ctx: &Context, command: &CommandInteraction) 
             set_event_channel::autocomplete_audit(ctx, command).await
         }
         vrchat_user_ban::NAME | vrchat_user_unban::NAME | vrchat_user_info::NAME
-        | staff_list::NAME | secret_staff_list::NAME | watched_group::NAME
+        | staff_list::NAME | secret_staff_list::NAME
         | vrchat_group::NAME | unlink_vrchat_account_for::NAME => {
             vrchat_autocomplete::respond(ctx, command).await
         }
+        watched_group::NAME => watched_group::autocomplete(ctx, command).await,
         moderation_history::MODERATION_LOG_NAME | moderation_history::QUERY_TARGET_NAME
         | moderation_history::QUERY_ACTOR_NAME | moderation_history::ACTOR_SUMMARY_NAME => {
             vrchat_autocomplete::respond(ctx, command).await
