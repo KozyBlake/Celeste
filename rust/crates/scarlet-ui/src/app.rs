@@ -6,8 +6,8 @@
 //! as `propstable` in the Java source, and the status bar text format — all
 //! driven by real state ([`crate::state::UiState`] for players/status,
 //! [`scarlet_core::settings`] for the Settings tab), not fixtures. What
-//! isn't ported: most of the CLI command interpreter. Create Instance,
-//! Import Groups, and Sync Discord are wired to their
+//! The user-facing CLI commands, Create Instance, Import Groups, and Sync
+//! Discord are wired to their
 //! real stores/services. The table's
 //! Ban/Unban/Invite actions call the shared VRChat client. TTS pause/resume, skip, and the
 //! CLI `tts <text>` command are backed by the real platform TTS service.
@@ -128,6 +128,28 @@ fn create_instance_request(form: &CreateInstanceForm, world_id: &str, owner_id: 
     if let Some(name) = validate_instance_display_name(&form.display_name)? { object.insert("displayName".into(), serde_json::json!(name)); }
     if !form.avatar_gate.is_empty() { object.insert("minimumAvatarPerformance".into(), serde_json::json!(form.avatar_gate)); }
     Ok(request)
+}
+
+fn canonicalize_cli_command(op: &str) -> String {
+    let low = op.trim().to_ascii_lowercase();
+    const CANONICAL: [&str; 25] = [
+        "info", "help", "logout", "exit", "halt", "quit", "stop", "reboot", "restart", "langlint",
+        "simulate", "explore", "tts", "link", "importgroups", "importgroupsjson", "translate-advisories",
+        "restore-advisories", "repair-secure-store", "vrchatapi-test", "popup", "popups", "popup-test", "clear", "",
+    ];
+    if CANONICAL.contains(&low.as_str()) { return low; }
+    for (canonical, key) in [
+        ("help", "cli.alias.help"), ("logout", "cli.alias.logout"), ("exit", "cli.alias.exit"),
+        ("reboot", "cli.alias.reboot"), ("langlint", "cli.alias.langlint"), ("simulate", "cli.alias.simulate"),
+        ("explore", "cli.alias.explore"), ("tts", "cli.alias.tts"), ("link", "cli.alias.link"),
+        ("importgroups", "cli.alias.importgroups"), ("importgroupsjson", "cli.alias.importgroupsjson"),
+    ] {
+        let aliases = scarlet_core::i18n::tr(key, &[]);
+        if aliases != key && aliases.split(|c: char| c == ',' || c.is_whitespace()).any(|alias| alias.eq_ignore_ascii_case(&low)) {
+            return canonical.into();
+        }
+    }
+    low
 }
 
 type PendingGroupFileImport = Result<Option<(String, Vec<u8>, String)>, String>;
@@ -2238,27 +2260,115 @@ impl ScarletApp {
             let response = ui.text_edit_singleline(&mut self.cli_input);
             let run = ui.button("Run").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
             if run && !self.cli_input.trim().is_empty() {
-                self.run_cli_command(self.cli_input.trim().to_string());
+                self.run_cli_command(ui.ctx(), self.cli_input.trim().to_string());
                 self.cli_input.clear();
             }
         });
     }
 
-    /// Incremental port of Celeste's command interpreter.
-    fn run_cli_command(&mut self, command: String) {
+    /// Port of Java's `Scarlet.rawCommand`. Commands whose backing subsystem
+    /// is deliberately out of scope are recognized and say so explicitly.
+    fn run_cli_command(&mut self, ctx: &egui::Context, command: String) {
         self.state.append_cli_output(format!("> {command}"));
-        if let Some(text) = command.strip_prefix("tts ").map(str::trim).filter(|text| !text.is_empty()) {
-            let voice = self.settings.as_ref().map(|settings| settings.tts_voice_name.get()).unwrap_or_default();
-            match self.tts.submit(text, voice) {
-                Ok(()) => self.state.append_cli_output(format!("Submitting TTS: `{text}`")),
-                Err(err) => self.state.append_cli_output(format!("[warn] TTS service not available: {err}")),
+        let (raw_op, rest) = command.split_once(char::is_whitespace).map_or((command.as_str(), ""), |(op, rest)| (op, rest.trim()));
+        let op = canonicalize_cli_command(raw_op);
+        match op.as_str() {
+            "help" | "info" => self.state.append_cli_output(
+                "Celeste CLI commands:\n  help/info                 show this list\n  logout                   log out of VRChat\n  exit/halt/quit/stop       stop Celeste\n  reboot/restart            restart Celeste\n  explore                  open the data folder\n  tts <text>               speak text\n  link <usr_id> <snowflake> link VRChat and Discord users\n  importgroups <file|URL>   import watched groups CSV\n  importgroupsjson <file|URL> import watched groups JSON\n  clear                    clear this output",
+            ),
+            "clear" => self.state.clear_cli_log(),
+            "explore" => {
+                match open::that(&self.data_dir) {
+                    Ok(()) => self.state.append_cli_output(format!("Opening data folder: {}", self.data_dir.display())),
+                    Err(error) => self.state.append_cli_output(format!("[error] Could not open data folder: {error}")),
+                }
             }
+            "tts" => {
+                if rest.is_empty() { return; }
+                let voice = self.settings.as_ref().map(|s| s.tts_voice_name.get()).unwrap_or_default();
+                match self.tts.submit(rest, voice) {
+                    Ok(()) => self.state.append_cli_output(format!("Submitting TTS: `{rest}`")),
+                    Err(error) => self.state.append_cli_output(format!("[warn] TTS service not available: {error}")),
+                }
+            }
+            "reboot" | "restart" => {
+                self.state.append_cli_output(if self.process_controller.restart() { "Restarting Celeste..." } else { "Restart is already queued" });
+            }
+            "exit" | "halt" | "quit" | "stop" => {
+                self.state.append_cli_output("Stopping Celeste...");
+                self.exit_confirmed = true;
+                self.shutdown();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            "logout" => {
+                let slot = self.vrchat_slot.clone();
+                let settings = self.settings.clone();
+                let state = self.state.clone();
+                self.runtime_handle.spawn(async move {
+                    let client = slot.read().await.clone();
+                    let result = match client { Some(client) => client.logout().await.map_err(|e| e.to_string()), None => Ok(()) };
+                    if let Some(settings) = settings { scarlet_vrchat::client::clear_session(&settings); }
+                    *slot.write().await = None;
+                    match result {
+                        Ok(()) => { state.refresh_vrchat_api_status("VRChat: signed out"); state.append_cli_output("Logout success: true"); }
+                        Err(error) => state.append_cli_output(format!("[error] Logout failed: {error}")),
+                    }
+                });
+                // Java deliberately falls through from `logout` into
+                // `exit`, ensuring the next launch starts a fresh session.
+                self.exit_confirmed = true;
+                self.shutdown();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            "link" => {
+                let mut args = rest.split_whitespace();
+                let (Some(user_id), Some(snowflake), None) = (args.next(), args.next(), args.next()) else {
+                    self.state.append_cli_output("Usage: link <usr_id> <discord snowflake>");
+                    return;
+                };
+                let user_id = user_id.to_string();
+                let snowflake = snowflake.to_string();
+                let slot = self.vrchat_slot.clone();
+                let data = self.scarlet_data.clone();
+                let state = self.state.clone();
+                self.runtime_handle.spawn(async move {
+                    let Some(client) = slot.read().await.clone() else { state.append_cli_output("[warn] Celeste is not signed in to VRChat."); return; };
+                    match client.get_user(&user_id).await {
+                        Ok(user) => {
+                            data.link_id_to_snowflake(&user_id, &snowflake);
+                            state.append_cli_output(format!("Linking VRChat user {} ({user_id}) to Discord user <@{snowflake}>", user.display_name.unwrap_or_else(|| user_id.clone())));
+                        }
+                        Err(_) => state.append_cli_output(format!("[warn] Unknown VRChat user: {user_id}")),
+                    }
+                });
+            }
+            "importgroups" => self.cli_import_groups(rest, "csv"),
+            "importgroupsjson" => self.cli_import_groups(rest, "json"),
+            "translate-advisories" | "restore-advisories" => self.state.append_cli_output("This command belongs to the intentionally omitted advisory-translation integration."),
+            "simulate" => self.state.append_cli_output("Simulation/training mode is intentionally omitted from the Rust port."),
+            "repair-secure-store" | "langlint" | "vrchatapi-test" | "popup" | "popups" | "popup-test" => self.state.append_cli_output(format!("The `{op}` diagnostic command is not available in this build.")),
+            other => self.state.append_cli_output(format!("Unknown command: {other} (type 'help')")),
+        }
+    }
+
+    fn cli_import_groups(&mut self, source: &str, extension: &str) {
+        if source.is_empty() {
+            self.state.append_cli_output(format!("Usage: importgroups{} <file|URL>", if extension == "json" { "json" } else { "" }));
             return;
         }
-        match command.as_str() {
-            "help" => self.state.append_cli_output("Commands: help, clear, tts <text>. More Java CLI commands are still being ported."),
-            "clear" => self.state.clear_cli_log(),
-            other => self.state.append_cli_output(format!("Unknown command: {other} (type 'help')")),
+        if source.starts_with("http://") || source.starts_with("https://") {
+            self.state.append_cli_output(format!("Importing watched groups {extension} from URL: {source}"));
+            let url = source.to_string();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.runtime_handle.spawn(async move {
+                let _ = tx.send(scarlet_discord::url_guard::download_public_text(&url, 8 * 1024 * 1024).await);
+            });
+            self.import_groups_rx = Some((extension.to_string(), rx));
+        } else {
+            match std::fs::read(source) {
+                Ok(contents) => self.apply_group_import(extension, &contents, source),
+                Err(error) => self.state.append_cli_output(format!("[error] Exception importing watched groups from file {source}: {error}")),
+            }
         }
     }
 }
@@ -2825,5 +2935,13 @@ mod tests {
         assert_eq!(request["type"], "private");
         assert_eq!(request["canRequestInvite"], true);
         assert!(request.get("groupAccessType").is_none());
+    }
+
+    #[test]
+    fn cli_canonical_commands_and_exit_synonyms_match_java() {
+        assert_eq!(canonicalize_cli_command("HELP"), "help");
+        assert_eq!(canonicalize_cli_command("halt"), "halt");
+        assert_eq!(canonicalize_cli_command("restart"), "restart");
+        assert_eq!(canonicalize_cli_command("not-a-command"), "not-a-command");
     }
 }

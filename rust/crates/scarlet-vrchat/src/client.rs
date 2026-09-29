@@ -251,6 +251,18 @@ impl VrChatClient {
         serde_json::from_str(&body).map_err(|e| VrChatError::UnexpectedShape(e.to_string()))
     }
 
+    /// Port of `AuthenticationApi.logout()` used by Java's CLI `logout`
+    /// command. VRChat invalidates the current cookie-backed session.
+    pub async fn logout(&self) -> Result<(), VrChatError> {
+        let response = self.http.put(self.url("/logout")).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(VrChatError::Api { status, body });
+        }
+        Ok(())
+    }
+
     /// Returns VRChat's clock, used for TOTP generation so a machine with a
     /// slightly incorrect local clock can still sign in (matching Java's
     /// `MiscellaneousApi.getSystemTime()`).
@@ -2359,6 +2371,18 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn logout_uses_vrchats_put_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/logout"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": {"message": "ok"}})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        VrChatClient::with_base_url(&server.uri()).unwrap().logout().await.unwrap();
     }
 
     #[tokio::test]
