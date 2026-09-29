@@ -232,6 +232,24 @@ impl ColumnId {
         }
     }
 
+    /// Smallest useful on-screen width when the roster has to fit inside a
+    /// narrow window. This is deliberately smaller than `min_width`: saved
+    /// widths describe the user's preferred layout, while the rendered table
+    /// is allowed to compress those preferences so it never needs a
+    /// horizontal scrollbar. Labels and values truncate with an ellipsis.
+    fn fitted_min_width(&self) -> f32 {
+        match self {
+            ColumnId::AvatarStats
+            | ColumnId::Profile
+            | ColumnId::CopyId
+            | ColumnId::Ban
+            | ColumnId::Unban
+            | ColumnId::Invite => 42.0,
+            ColumnId::Age18 => 30.0,
+            _ => 36.0,
+        }
+    }
+
     fn sortable(self) -> bool {
         !matches!(
             self,
@@ -243,6 +261,55 @@ impl ColumnId {
                 | ColumnId::Invite
         )
     }
+}
+
+/// Fit every visible column into `available_width` while preserving the
+/// user's saved widths as relative preferences. Long values are truncated by
+/// the cell renderer, so the roster stays entirely inside its panel rather
+/// than introducing a second, horizontal scrolling direction.
+fn fitted_column_widths(
+    columns: &[ColumnId],
+    preferred: &std::collections::HashMap<ColumnId, f32>,
+    available_width: f32,
+) -> Vec<f32> {
+    if columns.is_empty() {
+        return Vec::new();
+    }
+
+    let floors = columns
+        .iter()
+        .map(|column| column.fitted_min_width())
+        .collect::<Vec<_>>();
+    let floor_total = floors.iter().sum::<f32>();
+    if available_width <= floor_total {
+        let scale = (available_width / floor_total).max(0.0);
+        return floors.into_iter().map(|width| width * scale).collect();
+    }
+
+    let flexible = columns
+        .iter()
+        .zip(&floors)
+        .map(|(column, floor)| {
+            preferred
+                .get(column)
+                .copied()
+                .unwrap_or_else(|| column.initial_width())
+                .max(*floor)
+                - *floor
+        })
+        .collect::<Vec<_>>();
+    let flexible_total = flexible.iter().sum::<f32>();
+    let extra = available_width - floor_total;
+    if flexible_total <= f32::EPSILON {
+        let extra_per_column = extra / columns.len() as f32;
+        return floors.into_iter().map(|width| width + extra_per_column).collect();
+    }
+
+    floors
+        .into_iter()
+        .zip(flexible)
+        .map(|(floor, preference)| floor + extra * preference / flexible_total)
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -774,6 +841,19 @@ impl ScarletApp {
         }
     }
 
+    /// Table actions need much less horizontal padding than normal toolbar
+    /// buttons, especially after the columns compress with the window.
+    fn table_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+        ui.scope(|ui| {
+            ui.spacing_mut().button_padding.x = 2.0;
+            ui.add_sized(
+                [ui.available_width(), 22.0],
+                egui::Button::new(egui::RichText::new(label).small()),
+            )
+        })
+        .inner
+    }
+
     fn render_cell(&mut self, ui: &mut egui::Ui, player: &scarlet_core::ui::ConnectedPlayer, column: ColumnId) {
         match column {
             ColumnId::Name => {
@@ -795,7 +875,7 @@ impl ScarletApp {
                 );
             }
             ColumnId::AvatarStats => {
-                if ui.button("View").clicked() {
+                if Self::table_button(ui, "View").clicked() {
                     self.avatar_stats_open = Some(AvatarStatsView {
                         player_name: player.name.clone(),
                         avatar_name: player.avatar_name.clone(),
@@ -827,29 +907,29 @@ impl ScarletApp {
                 ui.add(egui::Label::new(egui::RichText::new(player.trust_rank.label()).color(color)).truncate());
             }
             ColumnId::Profile => {
-                if ui.button("Open").clicked() {
+                if Self::table_button(ui, "Open").clicked() {
                     ui.ctx().open_url(egui::OpenUrl::same_tab(format!("https://vrchat.com/home/user/{}", player.id)));
                 }
             }
             ColumnId::CopyId => {
-                if ui.button("Copy").clicked() {
+                if Self::table_button(ui, "Copy").clicked() {
                     ui.ctx().copy_text(player.id.clone());
                 }
             }
             ColumnId::Ban => {
-                if ui.button("Ban").clicked() {
+                if Self::table_button(ui, "Ban").clicked() {
                     // Java confirms before banning from the table; so does
                     // this, because a stray click in a row list is easy.
                     self.group_action_confirm = Some((GroupAction::Ban, player.id.clone(), player.name.clone()));
                 }
             }
             ColumnId::Unban => {
-                if ui.button("Unban").clicked() {
+                if Self::table_button(ui, "Unban").clicked() {
                     self.group_action_confirm = Some((GroupAction::Unban, player.id.clone(), player.name.clone()));
                 }
             }
             ColumnId::Invite => {
-                if ui.button("Invite").clicked() {
+                if Self::table_button(ui, "Invite").clicked() {
                     let confirm = self
                         .settings
                         .as_ref()
@@ -969,32 +1049,28 @@ impl ScarletApp {
         ui.set_min_height((table_panel_height - 12.0).max(0.0));
         let table_view_width = ui.available_width();
         let table_view_height = ui.available_height();
-        egui::ScrollArea::horizontal()
-            .auto_shrink([false, false])
-            .min_scrolled_width(table_view_width)
-            .max_height(table_view_height)
-            .show(ui, |ui| {
-            // `Column::auto()` sizes to content, which is what let a long
-            // VRChat id wrap over five lines. A fixed initial width that
-            // clips (and can still be dragged wider) is the Swing
-            // `JTable`'s behaviour.
-            let natural_width = column_order
-                .iter()
-                .map(|column| column_widths.get(column).copied().unwrap_or_else(|| column.initial_width()).max(column.min_width()))
-                .sum::<f32>();
-            let width_scale = if natural_width > 0.0 {
-                (table_view_width / natural_width).max(1.0)
-            } else {
-                1.0
-            };
+            // `TableBuilder` places `item_spacing.x` between each pair of
+            // columns and reserves the scrollbar width separately from the
+            // declared column widths. Budget for both or the last columns
+            // still land outside the panel even when the widths themselves
+            // add up to `table_view_width`.
+            let inter_column_spacing = ui.spacing().item_spacing.x
+                * column_order.len().saturating_sub(1) as f32;
+            let scrollbar_width = ui.spacing().scroll.allocated_width();
+            let content_width = (table_view_width - inter_column_spacing - scrollbar_width).max(0.0);
+            // Keep the entire roster inside the inner panel. Saved widths
+            // remain the user's preferences, but the on-screen widths are
+            // proportionally compressed to the current viewport. Cells and
+            // headings use ellipses, with full cell values available on
+            // hover.
+            let fitted_widths = fitted_column_widths(&column_order, &column_widths, content_width);
             let mut table = TableBuilder::new(ui)
                 .striped(true)
                 .min_scrolled_height(table_view_height)
                 .max_scroll_height(table_view_height)
                 .auto_shrink([false, false]);
-            for column in &column_order {
-                let width = column_widths.get(column).copied().unwrap_or_else(|| column.initial_width());
-                table = table.column(Column::exact(width.max(column.min_width()) * width_scale).clip(true));
+            for width in fitted_widths {
+                table = table.column(Column::exact(width).clip(true));
             }
 
             table
@@ -1020,6 +1096,7 @@ impl ScarletApp {
                                                 .strong()
                                                 .color(egui::Color32::from_rgb(197, 205, 218)),
                                         )
+                                        .truncate()
                                         .sense(egui::Sense::click_and_drag()),
                                     );
                                 },
@@ -1109,7 +1186,6 @@ impl ScarletApp {
                         });
                     }
                 });
-        });
             });
             });
 
@@ -2281,6 +2357,36 @@ mod tests {
             assert!(!column.label().is_empty());
             assert!(column.min_width() > 0.0);
         }
+    }
+
+    #[test]
+    fn fitted_columns_always_use_exactly_the_available_width() {
+        let preferred = ColumnId::ALL
+            .into_iter()
+            .map(|column| (column, column.initial_width()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        for available in [420.0, 900.0, 1800.0] {
+            let widths = fitted_column_widths(&ColumnId::DEFAULT_VISIBLE, &preferred, available);
+            assert_eq!(widths.len(), ColumnId::DEFAULT_VISIBLE.len());
+            assert!((widths.iter().sum::<f32>() - available).abs() < 0.01);
+            assert!(widths.iter().all(|width| *width > 0.0));
+        }
+    }
+
+    #[test]
+    fn fitted_columns_preserve_more_room_for_long_identifiers() {
+        let preferred = ColumnId::ALL
+            .into_iter()
+            .map(|column| (column, column.initial_width()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let columns = [ColumnId::Name, ColumnId::Id, ColumnId::Age18, ColumnId::Ban];
+        let widths = fitted_column_widths(&columns, &preferred, 600.0);
+
+        assert!(widths[1] > widths[0]);
+        assert!(widths[0] > widths[2]);
+        assert!(widths[2] > 0.0);
+        assert!(widths[3] > 0.0);
     }
 
     #[test]
