@@ -345,6 +345,13 @@ impl ScarletData {
             }
         });
     }
+    pub fn live_instances_set_playerlist_message(&self, location: &str, message_snowflake: String) {
+        self.live_instances.update(|li| {
+            if let Some(message) = li.location_to_instance_embed_message.get_mut(location) {
+                message.playerlist_message_snowflake = Some(message_snowflake);
+            }
+        });
+    }
 
     // ---- user metadata ----
 
@@ -899,6 +906,31 @@ mod tests {
         assert_eq!(data.global_get_snowflake_id("123"), None);
         data.global_set_snowflake_id("123", "usr_abc");
         assert_eq!(data.global_get_snowflake_id("123"), Some("usr_abc".to_string()));
+    }
+
+    #[test]
+    fn live_instance_playerlist_and_close_state_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = ScarletData::open(dir.path());
+        let opened = Utc::now();
+        data.live_instances_set_location_instance_embed_message(
+            "wrld_1:instance",
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+            Some("4".into()),
+            Some("5".into()),
+            opened,
+        );
+        data.live_instances_set_playerlist_message("wrld_1:instance", "6".into());
+        let closed = opened + chrono::Duration::minutes(10);
+        data.live_instances_set_location_closed_at("wrld_1:instance", closed);
+        let stored = data
+            .live_instances_get_location_instance_embed_message("wrld_1:instance", false)
+            .unwrap();
+        assert_eq!(stored.playerlist_message_snowflake.as_deref(), Some("6"));
+        assert_eq!(stored.opened_at, Some(opened));
+        assert_eq!(stored.closed_at, Some(closed));
     }
 
     #[test]

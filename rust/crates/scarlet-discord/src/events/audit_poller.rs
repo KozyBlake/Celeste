@@ -18,10 +18,10 @@ use scarlet_core::staff_list::StaffList;
 use scarlet_vrchat::models::GroupAuditLogEntry;
 use serenity::builder::{
     CreateActionRow, CreateButton, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter,
-    CreateMessage, CreateThread,
+    CreateMessage, CreateThread, EditMessage,
 };
 use serenity::model::channel::AutoArchiveDuration;
-use serenity::model::id::ChannelId;
+use serenity::model::id::{ChannelId, MessageId};
 use serenity::model::Colour;
 
 use crate::data::{DiscordConfigStore, SharedHttp, SharedVrChatClient};
@@ -171,6 +171,7 @@ impl AuditPoller {
         } else if entry.event_type == "group.instance.close" {
             if let Some(location) = entry.target_id.as_deref() {
                 self.data.live_instances_set_location_closed_at(location, entry.created_at);
+                self.finalise_playerlist(location).await;
             }
         }
         let map = if secret { "auditType2secretChannelSf" } else { "auditType2channelSf" };
@@ -310,6 +311,65 @@ impl AuditPoller {
             aux_message.map(|message| message.id.get().to_string()),
             entry.created_at,
         );
+        let playerlist_enabled = self
+            .config
+            .map_value("auditExType2channelSf", "groupex.instance.playerlist")
+            .is_some_and(|value| !value.trim().is_empty());
+        if playerlist_enabled {
+            let playerlist = CreateEmbed::new()
+                .title("Live Player List")
+                .description("*No players yet*")
+                .colour(Colour::new(0x007f7f))
+                .timestamp(serenity::model::Timestamp::now());
+            let join_button = CreateActionRow::Buttons(vec![
+                CreateButton::new_link(launch_link(location)).label("Join Instance"),
+            ]);
+            match thread
+                .id
+                .send_message(
+                    &http,
+                    CreateMessage::new().embed(playerlist).components(vec![join_button]),
+                )
+                .await
+            {
+                Ok(message) => self
+                    .data
+                    .live_instances_set_playerlist_message(location, message.id.get().to_string()),
+                Err(error) => tracing::warn!(%error, location, "Could not create live player-list message"),
+            }
+        }
+    }
+
+    async fn finalise_playerlist(&self, location: &str) {
+        let Some(instance) = self.data.live_instances_get_location_instance_embed_message(location, false) else { return };
+        let (Some(thread_id), Some(message_id)) = (
+            instance.thread_snowflake.as_deref().and_then(|id| id.parse::<u64>().ok()),
+            instance.playerlist_message_snowflake.as_deref().and_then(|id| id.parse::<u64>().ok()),
+        ) else { return };
+        let Some(http) = self.http.read().await.clone() else { return };
+        let channel = ChannelId::new(thread_id);
+        let message_id = MessageId::new(message_id);
+        let message = match channel.message(&http, message_id).await {
+            Ok(message) => message,
+            Err(error) => {
+                tracing::warn!(%error, location, "Could not retrieve live player list for finalisation");
+                return;
+            }
+        };
+        let Some(existing) = message.embeds.into_iter().next() else { return };
+        let embed = CreateEmbed::from(existing)
+            .footer(CreateEmbedFooter::new("Session ended"))
+            .timestamp(serenity::model::Timestamp::now());
+        if let Err(error) = channel
+            .edit_message(
+                &http,
+                message_id,
+                EditMessage::new().embed(embed).components(Vec::new()),
+            )
+            .await
+        {
+            tracing::warn!(%error, location, "Could not finalise live player list");
+        }
     }
 
     async fn process_timed_bans(&self) {

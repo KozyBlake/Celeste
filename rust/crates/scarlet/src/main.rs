@@ -171,6 +171,8 @@ fn main() -> anyhow::Result<()> {
             discord_config,
             shared.scarlet_data.clone(),
             settings.clone(),
+            shared.staff_list.clone(),
+            shared.watched_users.clone(),
         )),
     });
     runtime.spawn(scarlet_events::listener::run(listener, tailer_events));

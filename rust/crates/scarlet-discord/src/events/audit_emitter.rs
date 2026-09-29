@@ -23,16 +23,19 @@
 //! `VRChatHelpDeskURLs`, a large per-category form-field builder that isn't
 //! ported), the sticker/print/emoji/prop *lookups* that decorate those
 //! embeds with images and author names (their VRChat endpoints aren't
-//! ported), the live-player-list side effects, and the training-mode
+//! ported), and the training-mode
 //! channel split (training mode is out of scope — see PORTING.md).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::NaiveDateTime;
 use scarlet_core::data::ScarletData;
 use scarlet_core::settings::Settings;
-use serenity::builder::{CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter, CreateMessage};
-use serenity::model::id::ChannelId;
+use scarlet_core::staff_list::StaffList;
+use scarlet_core::watched_entities::WatchedEntities;
+use serenity::builder::{CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter, CreateMessage, EditMessage};
+use serenity::model::id::{ChannelId, MessageId};
 use serenity::model::Colour;
 
 use crate::data::{DiscordConfigStore, SharedHttp};
@@ -56,11 +59,30 @@ fn footer_prefix() -> String {
     format!("{} {} \u{2727} ", scarlet_core::identity::APP_NAME, scarlet_core::identity::VERSION)
 }
 
+#[derive(Clone)]
 pub struct DiscordAuditEmitter {
     http: SharedHttp,
     config: Arc<DiscordConfigStore>,
     data: Arc<ScarletData>,
     settings: Arc<Settings>,
+    staff_list: Arc<StaffList>,
+    watched_users: Arc<WatchedEntities>,
+    playerlists: Arc<tokio::sync::Mutex<HashMap<String, PlayerListState>>>,
+}
+
+#[derive(Clone)]
+struct PlayerListEntry {
+    user_id: String,
+    display_name: String,
+    joined_at: NaiveDateTime,
+    avatar_name: Option<String>,
+    left: bool,
+}
+
+#[derive(Clone, Default)]
+struct PlayerListState {
+    players: Vec<PlayerListEntry>,
+    revision: u64,
 }
 
 impl DiscordAuditEmitter {
@@ -69,8 +91,18 @@ impl DiscordAuditEmitter {
         config: Arc<DiscordConfigStore>,
         data: Arc<ScarletData>,
         settings: Arc<Settings>,
+        staff_list: Arc<StaffList>,
+        watched_users: Arc<WatchedEntities>,
     ) -> Self {
-        DiscordAuditEmitter { http, config, data, settings }
+        DiscordAuditEmitter {
+            http,
+            config,
+            data,
+            settings,
+            staff_list,
+            watched_users,
+            playerlists: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        }
     }
 
     /// Port of `isEmitting(GroupAuditTypeEx)`: connected, and a channel is
@@ -148,6 +180,140 @@ impl DiscordAuditEmitter {
         ])
     }
 
+    async fn player_joined(
+        &self,
+        timestamp: NaiveDateTime,
+        location: &str,
+        user_id: &str,
+        display_name: &str,
+    ) {
+        if self.configured_channel("groupex.instance.playerlist", false).is_none() { return; }
+        let mut states = self.playerlists.lock().await;
+        let state = states.entry(location.to_string()).or_default();
+        if let Some(player) = state.players.iter_mut().find(|player| player.user_id == user_id) {
+            player.display_name = display_name.to_string();
+            player.joined_at = timestamp;
+            player.left = false;
+        } else {
+            state.players.push(PlayerListEntry {
+                user_id: user_id.to_string(),
+                display_name: display_name.to_string(),
+                joined_at: timestamp,
+                avatar_name: None,
+                left: false,
+            });
+        }
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        drop(states);
+        self.schedule_playerlist_edit(location.to_string(), revision);
+    }
+
+    async fn player_left(&self, location: &str, user_id: &str) {
+        if self.configured_channel("groupex.instance.playerlist", false).is_none() { return; }
+        let mut states = self.playerlists.lock().await;
+        let Some(state) = states.get_mut(location) else { return };
+        if let Some(player) = state.players.iter_mut().find(|player| player.user_id == user_id) {
+            player.left = true;
+        }
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        drop(states);
+        self.schedule_playerlist_edit(location.to_string(), revision);
+    }
+
+    async fn player_avatar(&self, location: &str, user_id: &str, avatar_name: &str) {
+        if self.configured_channel("groupex.instance.playerlist", false).is_none() { return; }
+        let mut states = self.playerlists.lock().await;
+        let Some(state) = states.get_mut(location) else { return };
+        if let Some(player) = state.players.iter_mut().find(|player| player.user_id == user_id) {
+            player.avatar_name = Some(avatar_name.to_string());
+        }
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        drop(states);
+        self.schedule_playerlist_edit(location.to_string(), revision);
+    }
+
+    fn schedule_playerlist_edit(&self, location: String, revision: u64) {
+        let emitter = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let players = {
+                let states = emitter.playerlists.lock().await;
+                let Some(state) = states.get(&location) else { return };
+                if state.revision != revision { return; }
+                state.players.clone()
+            };
+            emitter.flush_playerlist(&location, &players).await;
+        });
+    }
+
+    async fn flush_playerlist(&self, location: &str, players: &[PlayerListEntry]) {
+        let Some(instance) = self.data.live_instances_get_location_instance_embed_message(location, false) else { return };
+        let (Some(thread_id), Some(message_id)) = (
+            instance.thread_snowflake.as_deref().and_then(|id| id.parse::<u64>().ok()),
+            instance.playerlist_message_snowflake.as_deref().and_then(|id| id.parse::<u64>().ok()),
+        ) else { return };
+        let Some(http) = self.http.read().await.clone() else { return };
+        let embed = self.playerlist_embed(players);
+        if let Err(error) = ChannelId::new(thread_id)
+            .edit_message(&http, MessageId::new(message_id), EditMessage::new().embed(embed))
+            .await
+        {
+            tracing::warn!(%error, location, "Could not update live player list");
+        }
+    }
+
+    fn playerlist_embed(&self, players: &[PlayerListEntry]) -> CreateEmbed {
+        let present = players.iter().filter(|player| !player.left).count();
+        let left = players.len().saturating_sub(present);
+        let mut description = if players.is_empty() {
+            "*No players yet*".to_string()
+        } else {
+            let mut text = format!("**{present} present{}**\n\n", if left == 0 { String::new() } else { format!(" · {left} left") });
+            for player in players.iter().filter(|player| !player.left) {
+                self.push_player_line(&mut text, player, false);
+            }
+            if left > 0 {
+                text.push_str("\n*Left:*\n");
+                for player in players.iter().filter(|player| player.left) {
+                    self.push_player_line(&mut text, player, true);
+                }
+            }
+            text
+        };
+        if description.chars().count() > 4_000 {
+            description = description.chars().take(3_999).collect::<String>() + "…";
+        }
+        CreateEmbed::new()
+            .title("Live Player List")
+            .description(description)
+            .colour(Colour::new(0x007f7f))
+            .timestamp(serenity::model::Timestamp::now())
+    }
+
+    fn push_player_line(&self, text: &mut String, player: &PlayerListEntry, left: bool) {
+        if left { text.push_str("~~"); }
+        if self.staff_list.is_id(&player.user_id) { text.push_str("⭐ "); }
+        let watched = self.watched_users.get_watched_entity(&player.user_id);
+        if watched.is_some() { text.push_str("⚠️ "); }
+        text.push_str(&format!(
+            "[{}]({}) · <t:{}:R>",
+            escape_markdown(&player.display_name),
+            user_link(&player.user_id),
+            player.joined_at.and_utc().timestamp(),
+        ));
+        if let Some(avatar) = player.avatar_name.as_deref().filter(|name| !name.is_empty()) {
+            text.push_str(&format!(" · *{}*", escape_markdown(avatar)));
+        }
+        if let Some(message) = watched.and_then(|watched| watched.message).filter(|message| !message.is_empty()) {
+            text.push_str(&format!(" — {}", escape_markdown(&message)));
+        }
+        if left { text.push_str("~~"); }
+        text.push('\n');
+    }
+
     fn requesting_email(&self) -> Option<String> {
         // Only used by the not-yet-ported help-desk report links; kept so
         // the setting isn't silently forgotten when they land.
@@ -186,7 +352,8 @@ impl scarlet_events::AuditEmitter for DiscordAuditEmitter {
         self.http.read().await.is_some() && self.configured_channel(event_type, false).is_some()
     }
 
-    async fn emit_user_join(&self, _timestamp: NaiveDateTime, location: &str, user_id: &str, display_name: &str) {
+    async fn emit_user_join(&self, timestamp: NaiveDateTime, location: &str, user_id: &str, display_name: &str) {
+        self.player_joined(timestamp, location, user_id, display_name).await;
         let embed = self
             .base_embed(audit_type::USER_JOIN)
             .description(format!(
@@ -207,6 +374,7 @@ impl scarlet_events::AuditEmitter for DiscordAuditEmitter {
     }
 
     async fn emit_user_leave(&self, _timestamp: NaiveDateTime, location: &str, user_id: &str, display_name: &str) {
+        self.player_left(location, user_id).await;
         let embed = self
             .base_embed(audit_type::USER_LEAVE)
             .description(format!(
@@ -258,6 +426,7 @@ impl scarlet_events::AuditEmitter for DiscordAuditEmitter {
         avatar_display_name: &str,
         potential_avatar_ids: &[String],
     ) {
+        self.player_avatar(location, user_id, avatar_display_name).await;
         let mut embed = self
             .base_embed(audit_type::USER_AVATAR)
             .title(format!("{} switched avatars", escape_markdown(display_name)))

@@ -152,7 +152,13 @@ configured `groupex.instance.monitor` message/thread, writes `### Instance log`,
 and persists the live-instance routing metadata used by extended join/leave
 events; `group.instance.close` records its close timestamp.
 
-Still worth testing with a live Discord server: instance-monitor creation and
-thread routing, because the unit suite can validate embed/data behavior but
-cannot exercise Discord's thread permissions. The live-player-list message
-and Java's instance-close reply/link behavior remain separate follow-up work.
+The Java-style live-player-list message is also created in that thread when
+its route is enabled. Join/leave/avatar changes update it through a two-second
+debounce, including staff/watched badges and advisory text, and instance close
+marks the session ended and removes its Join button.
+
+Still worth testing with a live Discord server: instance-monitor creation,
+thread routing, live-list edits, and close finalisation, because the unit suite
+can validate embed/data behavior but cannot exercise Discord's thread
+permissions. Java's instance-close reply/link to the opening audit post remains
+a separate follow-up.
