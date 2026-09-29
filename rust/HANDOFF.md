@@ -136,3 +136,23 @@ for anything per-keystroke, `within_1_day()` for rendering, `ALWAYS_FETCH`
 only when the answer must be current. This caching existed in the port,
 fully written, and was wired to nothing for weeks; autocomplete was firing
 up to 25 live API calls per keystroke.
+
+## Update 2026-09-29: Discord event-specific parity
+
+Alt-account support is deliberately out of scope at the owner's request; do
+not carry it as an unfinished parity item.
+
+The group-audit poller now uses Java's exact titles and colours for all 34
+`GroupAuditType` values and renders structured event fields instead of one raw
+JSON dump. Announcement, post, membership/request, role, and update events
+have their Java-specific titles, links, descriptions, images, and controls.
+Moderation embeds now include the available target profile image, account age,
+age-verification state, and pronouns. `group.instance.create` also creates the
+configured `groupex.instance.monitor` message/thread, writes `### Instance log`,
+and persists the live-instance routing metadata used by extended join/leave
+events; `group.instance.close` records its close timestamp.
+
+Still worth testing with a live Discord server: instance-monitor creation and
+thread routing, because the unit suite can validate embed/data behavior but
+cannot exercise Discord's thread permissions. The live-player-list message
+and Java's instance-close reply/link behavior remain separate follow-up work.

@@ -338,6 +338,13 @@ impl ScarletData {
             self.live_instances.get().location_to_instance_embed_message.get(location).cloned()
         }
     }
+    pub fn live_instances_set_location_closed_at(&self, location: &str, closed_at: DateTime<Utc>) {
+        self.live_instances.update(|li| {
+            if let Some(message) = li.location_to_instance_embed_message.get_mut(location) {
+                message.closed_at = Some(closed_at);
+            }
+        });
+    }
 
     // ---- user metadata ----
 
