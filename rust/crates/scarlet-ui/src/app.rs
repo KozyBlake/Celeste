@@ -569,7 +569,7 @@ impl ScarletApp {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(scarlet_core::identity::NAME).strong().size(18.0));
                 ui.label(
-                    egui::RichText::new(format!("Version {}  •  Windows & Linux", scarlet_core::identity::VERSION))
+                    egui::RichText::new(format!("Version {}  |  Windows & Linux", scarlet_core::identity::VERSION))
                         .small()
                         .weak(),
                 );
@@ -588,29 +588,29 @@ impl ScarletApp {
                     .rounding(egui::Rounding::same(12.0))
                     .inner_margin(egui::Margin::symmetric(10.0, 5.0))
                     .show(ui, |ui| {
-                        ui.colored_label(colour, format!("●  {label}"));
+                        ui.colored_label(colour, label);
                     });
             });
         });
 
         ui.add_space(7.0);
         ui.horizontal_wrapped(|ui| {
-            ui.add_enabled(false, egui::Button::new(egui::RichText::new("＋  Create instance").strong()))
+            ui.add_enabled(false, egui::Button::new(egui::RichText::new("+ Create instance").strong()))
                 .on_hover_text("Instance creation is still being ported");
 
-            ui.menu_button("Import groups  ▾", |ui| {
-                if ui.button("From URL…").clicked() {
+            ui.menu_button("Import groups...", |ui| {
+                if ui.button("From URL...").clicked() {
                     self.import_groups_url_open = true;
                     self.import_groups_url.clear();
                     ui.close_menu();
                 }
-                if ui.button("From file…").clicked() {
+                if ui.button("From file...").clicked() {
                     self.import_groups_from_file();
                     ui.close_menu();
                 }
             });
 
-            ui.menu_button("Tools  ▾", |ui| {
+            ui.menu_button("Tools...", |ui| {
                 if ui.button("Open data folder").on_hover_text("Open the KozyBlake/Scarlet data directory").clicked() {
                     if let Err(err) = open::that(&self.data_dir) {
                         self.state.append_cli_output(format!("Could not open data folder: {err}"));
@@ -637,7 +637,7 @@ impl ScarletApp {
                     self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
                 }
                 let tts_on = self.state.tts_enabled();
-                let button = egui::Button::new(if tts_on { "Voice  ● On" } else { "Voice  ○ Off" }).selected(tts_on);
+                let button = egui::Button::new(if tts_on { "Voice: On" } else { "Voice: Off" }).selected(tts_on);
                 if ui.add(button).clicked() {
                     self.state.set_tts_enabled(!tts_on);
                     self.tts.set_paused(tts_on);
@@ -874,7 +874,7 @@ impl ScarletApp {
                         if left > 0 {
                             ui.label(egui::RichText::new(format!("{left} left")).color(egui::Color32::from_rgb(168, 174, 185)));
                         }
-                        ui.label(egui::RichText::new(format!("●  {present} present")).color(egui::Color32::from_rgb(91, 196, 125)));
+                        ui.label(egui::RichText::new(format!("{present} present")).color(egui::Color32::from_rgb(91, 196, 125)));
                     });
                 });
                 if let Some(instance) = &instance {
@@ -887,7 +887,7 @@ impl ScarletApp {
                         ui.separator();
                         ui.label(egui::RichText::new(format!("Joined {}", instance.joined.format("%b %-d at %H:%M"))).small().weak());
                         ui.separator();
-                        ui.label(egui::RichText::new("Drag headers to reorder  •  Right-click for columns").small().weak());
+                        ui.label(egui::RichText::new("Drag headers to reorder  |  Right-click for columns").small().weak());
                     });
                 }
             });
@@ -916,9 +916,23 @@ impl ScarletApp {
         let active_sort = self.table_sort;
 
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(19, 23, 30))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::same(7.0))
+            .fill(egui::Color32::from_rgb(23, 28, 36))
+            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 59, 72)))
+            .rounding(egui::Rounding::same(10.0))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Player details").strong().size(15.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new(format!("{} visible columns", column_order.len())).small().weak());
+            });
+        });
+        ui.add_space(8.0);
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(13, 16, 22))
+            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(38, 46, 58)))
+            .rounding(egui::Rounding::same(7.0))
+            .inner_margin(egui::Margin::same(6.0))
             .show(ui, |ui| {
         egui::ScrollArea::horizontal().show(ui, |ui| {
             // `Column::auto()` sizes to content, which is what let a long
@@ -944,8 +958,8 @@ impl ScarletApp {
                                 index,
                                 |ui| {
                                     let marker = match active_sort {
-                                        Some(TableSort { column: sorted, ascending: true }) if sorted == *column => " ▲",
-                                        Some(TableSort { column: sorted, ascending: false }) if sorted == *column => " ▼",
+                                        Some(TableSort { column: sorted, ascending: true }) if sorted == *column => " [asc]",
+                                        Some(TableSort { column: sorted, ascending: false }) if sorted == *column => " [desc]",
                                         _ => "",
                                     };
                                     ui.add(
@@ -1044,6 +1058,7 @@ impl ScarletApp {
                     }
                 });
         });
+            });
             });
 
         if let Some((from, to)) = swap {
@@ -1517,7 +1532,7 @@ impl ScarletApp {
                                     descriptor.set_from_string(&enabled.to_string(), "ui");
                                 }
                             } else {
-                                ui.weak("—");
+                                ui.weak("--");
                             }
                         }
                         ui.end_row();
@@ -1571,7 +1586,7 @@ impl ScarletApp {
             ui.horizontal(|ui| {
                 ui.heading(category.label());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !self.settings_search.is_empty() && ui.button("\u{2715}").on_hover_text("Clear search").clicked() {
+                    if !self.settings_search.is_empty() && ui.button("Clear").on_hover_text("Clear search").clicked() {
                         self.settings_search.clear();
                     }
                     ui.add(
@@ -1685,7 +1700,7 @@ impl ScarletApp {
                 }
                 if value != *default {
                     ui.scope(|ui| {
-                        if ui.small_button("\u{21BA}").on_hover_text("Reset to default").clicked() {
+                        if ui.small_button("Reset").on_hover_text("Reset to default").clicked() {
                             descriptor.set_from_string(&default.to_string(), "ui");
                         }
                     });
@@ -1698,7 +1713,7 @@ impl ScarletApp {
                 }
                 if value != *default {
                     ui.scope(|ui| {
-                        if ui.small_button("\u{21BA}").on_hover_text("Reset to default").clicked() {
+                        if ui.small_button("Reset").on_hover_text("Reset to default").clicked() {
                             descriptor.set_from_string(&default.to_string(), "ui");
                         }
                     });
