@@ -14,11 +14,8 @@
 //! handler's reply actually needs the group's name (`add`/
 //! `delete-watched-group`/`view`), where `vrchat_context`'s client is used
 //! to fetch it directly. `group-priority`'s `-100..=100` range (Java's
-//! `setRequiredRange(-100L, 100L)`) isn't enforced at the Discord-option
-//! level here -- serenity 0.12's `CreateCommandOption::min_int_value`/
-//! `max_int_value` only accept `u64`, so a negative lower bound isn't
-//! representable through it; the option is still a real required integer,
-//! just without that client-side range hint. Not gated (matches Java's
+//! `setRequiredRange(-100L, 100L)`) is enforced in the handler because
+//! serenity 0.12 can't represent a negative option minimum. Not gated (matches Java's
 //! `@DefaultPerms`-only `WatchedGroup_`).
 
 use serenity::builder::{
@@ -298,6 +295,15 @@ fn split_tags(input: &str) -> Vec<String> {
         .collect()
 }
 
+const PRIORITY_MIN: i64 = -100;
+const PRIORITY_MAX: i64 = 100;
+
+fn check_priority_range(priority: i64) -> Option<String> {
+    (!(PRIORITY_MIN..=PRIORITY_MAX).contains(&priority)).then(|| {
+        format!("`group-priority` must be between {PRIORITY_MIN} and {PRIORITY_MAX}.")
+    })
+}
+
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
     let options = command.data.options();
     let Some(subcommand) = options.first() else {
@@ -537,7 +543,10 @@ async fn run_add(
         return super::reply_ephemeral(ctx, command, "`group-type` is required.").await;
     };
     let group_tags = find_string(sub_options, "group-tags");
-    let group_priority = find_int(sub_options, "group-priority").unwrap_or(0) as i32;
+    let group_priority = find_int(sub_options, "group-priority").unwrap_or(0);
+    if let Some(message) = check_priority_range(group_priority) {
+        return super::reply_ephemeral(ctx, command, &message).await;
+    }
     let message = find_string(sub_options, "message");
 
     let context = match super::vrchat_context(ctx).await {
@@ -560,7 +569,7 @@ async fn run_add(
     if let Some(message) = message {
         watched_group.message = Some(message.to_string());
     }
-    watched_group.priority = group_priority;
+    watched_group.priority = group_priority as i32;
     watched.add_watched_group(watched_group);
 
     super::reply_ephemeral(
@@ -746,6 +755,9 @@ async fn run_set_priority(
     let Some(priority) = find_int(sub_options, "group-priority") else {
         return super::reply_ephemeral(ctx, command, "`group-priority` is required.").await;
     };
+    if let Some(message) = check_priority_range(priority) {
+        return super::reply_ephemeral(ctx, command, &message).await;
+    }
     if watched.get_watched_group(group_id).is_none() {
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     }
@@ -963,5 +975,13 @@ mod tests {
         group.tags.add("a");
         group.tags.add("b");
         assert_eq!(tags_joined(&group), "a, b");
+    }
+
+    #[test]
+    fn group_priority_rejects_values_discord_rejects_in_java() {
+        assert!(check_priority_range(-100).is_none());
+        assert!(check_priority_range(100).is_none());
+        assert!(check_priority_range(-101).is_some());
+        assert!(check_priority_range(101).is_some());
     }
 }

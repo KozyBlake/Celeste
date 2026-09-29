@@ -153,7 +153,7 @@ pub fn register(kind: RouteKind) -> CreateCommand {
             CommandOptionType::Channel,
             "discord-text-channel",
             "The channel, or omit to unassociate it",
-        ))
+        ).channel_types(vec![ChannelType::Text]))
 }
 
 fn event_type_option(kind: RouteKind) -> CreateCommandOption {
@@ -235,15 +235,10 @@ fn channel<'a>(options: &'a [ResolvedOption<'a>]) -> Option<&'a PartialChannel> 
         })
 }
 fn is_message_channel(kind: ChannelType) -> bool {
-    matches!(
-        kind,
-        ChannelType::Text
-            | ChannelType::News
-            | ChannelType::NewsThread
-            | ChannelType::PublicThread
-            | ChannelType::PrivateThread
-            | ChannelType::Forum
-    )
+    // Java registers this through `_textChannel`, which permits only
+    // ChannelType.TEXT. Keep the handler strict too in case a forged
+    // interaction bypasses Discord's picker.
+    kind == ChannelType::Text
 }
 pub(crate) fn title(id: &str) -> String {
     let known = match id {
@@ -400,5 +395,13 @@ mod tests {
     fn autocomplete_prioritizes_matching_titles_and_ids() {
         let matches = matching_types(AUDIT_TYPES, "ban");
         assert_eq!(matches[0], "group.user.ban");
+    }
+
+    #[test]
+    fn routing_commands_only_offer_text_channels_like_java() {
+        let value = serde_json::to_value(register(RouteKind::Audit)).unwrap();
+        assert_eq!(value["options"][1]["channel_types"], serde_json::json!([0]));
+        assert!(is_message_channel(ChannelType::Text));
+        assert!(!is_message_channel(ChannelType::News));
     }
 }

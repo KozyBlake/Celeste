@@ -16,7 +16,7 @@ pub fn register() -> CreateCommand {
             CommandOptionType::Channel,
             "discord-voice-channel",
             "The voice channel to use, or omit to disconnect",
-        ))
+        ).channel_types(vec![ChannelType::Voice]))
 }
 
 fn selected_channel<'a>(command: &'a CommandInteraction) -> Option<&'a PartialChannel> {
@@ -105,5 +105,12 @@ mod tests {
         assert!(is_voice_channel(ChannelType::Voice));
         assert!(!is_voice_channel(ChannelType::Stage));
         assert!(!is_voice_channel(ChannelType::Text));
+    }
+
+
+    #[test]
+    fn registration_only_offers_normal_voice_channels_like_java() {
+        let value = serde_json::to_value(register()).unwrap();
+        assert_eq!(value["options"][0]["channel_types"], serde_json::json!([2]));
     }
 }

@@ -41,9 +41,17 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
                 let vrchat_client = { ctx.data.read().await.get::<VrChatClientKey>().cloned() };
                 let display_name = match &vrchat_client {
                     Some(slot) => {
-                        let guard = slot.read().await;
-                        match guard.as_ref() {
-                            Some(client) => client.get_user(&vrc_id).await.ok().and_then(|u| u.display_name),
+                        let client = slot.read().await.clone();
+                        match client {
+                            // Java: `getUser(vrcId, within1day)`. This is an
+                            // informational render, not a freshness-critical
+                            // moderation decision, so bypassing the entity
+                            // cache here needlessly hits VRChat on every use.
+                            Some(client) => client
+                                .get_user_cached(&vrc_id, linked_user_cache_age())
+                                .await
+                                .ok()
+                                .and_then(|u| u.display_name),
                             None => None,
                         }
                     }
@@ -80,6 +88,10 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
     super::send_pages(ctx, command, pages).await
 }
 
+fn linked_user_cache_age() -> i64 {
+    scarlet_vrchat::entity_cache::within_1_day()
+}
+
 fn permission_role_mentions(
     roles: &[serenity::model::id::RoleId],
     configured: &[String],
@@ -102,5 +114,11 @@ mod tests {
             permission_role_mentions(&roles, &["2".to_string()]),
             vec!["<@&2>".to_string()]
         );
+    }
+
+
+    #[test]
+    fn linked_vrchat_user_uses_javas_one_day_cache_window() {
+        assert_eq!(linked_user_cache_age(), scarlet_vrchat::entity_cache::within_1_day());
     }
 }

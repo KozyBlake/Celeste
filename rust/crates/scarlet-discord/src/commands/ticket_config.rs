@@ -32,7 +32,7 @@ pub fn register_auto_response() -> CreateCommand {
             CommandOptionType::Channel,
             "discord-category",
             "The Ticket Tool category",
-        ))
+        ).channel_types(vec![ChannelType::Category]))
         .add_option(CreateCommandOption::new(
             CommandOptionType::Role,
             "notify-role",
@@ -208,5 +208,17 @@ mod tests {
     #[test]
     fn java_default_regex_compiles() {
         assert!(regex::Regex::new(DEFAULT_REGEX).is_ok());
+    }
+
+    #[test]
+    fn ticket_picker_only_offers_categories_like_java() {
+        let value = serde_json::to_value(register_auto_response()).unwrap();
+        let category = value["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["name"] == "discord-category")
+            .unwrap();
+        assert_eq!(category["channel_types"], serde_json::json!([4]));
     }
 }

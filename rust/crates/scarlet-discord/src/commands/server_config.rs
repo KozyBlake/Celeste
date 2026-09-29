@@ -56,7 +56,7 @@ pub fn register_channel(setting: ChannelSetting) -> CreateCommand {
             CommandOptionType::Channel,
             "discord-text-channel",
             "The channel, or omit to remove it",
-        ))
+        ).channel_types(vec![ChannelType::Text]))
 }
 
 fn channel<'a>(options: &'a [ResolvedOption<'a>]) -> Option<&'a PartialChannel> {
@@ -69,15 +69,9 @@ fn channel<'a>(options: &'a [ResolvedOption<'a>]) -> Option<&'a PartialChannel> 
         })
 }
 fn message_channel(kind: ChannelType) -> bool {
-    matches!(
-        kind,
-        ChannelType::Text
-            | ChannelType::News
-            | ChannelType::NewsThread
-            | ChannelType::PublicThread
-            | ChannelType::PrivateThread
-            | ChannelType::Forum
-    )
+    // Java's shared `_textChannel` option is pinned to ChannelType.TEXT,
+    // not the broader family of Discord channels that can contain posts.
+    kind == ChannelType::Text
 }
 
 pub async fn run_channel(
@@ -362,5 +356,15 @@ mod tests {
         assert!(valid_group_id("grp_12345678-1234-1234-1234-123456789abc"));
         assert!(!valid_group_id("usr_12345678-1234-1234-1234-123456789abc"));
         assert!(!valid_group_id("grp_not-a-uuid"));
+    }
+
+
+    #[test]
+    fn text_channel_commands_only_offer_text_channels_like_java() {
+        let value = serde_json::to_value(register_channel(ChannelSetting::Training)).unwrap();
+        assert_eq!(value["options"][0]["channel_types"], serde_json::json!([0]));
+        assert!(message_channel(ChannelType::Text));
+        assert!(!message_channel(ChannelType::News));
+        assert!(!message_channel(ChannelType::Forum));
     }
 }
