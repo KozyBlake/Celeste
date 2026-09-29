@@ -86,23 +86,17 @@ differs between them is consequence, not whether they're real.
 B13, B3, and A6 are fixed in Rust with regression coverage; see the audit for
 the exact compatibility changes.
 
-**2. Things that make the app usable.** Blake can't run this in anger until
-these are right:
-- B5 — no click-to-sort on table headers (Java has a real row sorter).
-- B6 — column layout isn't persisted, and the `Unban`/`Invite` columns
-  (hidden-by-default in Java) don't exist. Note PORTING.md used to claim
-  Java doesn't persist this; it does, `ScarletUI.java:1338-1372`.
-- B15 — window geometry never restored.
-- B10 — Settings tab guesses section grouping by id prefix; Java has 19
+**2. Things that make the app usable.** Table sorting (B5), complete and
+persistent columns (B6), and window geometry (B15) were fixed on 2026-09-28.
+The remaining UI structure gaps are:
+- Settings tab guesses section grouping by id prefix; Java has 19
   explicitly ordered named sections.
-- B11 — the notification matrix is flattened into ~27 loose toggles instead
+- The notification matrix is flattened into ~27 loose toggles instead
   of Java's per-event grid.
 
-**3. Discoverability regressions.** Each one makes a command harder to use
-than its Java original: A5 (audit event-type options have neither choices
-nor autocomplete — you must type `groupex.instance.user.pedestal` exactly),
-B2 (`/settings edit` hides valid values behind a 45-char truncated label),
-plus the missing autocompletes on `/aux-webhooks remove` and `/export-log`.
+**3. Discoverability regressions.** Audit event choices/autocomplete (A5),
+`/aux-webhooks remove`, and `/export-log` were restored on 2026-09-28. B2
+remains: `/settings edit` hides valid values behind a 45-char truncated label.
 
 **4. The cosmetic tail.** Wording, the menu bar, timestamp seconds. Log
 them; don't spend a session on them.

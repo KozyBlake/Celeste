@@ -1,9 +1,9 @@
 //! Port of `/aux-webhooks` and `/set-audit-aux-webhooks`.
 
 use serenity::builder::{
-    CreateActionRow, CreateCommand, CreateCommandOption, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateSelectMenu, CreateSelectMenuKind,
-    CreateSelectMenuOption,
+    CreateActionRow, CreateAutocompleteResponse, CreateCommand, CreateCommandOption,
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateSelectMenu,
+    CreateSelectMenuKind, CreateSelectMenuOption,
 };
 use serenity::client::Context;
 use serenity::model::application::{
@@ -58,7 +58,8 @@ pub fn register() -> CreateCommand {
                     "aux-webhook-id",
                     "The internal id of the webhook",
                 )
-                .required(true),
+                .required(true)
+                .set_autocomplete(true),
             ),
         )
 }
@@ -90,6 +91,34 @@ fn find_string<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<&'a 
 fn valid_webhook_url(value: &str) -> bool {
     regex::Regex::new(r"^https://(?:canary\.|ptb\.)?(?:discord(?:app)?\.com)/api(?:/v\d+)?/webhooks/\d+/[-A-Za-z0-9_]+$")
         .expect("static Discord webhook URL regex").is_match(value)
+}
+
+pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
+    let typing = command
+        .data
+        .autocomplete()
+        .map(|option| option.value.trim())
+        .unwrap_or_default();
+    let config = { ctx.data.read().await.get::<DiscordConfigKey>().cloned() };
+    let mut ids = config
+        .map(|config| config.string_map("scarletAuxWh2webhookUrl").into_keys().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let typing_lower = typing.to_ascii_lowercase();
+    ids.sort_by_key(|id| {
+        let id_lower = id.to_ascii_lowercase();
+        if id_lower.starts_with(&typing_lower) { 0 } else if id_lower.contains(&typing_lower) { 1 } else { 2 }
+    });
+    let mut response = CreateAutocompleteResponse::new();
+    let added_typed = !typing.is_empty() && !ids.iter().any(|id| id == typing);
+    if added_typed {
+        response = response.add_string_choice(typing, typing);
+    }
+    for id in ids.into_iter().take(25 - usize::from(added_typed)) {
+        response = response.add_string_choice(id.clone(), id);
+    }
+    command
+        .create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response))
+        .await
 }
 
 pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Result<()> {
@@ -298,5 +327,17 @@ mod tests {
         assert!(!valid_webhook_url(
             "https://example.com/api/webhooks/123/token"
         ));
+    }
+
+    #[test]
+    fn remove_webhook_id_uses_java_autocomplete() {
+        let value = serde_json::to_value(register()).unwrap();
+        let remove = value["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["name"] == "remove")
+            .unwrap();
+        assert_eq!(remove["options"][0]["autocomplete"], true);
     }
 }
