@@ -76,6 +76,8 @@ enum GroupAction {
     Invite,
 }
 
+type PendingGroupFileImport = Result<Option<(String, Vec<u8>, String)>, String>;
+
 fn load_column_layout(
     settings: Option<&Settings>,
 ) -> (
@@ -411,6 +413,7 @@ pub struct ScarletApp {
     import_groups_url_open: bool,
     import_groups_url: String,
     import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
+    import_groups_file_rx: Option<std::sync::mpsc::Receiver<PendingGroupFileImport>>,
     visual_style_installed: bool,
 }
 
@@ -531,6 +534,7 @@ impl ScarletApp {
             import_groups_url_open: false,
             import_groups_url: String::new(),
             import_groups_rx: None,
+            import_groups_file_rx: None,
             visual_style_installed: false,
         }
     }
@@ -1424,23 +1428,42 @@ impl ScarletApp {
     /// Port of `ScarletUI.importWG(true)`: pick a `.csv` or `.json` file
     /// and import it over the current watched groups.
     fn import_groups_from_file(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Import watched groups")
-            .add_filter("CSV or JSON", &["csv", "json"])
-            .pick_file()
-        else {
-            self.state.append_cli_output("Import groups: canceled.");
+        if self.import_groups_file_rx.is_some() {
+            self.state.append_cli_output("Import groups: a file picker is already open.");
             return;
-        };
-        let contents = match std::fs::read(&path) {
-            Ok(contents) => contents,
-            Err(err) => {
-                self.state.append_cli_output(format!("Import groups: could not read {}: {err}", path.display()));
-                return;
-            }
-        };
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        self.apply_group_import(&extension, &contents, &path.display().to_string());
+        }
+
+        self.state.append_cli_output("Import groups: opening file picker...");
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.runtime_handle.spawn(async move {
+            // The synchronous rfd API drives the XDG portal from egui's UI
+            // thread. A portal panic there closes the entire application.
+            // Keep the dialog and file I/O on the async runtime instead.
+            let picked = rfd::AsyncFileDialog::new()
+                .set_title("Import watched groups")
+                .add_filter("CSV or JSON", &["csv", "json"])
+                .pick_file()
+                .await;
+            let result = match picked {
+                None => Ok(None),
+                Some(file) => {
+                    let path = file.path().to_path_buf();
+                    match tokio::fs::read(&path).await {
+                        Ok(contents) => {
+                            let extension = path
+                                .extension()
+                                .and_then(|extension| extension.to_str())
+                                .unwrap_or("")
+                                .to_ascii_lowercase();
+                            Ok(Some((extension, contents, path.display().to_string())))
+                        }
+                        Err(err) => Err(format!("could not read {}: {err}", path.display())),
+                    }
+                }
+            };
+            let _ = tx.send(result);
+        });
+        self.import_groups_file_rx = Some(rx);
     }
 
     /// Port of `ScarletUI.importWG(false)`: fetch the CSV/JSON from a URL
@@ -1525,14 +1548,45 @@ impl ScarletApp {
             }
         }
 
-        if let Some((extension, rx)) = &self.import_groups_rx {
-            if let Ok(result) = rx.try_recv() {
-                let extension = extension.clone();
-                self.import_groups_rx = None;
-                match result {
-                    Ok(text) => self.apply_group_import(&extension, text.as_bytes(), "the URL"),
-                    Err(err) => self.state.append_cli_output(format!("Import groups failed: {err}")),
+        if let Some(rx) = &self.import_groups_file_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.import_groups_file_rx = None;
+                    match result {
+                        Ok(Some((extension, contents, source))) => {
+                            self.apply_group_import(&extension, &contents, &source);
+                        }
+                        Ok(None) => self.state.append_cli_output("Import groups: canceled."),
+                        Err(err) => self.state.append_cli_output(format!("Import groups failed: {err}")),
+                    }
                 }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.import_groups_file_rx = None;
+                    self.state.append_cli_output(
+                        "Import groups failed: the system file picker stopped unexpectedly.",
+                    );
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        if let Some((extension, rx)) = &self.import_groups_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    let extension = extension.clone();
+                    self.import_groups_rx = None;
+                    match result {
+                        Ok(text) => self.apply_group_import(&extension, text.as_bytes(), "the URL"),
+                        Err(err) => self.state.append_cli_output(format!("Import groups failed: {err}")),
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.import_groups_rx = None;
+                    self.state.append_cli_output(
+                        "Import groups failed: the URL download stopped unexpectedly.",
+                    );
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
     }
