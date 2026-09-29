@@ -6,8 +6,8 @@
 //! as `propstable` in the Java source, and the status bar text format — all
 //! driven by real state ([`crate::state::UiState`] for players/status,
 //! [`scarlet_core::settings`] for the Settings tab), not fixtures. What
-//! isn't ported: the Create Instance toolbar action and most of the CLI
-//! command interpreter. Import Groups and Sync Discord are wired to their
+//! isn't ported: most of the CLI command interpreter. Create Instance,
+//! Import Groups, and Sync Discord are wired to their
 //! real stores/services. The table's
 //! Ban/Unban/Invite actions call the shared VRChat client. TTS pause/resume, skip, and the
 //! CLI `tts <text>` command are backed by the real platform TTS service.
@@ -74,6 +74,60 @@ enum GroupAction {
     Ban,
     Unban,
     Invite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstanceKind { GroupPublic, GroupPlus, GroupMembers, Public, FriendsPlus, Friends, InvitePlus, Invite }
+
+impl InstanceKind {
+    const ALL: [Self; 8] = [Self::GroupPublic, Self::GroupPlus, Self::GroupMembers, Self::Public, Self::FriendsPlus, Self::Friends, Self::InvitePlus, Self::Invite];
+    fn label(self) -> &'static str { match self { Self::GroupPublic => "Group Public", Self::GroupPlus => "Group Plus", Self::GroupMembers => "Group Members", Self::Public => "Public", Self::FriendsPlus => "Friends+", Self::Friends => "Friends", Self::InvitePlus => "Invite+", Self::Invite => "Invite" } }
+    fn group(self) -> bool { matches!(self, Self::GroupPublic | Self::GroupPlus | Self::GroupMembers) }
+    fn group_access(self) -> Option<&'static str> { match self { Self::GroupPublic => Some("public"), Self::GroupPlus => Some("plus"), Self::GroupMembers => Some("members"), _ => None } }
+    fn instance_type(self) -> &'static str { match self { Self::Public => "public", Self::FriendsPlus => "hidden", Self::Friends => "friends", Self::InvitePlus | Self::Invite => "private", _ => "group" } }
+}
+
+#[derive(Debug, Clone)]
+struct CreateInstanceForm {
+    world: String, kind: InstanceKind, region: String, avatar_gate: String, display_name: String,
+    queue_enabled: bool, age_gate: bool, content_drones: bool, content_emoji: bool,
+    content_props: bool, content_pedestals: bool, content_prints: bool, content_stickers: bool,
+}
+
+impl Default for CreateInstanceForm {
+    fn default() -> Self { Self { world: String::new(), kind: InstanceKind::GroupPublic, region: "us".into(), avatar_gate: String::new(), display_name: String::new(), queue_enabled: true, age_gate: false, content_drones: true, content_emoji: true, content_props: true, content_pedestals: true, content_prints: true, content_stickers: true } }
+}
+
+#[derive(Debug, Clone)]
+struct CreatedInstance { message: String, link: String }
+
+fn resolve_world_id(input: &str) -> Option<String> {
+    let start = input.find("wrld_")?;
+    let candidate = input.get(start..start + 41)?;
+    let uuid = candidate.strip_prefix("wrld_")?;
+    (uuid.len() == 36 && uuid.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() })).then(|| candidate.to_string())
+}
+
+fn validate_instance_display_name(name: &str) -> Result<Option<String>, String> {
+    let name = name.trim();
+    if name.len() > 32 || name.contains(['.', '/', '\\']) {
+        return Err("Instance names can be blank or up to 32 characters, and cannot contain '.', '/', or '\\'.".into());
+    }
+    Ok((!name.is_empty()).then(|| name.to_string()))
+}
+
+fn create_instance_request(form: &CreateInstanceForm, world_id: &str, owner_id: &str) -> Result<serde_json::Value, String> {
+    let mut request = serde_json::json!({
+        "worldId": world_id, "ownerId": owner_id, "type": form.kind.instance_type(), "region": form.region,
+        "queueEnabled": form.queue_enabled, "hardClose": false, "ageGate": form.age_gate,
+        "contentSettings": { "drones": form.content_drones, "emoji": form.content_emoji, "props": form.content_props, "pedestals": form.content_pedestals, "prints": form.content_prints, "stickers": form.content_stickers }
+    });
+    let object = request.as_object_mut().expect("instance request is an object");
+    if let Some(access) = form.kind.group_access() { object.insert("groupAccessType".into(), serde_json::json!(access)); }
+    if form.kind == InstanceKind::InvitePlus { object.insert("canRequestInvite".into(), serde_json::json!(true)); }
+    if let Some(name) = validate_instance_display_name(&form.display_name)? { object.insert("displayName".into(), serde_json::json!(name)); }
+    if !form.avatar_gate.is_empty() { object.insert("minimumAvatarPerformance".into(), serde_json::json!(form.avatar_gate)); }
+    Ok(request)
 }
 
 type PendingGroupFileImport = Result<Option<(String, Vec<u8>, String)>, String>;
@@ -410,6 +464,11 @@ pub struct ScarletApp {
     /// row's Ban action, which Java also confirms before acting).
     avatar_stats_open: Option<AvatarStatsView>,
     group_action_confirm: Option<(GroupAction, String, String)>,
+    create_instance_open: bool,
+    create_instance_form: CreateInstanceForm,
+    create_instance_error: Option<String>,
+    create_instance_rx: Option<std::sync::mpsc::Receiver<Result<CreatedInstance, String>>>,
+    created_instance: Option<CreatedInstance>,
     import_groups_url_open: bool,
     import_groups_url: String,
     import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
@@ -531,6 +590,11 @@ impl ScarletApp {
             settings_search: String::new(),
             avatar_stats_open: None,
             group_action_confirm: None,
+            create_instance_open: false,
+            create_instance_form: CreateInstanceForm::default(),
+            create_instance_error: None,
+            create_instance_rx: None,
+            created_instance: None,
             import_groups_url_open: false,
             import_groups_url: String::new(),
             import_groups_rx: None,
@@ -669,8 +733,10 @@ impl ScarletApp {
             self.tab_bar(ui);
             ui.separator();
 
-            ui.add_enabled(false, egui::Button::new(egui::RichText::new("+ Create instance").strong()))
-                .on_hover_text("Instance creation is still being ported");
+            if ui.button(egui::RichText::new("+ Create instance").strong()).clicked() {
+                self.create_instance_open = true;
+                self.create_instance_error = None;
+            }
 
             ui.menu_button("Import groups...", |ui| {
                 if ui.button("From URL...").clicked() {
@@ -1452,6 +1518,178 @@ impl ScarletApp {
         });
     }
 
+    /// Desktop port of `ScarletUI.uiCreateGroupInstance`: the same picker,
+    /// validation, self-permission checks, and `/instances` request.
+    fn create_instance_window(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.create_instance_rx {
+            match rx.try_recv() {
+                Ok(Ok(created)) => {
+                    self.create_instance_rx = None;
+                    self.create_instance_open = false;
+                    self.state.append_cli_output(created.message.clone());
+                    self.created_instance = Some(created);
+                }
+                Ok(Err(error)) => {
+                    self.create_instance_rx = None;
+                    self.create_instance_error = Some(error.clone());
+                    self.state.append_cli_output(format!("Create instance failed: {error}"));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.create_instance_rx = None;
+                    self.create_instance_error = Some("The instance creation task stopped unexpectedly.".into());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        if self.create_instance_open {
+            let mut open = true;
+            let mut submit = false;
+            let mut cancel = false;
+            let busy = self.create_instance_rx.is_some();
+            egui::Window::new("Create VRChat instance")
+                .collapsible(false).resizable(true).default_width(560.0).open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label("Create an instance owned by the configured group or by the signed-in VRChat account.");
+                    ui.add_space(6.0);
+                    egui::Grid::new("create_instance_fields").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
+                        ui.label("World URL or ID");
+                        ui.add(egui::TextEdit::singleline(&mut self.create_instance_form.world).desired_width(390.0).hint_text("wrld_… or a VRChat world URL"));
+                        ui.end_row();
+                        ui.label("Who can join");
+                        egui::ComboBox::from_id_salt("create_instance_kind").selected_text(self.create_instance_form.kind.label()).show_ui(ui, |ui| {
+                            for kind in InstanceKind::ALL { ui.selectable_value(&mut self.create_instance_form.kind, kind, kind.label()); }
+                        });
+                        ui.end_row();
+                        ui.label("Region");
+                        let region_label = match self.create_instance_form.region.as_str() { "use" => "US East", "eu" => "Europe", "jp" => "Japan", _ => "US West" };
+                        egui::ComboBox::from_id_salt("create_instance_region").selected_text(region_label).show_ui(ui, |ui| {
+                            for (value, label) in [("us", "US West"), ("use", "US East"), ("eu", "Europe"), ("jp", "Japan")] {
+                                ui.selectable_value(&mut self.create_instance_form.region, value.into(), label);
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("Avatar gate");
+                        let gate_label = match self.create_instance_form.avatar_gate.as_str() { "Poor" => "Poor or better", "Medium" => "Medium or better", "Good" => "Good only", _ => "None" };
+                        egui::ComboBox::from_id_salt("create_instance_avatar_gate").selected_text(gate_label).show_ui(ui, |ui| {
+                            for (value, label) in [("", "None"), ("Poor", "Poor or better"), ("Medium", "Medium or better"), ("Good", "Good only")] {
+                                ui.selectable_value(&mut self.create_instance_form.avatar_gate, value.into(), label);
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("Instance name");
+                        ui.add(egui::TextEdit::singleline(&mut self.create_instance_form.display_name).desired_width(260.0).char_limit(33).hint_text("Optional, up to 32 characters"));
+                        ui.end_row();
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.create_instance_form.queue_enabled, "Enable queue when full");
+                        ui.checkbox(&mut self.create_instance_form.age_gate, "Require age-verified 18+ users");
+                    });
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Allowed content").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.create_instance_form.content_drones, "Drones");
+                        ui.checkbox(&mut self.create_instance_form.content_emoji, "Emoji");
+                        ui.checkbox(&mut self.create_instance_form.content_props, "Items");
+                        ui.checkbox(&mut self.create_instance_form.content_pedestals, "Pedestals");
+                        ui.checkbox(&mut self.create_instance_form.content_prints, "Prints");
+                        ui.checkbox(&mut self.create_instance_form.content_stickers, "Stickers");
+                    });
+                    if let Some(error) = &self.create_instance_error {
+                        ui.add_space(8.0);
+                        ui.colored_label(egui::Color32::from_rgb(240, 95, 95), error);
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!busy, egui::Button::new(if busy { "Creating…" } else { "Create instance" })).clicked() { submit = true; }
+                        if ui.button("Cancel").clicked() { cancel = true; }
+                    });
+                });
+            if cancel { open = false; }
+            self.create_instance_open = open;
+            if submit { self.start_create_instance(); }
+        }
+
+        if let Some(created) = self.created_instance.clone() {
+            let mut open = true;
+            egui::Window::new("VRChat instance created").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+                ui.label(&created.message);
+                ui.hyperlink_to("Open instance on VRChat", &created.link);
+                ui.horizontal(|ui| {
+                    if ui.button("Open in browser").clicked() {
+                        if let Err(error) = open::that(&created.link) { self.state.append_cli_output(format!("Could not open instance link: {error}")); }
+                    }
+                    if ui.button("Copy link").clicked() { ui.ctx().copy_text(created.link.clone()); }
+                });
+            });
+            if !open { self.created_instance = None; }
+        }
+    }
+
+    fn start_create_instance(&mut self) {
+        self.create_instance_error = None;
+        let Some(world_id) = resolve_world_id(&self.create_instance_form.world) else {
+            self.create_instance_error = Some("Paste a valid VRChat world URL or wrld_ ID.".into());
+            return;
+        };
+        if let Err(error) = validate_instance_display_name(&self.create_instance_form.display_name) {
+            self.create_instance_error = Some(error);
+            return;
+        }
+        let group_id = if self.create_instance_form.kind.group() {
+            let Some(id) = self.settings.as_ref().and_then(|s| s.store.get_string("vrchat_group_id")).filter(|id| !id.trim().is_empty()) else {
+                self.create_instance_error = Some("No VRChat group ID is configured in Settings.".into());
+                return;
+            };
+            Some(id)
+        } else { None };
+
+        let form = self.create_instance_form.clone();
+        let slot = self.vrchat_slot.clone();
+        let data_dir = self.data_dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.create_instance_rx = Some(rx);
+        self.runtime_handle.spawn(async move {
+            let result = async {
+                let client = slot.read().await.clone().ok_or_else(|| "Celeste is not signed in to VRChat.".to_string())?;
+                let current = client.get_current_user().await.map_err(|e| format!("Could not identify the signed-in VRChat account: {e}"))?;
+                if let Some(group_id) = group_id.as_deref() {
+                    let permission = match form.kind {
+                        InstanceKind::GroupPlus => scarlet_vrchat::client::PERMISSION_GROUP_INSTANCE_PLUS_CREATE,
+                        InstanceKind::GroupMembers => scarlet_vrchat::client::PERMISSION_GROUP_INSTANCE_OPEN_CREATE,
+                        _ => scarlet_vrchat::client::PERMISSION_GROUP_INSTANCE_PUBLIC_CREATE,
+                    };
+                    for permission in std::iter::once(permission).chain(form.age_gate.then_some(scarlet_vrchat::client::PERMISSION_GROUP_INSTANCE_AGE_GATED_CREATE)) {
+                        match client.self_has_group_permission(group_id, &current.id, permission).await {
+                            Ok(true) => {}
+                            Ok(false) => return Err(format!("The signed-in VRChat account needs the `{permission}` group permission.")),
+                            Err(e) => return Err(format!("Could not check VRChat group permissions: {e}")),
+                        }
+                    }
+                }
+                let world = client.get_world(&world_id).await.map_err(|e| format!("Could not find world {world_id}: {e}"))?;
+                let request = create_instance_request(&form, &world_id, group_id.as_deref().unwrap_or(&current.id))?;
+                let instance = client.create_instance(&request).await.map_err(|e| format!("VRChat rejected the instance: {e}"))?;
+                let returned_world = instance.world_id.as_deref().unwrap_or(&world_id);
+                let raw_id = instance.instance_id.as_deref().or(instance.id.as_deref()).ok_or_else(|| "VRChat created the instance but did not return its ID.".to_string())?;
+                let instance_id = raw_id.strip_prefix(&format!("{returned_world}:")).unwrap_or(raw_id);
+                // Java records the creator before the matching group audit
+                // event arrives so the event can be attributed correctly.
+                if let Err(error) = scarlet_discord::pending_moderation::PendingModeration::open(&data_dir)
+                    .add_pending("group.instance.create", raw_id, &current.id)
+                {
+                    tracing::warn!(%error, target = raw_id, "Could not save instance-creation attribution");
+                }
+                Ok(CreatedInstance {
+                    message: format!("Created a new instance of {}.", world.name),
+                    link: format!("https://vrchat.com/home/launch?worldId={returned_world}&instanceId={instance_id}"),
+                })
+            }.await;
+            let _ = tx.send(result);
+        });
+    }
+
     /// Port of `ScarletUI.importWG(true)`: pick a `.csv` or `.json` file
     /// and import it over the current watched groups.
     fn import_groups_from_file(&mut self) {
@@ -2212,6 +2450,7 @@ impl eframe::App for ScarletApp {
         });
 
         self.exit_confirm_window(ctx);
+        self.create_instance_window(ctx);
         self.import_groups_windows(ctx);
         self.avatar_stats_window(ctx);
         self.group_action_confirm_window(ctx);
@@ -2545,5 +2784,46 @@ mod tests {
         assert!(ScarletApp::notification_matrix_id("toast_notify_staff"));
         assert!(!ScarletApp::notification_matrix_id("tts_voice_name"));
         assert!(!ScarletApp::notification_matrix_id("notify_desktop_enabled"));
+    }
+
+    #[test]
+    fn world_id_resolver_accepts_an_id_or_vrchat_url() {
+        let id = "wrld_01234567-89ab-cdef-0123-456789abcdef";
+        assert_eq!(resolve_world_id(id).as_deref(), Some(id));
+        assert_eq!(resolve_world_id(&format!("https://vrchat.com/home/world/{id}/info")).as_deref(), Some(id));
+        assert_eq!(resolve_world_id("wrld_not-a-uuid"), None);
+    }
+
+    #[test]
+    fn instance_name_validation_matches_java() {
+        assert_eq!(validate_instance_display_name("  ").unwrap(), None);
+        assert_eq!(validate_instance_display_name(" Movie night ").unwrap().as_deref(), Some("Movie night"));
+        assert!(validate_instance_display_name("has/slash").is_err());
+        assert!(validate_instance_display_name(&"x".repeat(33)).is_err());
+    }
+
+    #[test]
+    fn group_instance_request_matches_java_wire_shape() {
+        let mut form = CreateInstanceForm::default();
+        form.kind = InstanceKind::GroupPlus;
+        form.age_gate = true;
+        form.avatar_gate = "Good".into();
+        form.display_name = "Movie night".into();
+        let request = create_instance_request(&form, "wrld_01234567-89ab-cdef-0123-456789abcdef", "grp_owner").unwrap();
+        assert_eq!(request["type"], "group");
+        assert_eq!(request["groupAccessType"], "plus");
+        assert_eq!(request["minimumAvatarPerformance"], "Good");
+        assert_eq!(request["displayName"], "Movie night");
+        assert_eq!(request["hardClose"], false);
+    }
+
+    #[test]
+    fn invite_plus_request_is_personal_and_requestable() {
+        let mut form = CreateInstanceForm::default();
+        form.kind = InstanceKind::InvitePlus;
+        let request = create_instance_request(&form, "wrld_01234567-89ab-cdef-0123-456789abcdef", "usr_owner").unwrap();
+        assert_eq!(request["type"], "private");
+        assert_eq!(request["canRequestInvite"], true);
+        assert!(request.get("groupAccessType").is_none());
     }
 }

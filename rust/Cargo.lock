@@ -5309,6 +5309,7 @@ dependencies = [
  "scarlet-events",
  "scarlet-vrchat",
  "serde",
+ "serde_json",
  "songbird",
  "tempfile",
  "tokio",
