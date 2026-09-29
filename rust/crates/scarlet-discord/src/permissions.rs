@@ -292,6 +292,8 @@ fn default_allowed(kind: PermissionType, permission: &str) -> bool {
                 | "view-snapshot-user-represented-group"
                 | "submit-evidence"
                 | "import-watched-groups"
+                | "discord-member-confirm"
+                | "discord-member-cancel"
                 | "discord-kick-confirm"
                 | "discord-kick-cancel"
                 | "discord-ban-confirm"
@@ -303,6 +305,7 @@ fn default_allowed(kind: PermissionType, permission: &str) -> bool {
             "settings"
                 | "pagination-submission"
                 | "select-tags"
+                | "select-tags-0"
                 | "select-tags-1"
                 | "select-tags-2"
                 | "select-tags-3"
@@ -416,5 +419,27 @@ mod tests {
         assert!(default_allowed(PermissionType::ButtonPress, "settings"));
         assert!(default_allowed(PermissionType::StringSelect, "settings"));
         assert!(default_allowed(PermissionType::ModalSubmit, "settings"));
+    }
+
+    #[test]
+    fn current_discord_member_confirmation_buttons_are_enabled_by_default() {
+        assert!(default_allowed(
+            PermissionType::ButtonPress,
+            "discord-member-confirm"
+        ));
+        assert!(default_allowed(
+            PermissionType::ButtonPress,
+            "discord-member-cancel"
+        ));
+    }
+
+    #[test]
+    fn every_generated_audit_tag_page_is_enabled_by_default() {
+        for page in 0..5 {
+            assert!(default_allowed(
+                PermissionType::StringSelect,
+                &format!("select-tags-{page}")
+            ));
+        }
     }
 }

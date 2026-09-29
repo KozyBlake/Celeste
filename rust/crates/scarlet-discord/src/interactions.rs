@@ -1368,19 +1368,15 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
         }
         return;
     }
-    if interaction
-        .data
-        .custom_id
-        .starts_with(crate::commands::settings::MODAL_PREFIX)
-    {
-        if let Err(err) = handle_setting_modal(ctx, interaction).await {
-            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling settings modal: {err}");
-        }
-        return;
-    }
     if interaction.data.custom_id == crate::commands::ticket_config::MESSAGE_MODAL_ID {
         if let Err(err) = handle_ticket_message_modal(ctx, interaction).await {
             tracing::error!("Error handling Ticket Tool message modal: {err}");
+        }
+        return;
+    }
+    if is_settings_modal(&interaction.data.custom_id) {
+        if let Err(err) = handle_setting_modal(ctx, interaction).await {
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling settings modal: {err}");
         }
         return;
     }
@@ -1418,6 +1414,14 @@ pub async fn dispatch_modal(ctx: &Context, interaction: &ModalInteraction) {
     if let Err(err) = handle_instance_modal(ctx, interaction).await {
         tracing::error!(custom_id = %interaction.data.custom_id, "Error handling modal interaction: {err}");
     }
+}
+
+fn is_settings_modal(custom_id: &str) -> bool {
+    // Java intentionally gives the Ticket Tool editor a `settings:` id too.
+    // It has its own Discord config persistence path and must not be consumed
+    // by the generic typed-settings registry handler.
+    custom_id.starts_with(crate::commands::settings::MODAL_PREFIX)
+        && custom_id != crate::commands::ticket_config::MESSAGE_MODAL_ID
 }
 
 fn parse_duration_millis(input: &str) -> Option<i64> {
@@ -1888,14 +1892,10 @@ async fn handle_watched_notes_modal(
     interaction: &ModalInteraction,
 ) -> serenity::Result<()> {
     let parts: Vec<_> = interaction.data.custom_id.split(':').collect();
-    let action = if parts.first() == Some(&"watched-group-set-notes") {
-        "edit watched group notes"
-    } else {
-        "edit watched entity notes"
-    };
-    if let Some(denial) = config_access_denial(interaction.member.as_ref(), action) {
-        return ephemeral_modal(ctx, interaction, denial).await;
-    }
+    // Java's watched-list commands require only USE_APPLICATION_COMMANDS and
+    // the server's DPerms rules. The modal is ephemeral to the authorized
+    // slash-command caller, so adding a MANAGE_SERVER gate here prevents a
+    // legitimately delegated `set-notes` command from ever completing.
     let notes = modal_text(interaction, "notes");
     let updated = match parts.as_slice() {
         ["watched-group-set-notes", group_id] => {
@@ -2038,6 +2038,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn ticket_message_modal_is_not_swallowed_by_generic_settings() {
+        let ticket = crate::commands::ticket_config::MESSAGE_MODAL_ID;
+        assert!(ticket.starts_with(crate::commands::settings::MODAL_PREFIX));
+        assert!(!is_settings_modal(ticket));
+        assert!(is_settings_modal("settings:ui_language"));
+    }
 
     #[test]
     fn request_only_includes_roles_for_member_instances() {
