@@ -345,6 +345,7 @@ pub struct ScarletApp {
     import_groups_url_open: bool,
     import_groups_url: String,
     import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
+    visual_style_installed: bool,
 }
 
 impl ScarletApp {
@@ -465,7 +466,40 @@ impl ScarletApp {
             import_groups_url_open: false,
             import_groups_url: String::new(),
             import_groups_rx: None,
+            visual_style_installed: false,
         }
+    }
+
+    fn install_visual_style(&mut self, ctx: &egui::Context) {
+        if self.visual_style_installed {
+            return;
+        }
+        let mut style = (*ctx.style()).clone();
+        style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+        style.spacing.button_padding = egui::vec2(11.0, 6.0);
+        style.spacing.window_margin = egui::Margin::same(12.0);
+        style.visuals.panel_fill = egui::Color32::from_rgb(16, 19, 25);
+        style.visuals.window_fill = egui::Color32::from_rgb(22, 26, 34);
+        style.visuals.extreme_bg_color = egui::Color32::from_rgb(10, 13, 18);
+        style.visuals.faint_bg_color = egui::Color32::from_rgb(24, 29, 38);
+        style.visuals.selection.bg_fill = egui::Color32::from_rgb(38, 104, 170);
+        style.visuals.selection.stroke.color = egui::Color32::from_rgb(226, 239, 255);
+        style.visuals.window_rounding = egui::Rounding::same(9.0);
+        style.visuals.menu_rounding = egui::Rounding::same(7.0);
+        for widget in [
+            &mut style.visuals.widgets.noninteractive,
+            &mut style.visuals.widgets.inactive,
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            widget.rounding = egui::Rounding::same(6.0);
+        }
+        style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 36, 46);
+        style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(42, 51, 65);
+        style.visuals.widgets.active.weak_bg_fill = egui::Color32::from_rgb(38, 104, 170);
+        ctx.set_style(style);
+        self.visual_style_installed = true;
     }
 
     fn window_title(&self) -> String {
@@ -533,37 +567,87 @@ impl ScarletApp {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if let Some(logo) = self.logo_texture(ui.ctx()) {
+                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(30.0, 30.0)));
+            }
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(scarlet_core::identity::NAME).strong().size(18.0));
+                ui.label(
+                    egui::RichText::new(format!("Version {}  •  Windows & Linux", scarlet_core::identity::VERSION))
+                        .small()
+                        .weak(),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let status = self.state.connection_status();
+                let signed_in = status.contains("signed in as");
+                let colour = if signed_in {
+                    egui::Color32::from_rgb(91, 196, 125)
+                } else {
+                    egui::Color32::from_rgb(232, 169, 76)
+                };
+                let label = if status.is_empty() { "VRChat: connecting" } else { &status };
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), 28))
+                    .rounding(egui::Rounding::same(12.0))
+                    .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                    .show(ui, |ui| {
+                        ui.colored_label(colour, format!("●  {label}"));
+                    });
+            });
+        });
+
+        ui.add_space(7.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Data Folder").on_hover_text("Open the KozyBlake/Scarlet data directory").clicked() {
-                if let Err(err) = open::that(&self.data_dir) {
-                    self.state.append_cli_output(format!("Could not open data folder: {err}"));
+            ui.add_enabled(false, egui::Button::new(egui::RichText::new("＋  Create instance").strong()))
+                .on_hover_text("Instance creation is still being ported");
+
+            ui.menu_button("Import groups  ▾", |ui| {
+                if ui.button("From URL…").clicked() {
+                    self.import_groups_url_open = true;
+                    self.import_groups_url.clear();
+                    ui.close_menu();
                 }
-            }
-            if ui.button("Create Instance").clicked() {
-                self.state.append_cli_output("Create Instance: not wired up yet (needs the VRChat instance-creation flow).");
-            }
-            if ui.button("Import Groups (URL)").on_hover_text("Import watched groups from a CSV or JSON URL").clicked() {
-                self.import_groups_url_open = true;
-                self.import_groups_url.clear();
-            }
-            if ui.button("Import Groups (File)").on_hover_text("Import watched groups from a CSV or JSON file").clicked() {
-                self.import_groups_from_file();
-            }
-            if ui.button("Sync Discord").clicked() {
-                self.state.append_cli_output("Sync Discord: not wired up yet.");
-            }
-            if ui.button("Clear Instance").clicked() {
-                self.state.clear_instance();
-                self.state.append_cli_output("Instance cleared.");
-            }
-            let tts_on = self.state.tts_enabled();
-            if ui.button(if tts_on { "TTS: On" } else { "TTS: Off" }).clicked() {
-                self.state.set_tts_enabled(!tts_on);
-                self.tts.set_paused(tts_on);
-            }
-            if ui.button("Skip TTS").clicked() {
-                self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
-            }
+                if ui.button("From file…").clicked() {
+                    self.import_groups_from_file();
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("Tools  ▾", |ui| {
+                if ui.button("Open data folder").on_hover_text("Open the KozyBlake/Scarlet data directory").clicked() {
+                    if let Err(err) = open::that(&self.data_dir) {
+                        self.state.append_cli_output(format!("Could not open data folder: {err}"));
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("Sync Discord").clicked() {
+                    self.state.append_cli_output("Sync Discord: not wired up yet.");
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Clear current instance").clicked() {
+                    self.state.clear_instance();
+                    self.state.append_cli_output("Instance cleared.");
+                    ui.close_menu();
+                }
+            });
+
+            ui.separator();
+            self.tab_bar(ui);
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
+                    self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
+                }
+                let tts_on = self.state.tts_enabled();
+                let button = egui::Button::new(if tts_on { "Voice  ● On" } else { "Voice  ○ Off" }).selected(tts_on);
+                if ui.add(button).clicked() {
+                    self.state.set_tts_enabled(!tts_on);
+                    self.tts.set_paused(tts_on);
+                }
+            });
         });
     }
 
@@ -645,10 +729,16 @@ impl ScarletApp {
             self.tab = Tab::Instance;
         }
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.tab, Tab::Instance, "  Instance  ");
-            ui.selectable_value(&mut self.tab, Tab::Settings, "  Settings  ");
+            if ui.add(egui::Button::new("Instance").selected(self.tab == Tab::Instance)).clicked() {
+                self.tab = Tab::Instance;
+            }
+            if ui.add(egui::Button::new("Settings").selected(self.tab == Tab::Settings)).clicked() {
+                self.tab = Tab::Settings;
+            }
             if show_cli {
-                ui.selectable_value(&mut self.tab, Tab::Cli, "  CLI  ");
+                if ui.add(egui::Button::new("CLI").selected(self.tab == Tab::Cli)).clicked() {
+                    self.tab = Tab::Cli;
+                }
             }
         });
     }
@@ -764,6 +854,32 @@ impl ScarletApp {
         if players.is_empty() {
             return self.instance_empty_state(ui);
         }
+        let (present, left, total) = self.state.status_counts();
+        let instance_name = self
+            .state
+            .instance()
+            .map(|instance| instance.world_name.unwrap_or(instance.location))
+            .unwrap_or_else(|| "Current session".to_string());
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(22, 27, 35))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("Instance roster").strong().size(16.0));
+                        ui.label(egui::RichText::new(instance_name).small().weak());
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(format!("{total} session total")).small().weak());
+                        if left > 0 {
+                            ui.label(egui::RichText::new(format!("{left} left")).color(egui::Color32::from_rgb(168, 174, 185)));
+                        }
+                        ui.label(egui::RichText::new(format!("●  {present} present")).color(egui::Color32::from_rgb(91, 196, 125)));
+                    });
+                });
+            });
+        ui.add_space(8.0);
         let column_order = self.column_order.clone();
         let column_widths = self.column_widths.clone();
         // `ui_left_player_dim_percent` is how much to dim a player who has
@@ -787,6 +903,11 @@ impl ScarletApp {
         let mut width_update = None;
         let active_sort = self.table_sort;
 
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(19, 23, 30))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::same(7.0))
+            .show(ui, |ui| {
         egui::ScrollArea::horizontal().show(ui, |ui| {
             // `Column::auto()` sizes to content, which is what let a long
             // VRChat id wrap over five lines. A fixed initial width that
@@ -799,7 +920,7 @@ impl ScarletApp {
             }
 
             table
-                .header(20.0, |mut header| {
+                .header(28.0, |mut header| {
                     for (index, column) in column_order.iter().enumerate() {
                         header.col(|ui| {
                             let (drop_zone, dropped) = ui.dnd_drop_zone::<usize, _>(egui::Frame::none(), |ui| {
@@ -860,7 +981,7 @@ impl ScarletApp {
                 })
                 .body(|mut body| {
                     for player in &players {
-                        body.row(20.0, |mut row| {
+                        body.row(27.0, |mut row| {
                             let departed = player.left.is_some();
                             for column in &column_order {
                                 row.col(|ui| {
@@ -900,6 +1021,7 @@ impl ScarletApp {
                     }
                 });
         });
+            });
 
         if let Some((from, to)) = swap {
             if from != to && from < self.column_order.len() && to < self.column_order.len() {
@@ -1669,6 +1791,7 @@ impl ScarletApp {
 impl eframe::App for ScarletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+        self.install_visual_style(ctx);
         self.persist_window_bounds(ctx);
 
         // The setup wizard, while running, replaces the entire window
@@ -1792,15 +1915,23 @@ impl eframe::App for ScarletApp {
             None => {}
         }
 
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.add_space(4.0);
+        egui::TopBottomPanel::top("toolbar")
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(20, 24, 31))
+                    .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+            )
+            .show(ctx, |ui| {
             self.toolbar(ui);
-            ui.add_space(4.0);
-            ui.separator();
-            self.tab_bar(ui);
         });
 
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        egui::TopBottomPanel::bottom("status_bar")
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(20, 24, 31))
+                    .inner_margin(egui::Margin::symmetric(12.0, 6.0)),
+            )
+            .show(ctx, |ui| {
             let (present, left, total) = self.state.status_counts();
             // Java's `updateStatusBar`, through the same message catalogue
             // so the wording (and its translations) stay in one place.
@@ -1813,7 +1944,7 @@ impl eframe::App for ScarletApp {
                 )
             };
             ui.horizontal(|ui| {
-                ui.label(text);
+                ui.label(egui::RichText::new(text).small());
                 // Which instance those players are in. Java never showed
                 // this; without it there is no way to tell "no instance
                 // open" from "instance open, nobody joined yet".
@@ -1822,33 +1953,24 @@ impl eframe::App for ScarletApp {
                         ui.separator();
                         let label = instance.world_name.clone().unwrap_or_else(|| instance.location.clone());
                         let label = if instance.is_group_instance { format!("{label}  (group)") } else { label };
-                        ui.label(label).on_hover_text(instance.location.clone());
+                        ui.label(egui::RichText::new(label).small().strong()).on_hover_text(instance.location.clone());
                     }
                     None => {
                         ui.separator();
-                        ui.weak(scarlet_core::i18n::tr("ui.statusNoInstance", &[]).trim().to_string());
+                        ui.label(egui::RichText::new(scarlet_core::i18n::tr("ui.statusNoInstance", &[]).trim()).small().weak());
                     }
-                }
-                // The VRChat session, which every profile-derived column
-                // depends on.
-                let vrchat_status = self.state.connection_status();
-                if !vrchat_status.is_empty() {
-                    ui.separator();
-                    let signed_in = vrchat_status.contains("signed in as");
-                    let colour = if signed_in { egui::Color32::from_rgb(95, 200, 120) } else { egui::Color32::from_rgb(235, 165, 65) };
-                    ui.colored_label(colour, vrchat_status);
                 }
                 // A dropped TTS announcement is otherwise silent in every
                 // sense: nothing plays and nothing is shown.
-                if let Some(problem) = self.state.tts_status() {
-                    ui.separator();
-                    ui.colored_label(egui::Color32::from_rgb(235, 165, 65), "TTS")
-                        .on_hover_text(&problem);
-                }
-                if let Some(announcement) = self.state.announcement() {
-                    ui.separator();
-                    ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Celeste announcement"));
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(problem) = self.state.tts_status() {
+                        ui.colored_label(egui::Color32::from_rgb(235, 165, 65), "Voice warning")
+                            .on_hover_text(&problem);
+                    }
+                    if let Some(announcement) = self.state.announcement() {
+                        ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Celeste announcement"));
+                    }
+                });
             });
         });
 
@@ -1857,7 +1979,13 @@ impl eframe::App for ScarletApp {
         self.avatar_stats_window(ctx);
         self.group_action_confirm_window(ctx);
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(16, 19, 25))
+                    .inner_margin(egui::Margin::same(12.0)),
+            )
+            .show(ctx, |ui| match self.tab {
             Tab::Instance => self.instance_tab(ui),
             Tab::Settings => self.settings_tab(ui),
             Tab::Cli => self.cli_tab(ui),
