@@ -2094,6 +2094,19 @@ impl ScarletApp {
         IDS.contains(&id)
     }
 
+    /// A sidebar click is navigation, even if the user previously searched
+    /// for a setting. Leaving the global query active made the heading and
+    /// selected button change while the same cross-category search results
+    /// stayed on screen, which made every category button appear broken.
+    fn activate_settings_category(
+        current: &mut SettingCategory,
+        search: &mut String,
+        selected: SettingCategory,
+    ) {
+        *current = selected;
+        search.clear();
+    }
+
     fn render_notification_matrix(ui: &mut egui::Ui, descriptors: &[std::sync::Arc<dyn SettingDescriptor>]) {
         const ROWS: [(&str, Option<&str>, Option<&str>); 9] = [
             ("Watched user", Some("tts_announce_watched_users"), Some("toast_notify_watched_users")),
@@ -2169,7 +2182,14 @@ impl ScarletApp {
                 } else {
                     egui::RichText::new(format!("{}  ({count})", category.label()))
                 };
-                ui.selectable_value(&mut self.settings_category, category, label);
+                let selected = self.settings_category == category;
+                if ui.selectable_label(selected, label).clicked() {
+                    Self::activate_settings_category(
+                        &mut self.settings_category,
+                        &mut self.settings_search,
+                        category,
+                    );
+                }
             }
             ui.add_space(8.0);
             ui.separator();
@@ -3493,6 +3513,21 @@ mod tests {
         assert_eq!(ScarletApp::setting_group("verified_role_snowflake"), "Verification");
         assert_eq!(ScarletApp::setting_group("discord_ping_outstanding_user_ban"), "Outstanding moderation");
         assert_eq!(ScarletApp::setting_group("custom_avatar_search_providers"), "Avatar search");
+    }
+
+    #[test]
+    fn category_navigation_exits_global_search_mode() {
+        let mut current = SettingCategory::General;
+        let mut search = "voice channel".to_string();
+
+        ScarletApp::activate_settings_category(
+            &mut current,
+            &mut search,
+            SettingCategory::Discord,
+        );
+
+        assert_eq!(current, SettingCategory::Discord);
+        assert!(search.is_empty());
     }
 
     #[test]

@@ -275,3 +275,9 @@ both stores on startup/connect, and clears both on Discord reset. Owner checking
 also falls back to Discord's API when the guild cache is cold. This restores the
 save handlers that the broken gate prevented from running and keeps Discord
 configuration available after restart. The workspace now passes 484 tests.
+
+Settings sidebar navigation now exits the global-search mode when a category
+is clicked. Previously the selected category and heading changed while stale
+cross-category search results remained visible, making the navigation appear
+nonfunctional after searching/editing a setting. Regression coverage brings
+the workspace total to 485 tests.
