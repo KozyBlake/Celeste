@@ -133,13 +133,11 @@ fn permission_denied() -> &'static str {
 
 async fn configured_guild(ctx: &Context, guild_id: Option<GuildId>) -> bool {
     let configured = {
-        ctx.data
-            .read()
-            .await
-            .get::<crate::data::DiscordConfigKey>()
-            .and_then(|config| config.string("guildSf"))
+        let data = ctx.data.read().await;
+        data.get::<crate::data::SettingsKey>().zip(data.get::<crate::data::DiscordConfigKey>())
+            .and_then(|(settings, config)| crate::data::configured_guild_id(settings, config))
     };
-    match (configured.and_then(|id| id.parse::<u64>().ok()), guild_id) {
+    match (configured, guild_id) {
         (Some(configured), Some(actual)) => configured == actual.get(),
         _ => false,
     }
@@ -156,7 +154,7 @@ async fn interaction_permitted(
         return false;
     }
     let Some(member) = member else { return false };
-    if member_is_owner_or_admin(ctx, guild_id, member) {
+    if member_is_owner_or_admin(ctx, guild_id, member).await {
         return true;
     }
     let permissions = {
@@ -176,7 +174,7 @@ async fn command_permitted(ctx: &Context, command: &CommandInteraction) -> bool 
     let Some(member) = command.member.as_ref() else {
         return false;
     };
-    if member_is_owner_or_admin(ctx, command.guild_id, member) {
+    if member_is_owner_or_admin(ctx, command.guild_id, member).await {
         return true;
     }
     let permissions = {
@@ -218,7 +216,7 @@ async fn command_permitted(ctx: &Context, command: &CommandInteraction) -> bool 
     permissions.check_slash(member, &command.data.name, group, subcommand)
 }
 
-pub(crate) fn member_is_owner_or_admin(
+pub(crate) async fn member_is_owner_or_admin(
     ctx: &Context,
     guild_id: Option<GuildId>,
     member: &serenity::model::guild::Member,
@@ -228,9 +226,16 @@ pub(crate) fn member_is_owner_or_admin(
     }) {
         return true;
     }
+    let Some(guild_id) = guild_id else { return false };
+    if ctx.cache.guild(guild_id).is_some_and(|guild| guild.owner_id == member.user.id) {
+        return true;
+    }
+    // Interaction payloads normally contain computed ADMINISTRATOR
+    // permissions for an owner, but do not rely on that or a warm cache.
     guild_id
-        .and_then(|guild_id| ctx.cache.guild(guild_id).map(|guild| guild.owner_id))
-        .is_some_and(|owner_id| owner_id == member.user.id)
+        .to_partial_guild(&ctx.http)
+        .await
+        .is_ok_and(|guild| guild.owner_id == member.user.id)
 }
 
 async fn deny_command(ctx: &Context, command: &CommandInteraction) {
@@ -258,9 +263,10 @@ async fn reconnect_voice_channel(ctx: &Context) {
             .cloned()
     };
     let Some(config) = config else { return };
-    let Some(guild_id) = config
-        .string("guildSf")
-        .and_then(|id| id.parse::<u64>().ok())
+    let settings = { ctx.data.read().await.get::<crate::data::SettingsKey>().cloned() };
+    let Some(guild_id) = settings
+        .as_deref()
+        .and_then(|settings| crate::data::configured_guild_id(settings, &config))
     else {
         return;
     };

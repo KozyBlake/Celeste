@@ -52,6 +52,7 @@ impl DiscordVoiceTts {
     pub fn new(
         manager: Arc<songbird::Songbird>,
         config: Arc<crate::data::DiscordConfigStore>,
+        settings: Arc<scarlet_core::settings::Settings>,
         runtime: tokio::runtime::Handle,
     ) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<VoiceRequest>();
@@ -63,12 +64,12 @@ impl DiscordVoiceTts {
                 // missing voice channel looked exactly like a working
                 // config that simply never spoke. Say why, once per
                 // distinct reason, and remember it for the status bar.
-                let guild_id = config.string("guildSf").and_then(|id| id.parse::<u64>().ok());
+                let guild_id = crate::data::configured_guild_id(&settings, &config);
                 let Some(guild_id) = guild_id else {
                     report(
                         &worker_status,
                         "No Discord server is configured, so TTS has nowhere to speak \
-                         (run the setup wizard, or set `guildSf`).",
+                         (run the setup wizard to choose one).",
                     );
                     continue;
                 };

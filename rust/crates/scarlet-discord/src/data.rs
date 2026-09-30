@@ -297,6 +297,56 @@ impl DiscordConfigStore {
     }
 }
 
+/// Returns the one Discord guild Celeste is configured to serve.
+///
+/// The Rust setup wizard originally stored this in encrypted preferences as
+/// `discord.guild_id`, while the Java-compatible Discord config and several
+/// runtime consumers use `discord_bot.json`'s `guildSf`. Keeping this bridge
+/// in one place prevents commands, voice reconnect, and audit routing from
+/// silently disagreeing about whether a guild is configured.
+pub fn configured_guild_id(
+    settings: &scarlet_core::settings::Settings,
+    config: &DiscordConfigStore,
+) -> Option<u64> {
+    let registry_value = scarlet_core::settings::registry::registry_string_encrypted(
+        settings.encrypted.clone(),
+        "discord.guild_id",
+    )
+    .get_or_null();
+    resolve_guild_id(registry_value.as_deref(), config.string("guildSf").as_deref())
+}
+
+fn resolve_guild_id(primary: Option<&str>, legacy: Option<&str>) -> Option<u64> {
+    primary
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .or_else(|| legacy.and_then(|value| value.trim().parse::<u64>().ok()))
+}
+
+/// Keeps both the Rust setup key and Java-compatible config field populated.
+/// Existing installs can have either one, depending on which build created
+/// their data directory.
+pub fn synchronize_guild_id(
+    settings: &scarlet_core::settings::Settings,
+    config: &DiscordConfigStore,
+) -> anyhow::Result<Option<u64>> {
+    let registry = scarlet_core::settings::registry::registry_string_encrypted(
+        settings.encrypted.clone(),
+        "discord.guild_id",
+    );
+    let primary = registry.get_or_null();
+    let legacy = config.string("guildSf");
+    let resolved = resolve_guild_id(primary.as_deref(), legacy.as_deref());
+    let Some(guild_id) = resolved else { return Ok(None) };
+    let canonical = guild_id.to_string();
+    if primary.as_deref().map(str::trim) != Some(canonical.as_str()) {
+        registry.set(Some(canonical.clone()));
+    }
+    if legacy.as_deref().map(str::trim) != Some(canonical.as_str()) {
+        config.set_string("guildSf", Some(&canonical))?;
+    }
+    Ok(Some(guild_id))
+}
+
 /// The connected client's HTTP handle, published once the client is built
 /// so code outside the gateway (the ported event listener's audit emitter)
 /// can post to Discord. `None` until then, and `None` again for a run with
@@ -401,6 +451,11 @@ pub struct SharedState {
 
 impl SharedState {
     pub fn insert_into(self, data: &mut TypeMap) {
+        match synchronize_guild_id(&self.settings, &self.discord_config) {
+            Ok(Some(guild_id)) => tracing::debug!(guild_id, "Discord guild configuration synchronized"),
+            Ok(None) => tracing::warn!("No Discord guild is configured"),
+            Err(error) => tracing::error!(%error, "Failed to synchronize Discord guild configuration"),
+        }
         let discord_permissions = Arc::new(crate::permissions::DiscordPermissions::open(
             self.discord_config.data_dir(),
         ));
@@ -469,6 +524,33 @@ mod tests {
         assert_eq!(
             config.map_strings("auditType2scarletAuxWh", "group.user.ban"),
             ["one", "two"]
+        );
+    }
+
+    #[test]
+    fn rust_setup_guild_takes_precedence_with_java_fallback() {
+        assert_eq!(resolve_guild_id(Some(" 123 "), Some("456")), Some(123));
+        assert_eq!(resolve_guild_id(None, Some("456")), Some(456));
+        assert_eq!(resolve_guild_id(Some("invalid"), Some("456")), Some(456));
+        assert_eq!(resolve_guild_id(None, None), None);
+    }
+
+    #[test]
+    fn setup_guild_is_copied_to_java_config_and_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = scarlet_core::settings::Settings::open(dir.path());
+        scarlet_core::settings::registry::registry_string_encrypted(
+            settings.encrypted.clone(),
+            "discord.guild_id",
+        )
+        .set(Some("123".to_string()));
+        let config = DiscordConfigStore::open(dir.path());
+
+        assert_eq!(synchronize_guild_id(&settings, &config).unwrap(), Some(123));
+        assert_eq!(config.string("guildSf").as_deref(), Some("123"));
+        assert_eq!(
+            DiscordConfigStore::open(dir.path()).string("guildSf").as_deref(),
+            Some("123")
         );
     }
 }

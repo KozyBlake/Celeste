@@ -86,6 +86,9 @@ fn main() -> anyhow::Result<()> {
     // the event listener's audit emitter can post without a `Context`.
     let discord_http: scarlet_discord::data::SharedHttp = Arc::new(tokio::sync::RwLock::new(None));
     let discord_config = Arc::new(scarlet_discord::data::DiscordConfigStore::open(&data_dir));
+    if let Err(error) = scarlet_discord::data::synchronize_guild_id(&settings, &discord_config) {
+        tracing::error!(%error, "Failed to synchronize Discord guild configuration");
+    }
     let voice_manager = songbird::Songbird::serenity();
     let (process_controller, mut process_requests) = scarlet_discord::data::ProcessController::new();
 
@@ -207,6 +210,7 @@ fn main() -> anyhow::Result<()> {
             Some(scarlet_discord::voice_tts::DiscordVoiceTts::new(
                 voice_manager,
                 shared.discord_config.clone(),
+                settings.clone(),
                 runtime.handle().clone(),
             )),
             Some(ui_state.clone()),

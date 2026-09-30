@@ -263,3 +263,15 @@ The remaining release gate is hands-on testing: Discord permissions, command
 responses, threads/components/modals, VRChat authentication and live logs, TTS,
 and desktop behavior on the owner's real configuration. Unit tests cannot
 fully exercise those external services.
+
+## Update 2026-09-30: Discord guild persistence and permissions
+
+The setup wizard stored the guild id under encrypted `discord.guild_id`, while
+the global interaction gate, voice reconnect/TTS, and audit metadata still read
+Java's `discord_bot.json` field `guildSf`. With no legacy field, every command,
+component, and modal was rejected before the owner/Administrator bypass ran.
+Celeste now resolves one authoritative guild id with Java fallback, synchronizes
+both stores on startup/connect, and clears both on Discord reset. Owner checking
+also falls back to Discord's API when the guild cache is cold. This restores the
+save handlers that the broken gate prevented from running and keeps Discord
+configuration available after restart. The workspace now passes 484 tests.

@@ -245,7 +245,9 @@ impl AuditPoller {
             }
             match channel.send_message(&http, message).await {
                 Ok(message) => {
-                    metadata.guild_snowflake = self.config.string("guildSf");
+                    metadata.guild_snowflake =
+                        crate::data::configured_guild_id(&self.settings, &self.config)
+                            .map(|id| id.to_string());
                     metadata.channel_snowflake = Some(channel.get().to_string());
                     metadata.message_snowflake = Some(message.id.get().to_string());
                     if is_moderation(&entry.event_type) {
@@ -454,7 +456,8 @@ impl AuditPoller {
         let aux_message = thread.id.send_message(&http, CreateMessage::new().content("### Instance log")).await.ok();
         self.data.live_instances_set_location_instance_embed_message(
             location,
-            self.config.string("guildSf"),
+            crate::data::configured_guild_id(&self.settings, &self.config)
+                .map(|id| id.to_string()),
             Some(channel.get().to_string()),
             Some(message.id.get().to_string()),
             Some(thread.id.get().to_string()),
