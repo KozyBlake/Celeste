@@ -13,11 +13,10 @@ use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 
 pub const SEARCH_N: u32 = 5_000;
-pub const BUILTIN_PROVIDERS: [&str; 6] = [
+pub const BUILTIN_PROVIDERS: [&str; 5] = [
     "https://api.avtrdb.com/v2/avatar/search/vrcx",
     "https://vrcavatarsearch.nekosunevr.co.uk/vrcx_search",
     "https://vrcx.vrcdb.com/avatars/Avatar/VRCX",
-    "https://avatarwbvrcxsearch.worldbalancer.com/vrcx_search",
     "https://paw-api.amelia.fun/vrcx_search",
     "https://avtr.fumikoecho.net/api/integrations/avatars/vrcx",
 ];
@@ -81,6 +80,13 @@ impl AvatarSearch {
     pub async fn search_all(&self, providers: &[String], search: &str) -> Vec<VrcxAvatar> {
         let mut all = Vec::new();
         for provider in providers {
+            // The owner explicitly excluded World Balancer. Filter at the
+            // request boundary as well as removing it from defaults so a
+            // settings.json carried over from Java/older Rust cannot keep
+            // querying it silently.
+            if is_world_balancer(provider) {
+                continue;
+            }
             if let Some(results) = self.search_cached(provider, SEARCH_N, search).await {
                 all.extend(results.iter().cloned());
             }
@@ -173,6 +179,18 @@ impl AvatarSearch {
             .map_err(SearchError::Malformed)?;
         parse_vrcx_results(&json).map_err(SearchError::Shape)
     }
+}
+
+fn is_world_balancer(provider: &str) -> bool {
+    provider
+        .split_once("://")
+        .map_or(provider, |(_, rest)| rest)
+        .split('/')
+        .next()
+        .is_some_and(|host| {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            host == "worldbalancer.com" || host.ends_with(".worldbalancer.com")
+        })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -414,6 +432,14 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].id, "avtr_ok");
         assert!(parse_vrcx_results(&json!({"message": "maintenance"})).is_err());
+    }
+
+    #[test]
+    fn world_balancer_is_excluded_even_from_carried_over_custom_settings() {
+        assert!(is_world_balancer("https://avatarwbvrcxsearch.worldbalancer.com/vrcx_search"));
+        assert!(is_world_balancer("https://worldbalancer.com/search"));
+        assert!(!is_world_balancer("https://api.avtrdb.com/v2/avatar/search/vrcx"));
+        assert!(!BUILTIN_PROVIDERS.iter().any(|provider| is_world_balancer(provider)));
     }
 }
 

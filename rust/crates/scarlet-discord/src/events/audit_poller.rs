@@ -17,8 +17,8 @@ use scarlet_core::settings::Settings;
 use scarlet_core::staff_list::StaffList;
 use scarlet_vrchat::models::GroupAuditLogEntry;
 use serenity::builder::{
-    CreateActionRow, CreateButton, CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter,
-    CreateMessage, CreateThread, EditMessage,
+    CreateActionRow, CreateAllowedMentions, CreateButton, CreateEmbed, CreateEmbedAuthor,
+    CreateEmbedFooter, CreateMessage, CreateThread, EditMessage,
 };
 use serenity::model::channel::AutoArchiveDuration;
 use serenity::model::id::{ChannelId, MessageId};
@@ -181,14 +181,45 @@ impl AuditPoller {
             .and_then(|id| id.parse::<u64>().ok())
             .map(ChannelId::new);
 
+        let previous_instance = if entry.event_type == "group.instance.close" {
+            entry
+                .target_id
+                .as_deref()
+                .and_then(|location| self.data.live_instances_get_location_audit(location, false))
+                .map(|audit_id| self.data.audit_entry_metadata(&audit_id))
+                .filter(AuditEntryMetadata::has_message)
+        } else {
+            None
+        };
+
         if let (Some(http), Some(channel)) = (self.http.read().await.clone(), channel) {
             let target = if let (Some(client), Some(target_id)) = (client.as_ref(), entry.target_id.as_deref()) {
                 client.get_user(target_id).await.ok()
             } else {
                 None
             };
-            let embed = entry_embed(&entry, target.as_ref());
+            let mut embed = entry_embed(&entry, target.as_ref());
+            if let Some(url) = previous_instance.as_ref().and_then(AuditEntryMetadata::message_url) {
+                embed = embed.title("Instance Close").url(url);
+            }
             let mut message = CreateMessage::new().embed(embed);
+            if let Some(previous) = previous_instance.as_ref().filter(|previous| {
+                previous
+                    .channel_snowflake
+                    .as_deref()
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .is_some_and(|id| id == channel.get())
+            }) {
+                if let Some(message_id) = previous
+                    .message_snowflake
+                    .as_deref()
+                    .and_then(|id| id.parse::<u64>().ok())
+                {
+                    message = message
+                        .reference_message((channel, MessageId::new(message_id)))
+                        .allowed_mentions(CreateAllowedMentions::new().replied_user(false));
+                }
+            }
             if entry.event_type == "group.request.create" {
                 if let Some(target_id) = entry.target_id.as_deref() {
                     message = message.components(group_request_controls(target_id));
