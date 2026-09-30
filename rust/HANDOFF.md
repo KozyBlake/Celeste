@@ -179,3 +179,14 @@ avatar advisories. Automatic six-hour cleanup now applies the configured
 retention to TTS files, entity caches, Celeste/legacy Scarlet logs, and—by
 explicit owner request—old VRChat output logs, always protecting the newest app
 and VRChat log files.
+
+## Update 2026-09-30: bot-instance auto-close
+
+`auto_close_bot_instance_minutes` is now functional in the Rust instance
+lifecycle worker. It reads the current location and active player ids from the
+same log-derived `UiState` that drives the Instance table, resolves Celeste's
+own VRChat user id when it starts tracking a location, resets the full idle
+timer whenever another user is present or the bot moves, rechecks the roster
+immediately before acting, hard-closes only the concrete current location, and
+emits the configured instance-enforcement notice on success. Tests pin the
+uninterrupted bot-only interval and location-reset behavior.

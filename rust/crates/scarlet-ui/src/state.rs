@@ -239,6 +239,19 @@ impl UiState {
         self.0.lock().unwrap().players.values().any(|p| p.left.is_none())
     }
 
+    /// Snapshot of the live log-derived roster. Departed rows remain in the
+    /// table for history but must not keep an otherwise idle instance open.
+    pub fn active_player_ids(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap()
+            .players
+            .values()
+            .filter(|player| player.left.is_none())
+            .map(|player| player.id.clone())
+            .collect()
+    }
+
     pub fn refresh_vrchat_api_status(&self, status: impl Into<String>) {
         self.0.lock().unwrap().connection_status = status.into();
     }
@@ -363,6 +376,14 @@ impl CelesteUi for UiState {
 
     fn set_instance(&self, instance: Option<InstanceState>) {
         UiState::set_instance(self, instance)
+    }
+
+    fn current_instance(&self) -> Option<InstanceState> {
+        UiState::instance(self)
+    }
+
+    fn active_player_ids(&self) -> Vec<String> {
+        UiState::active_player_ids(self)
     }
 }
 

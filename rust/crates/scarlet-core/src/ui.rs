@@ -262,6 +262,15 @@ pub trait CelesteUi: Send + Sync {
     fn refresh_vrchat_api_status(&self, status: &str);
     /// Sets (or clears, with `None`) the instance the client is in.
     fn set_instance(&self, instance: Option<InstanceState>);
+    /// Read-only live-session snapshot used by Java's bot-only instance
+    /// auto-close worker. Defaults keep headless/test implementations
+    /// source-compatible; the real UiState overrides both methods.
+    fn current_instance(&self) -> Option<InstanceState> {
+        None
+    }
+    fn active_player_ids(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Port of `ScarletUIHeadless`: every call is a no-op, for runs with no

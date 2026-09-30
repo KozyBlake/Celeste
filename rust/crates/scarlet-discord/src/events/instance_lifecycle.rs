@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
+use scarlet_core::ui::CelesteUi;
 use scarlet_core::settings::enums::{EnforcementAgeState, EnforcementListState};
 use scarlet_core::settings::Settings;
 use serde_json::Value;
@@ -22,10 +23,13 @@ pub async fn run(
     settings: Arc<Settings>,
     data: Arc<scarlet_core::data::ScarletData>,
     emitter: Arc<DiscordAuditEmitter>,
+    ui: Arc<dyn CelesteUi>,
 ) {
+    let mut auto_close = AutoCloseTracker::default();
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         let Some(client) = vrchat.read().await.clone() else { continue };
+        maybe_auto_close_bot_instance(&client, &settings, &emitter, ui.as_ref(), &mut auto_close).await;
         let Some(group_id) = settings
             .store
             .get_string(scarlet_vrchat::client::GROUP_ID_KEY)
@@ -58,6 +62,107 @@ pub async fn run(
         }
         enforce_instances(&instances, &client, &settings, &emitter).await;
     }
+}
+
+#[derive(Debug, Default)]
+struct AutoCloseTracker {
+    location: Option<String>,
+    self_user_id: Option<String>,
+    idle_since: Option<chrono::DateTime<Utc>>,
+}
+
+impl AutoCloseTracker {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Returns true once the same location has remained bot-only for the
+    /// configured duration. Any other player resets the full timer, matching
+    /// Java's `maybeAutoCloseBotInstance` exactly.
+    fn observe(
+        &mut self,
+        location: &str,
+        self_user_id: &str,
+        active_player_ids: &[String],
+        minutes: i32,
+        now: chrono::DateTime<Utc>,
+    ) -> bool {
+        if self.location.as_deref() != Some(location) {
+            self.location = Some(location.to_string());
+            self.self_user_id = Some(self_user_id.to_string());
+            self.idle_since = None;
+        }
+        if active_player_ids.iter().any(|id| id != self_user_id) {
+            self.idle_since = None;
+            return false;
+        }
+        let Some(idle_since) = self.idle_since else {
+            self.idle_since = Some(now);
+            return false;
+        };
+        now >= idle_since + Duration::minutes(i64::from(minutes))
+    }
+}
+
+async fn maybe_auto_close_bot_instance(
+    client: &scarlet_vrchat::client::VrChatClient,
+    settings: &Settings,
+    emitter: &DiscordAuditEmitter,
+    ui: &dyn CelesteUi,
+    tracker: &mut AutoCloseTracker,
+) {
+    let minutes = settings.auto_close_bot_instance_minutes.get();
+    let Some(instance) = ui.current_instance() else {
+        tracker.reset();
+        return;
+    };
+    if minutes <= 0 {
+        tracker.reset();
+        return;
+    }
+
+    if tracker.location.as_deref() != Some(instance.location.as_str()) {
+        let Ok(current_user) = client.get_current_user().await else {
+            // Never guess which roster entry is Celeste itself. A failed
+            // identity lookup postpones closing rather than risking an
+            // occupied instance.
+            tracker.reset();
+            return;
+        };
+        tracker.self_user_id = Some(current_user.id);
+    }
+    let Some(self_user_id) = tracker.self_user_id.clone() else { return };
+    let players = ui.active_player_ids();
+    if !tracker.observe(&instance.location, &self_user_id, &players, minutes, Utc::now()) {
+        return;
+    }
+    // Java performs one final roster check immediately before acting.
+    if ui.active_player_ids().iter().any(|id| id != &self_user_id) {
+        tracker.idle_since = None;
+        return;
+    }
+    let Some((world_id, instance_id)) = concrete_location_parts(&instance.location) else {
+        tracing::warn!(location = instance.location, "Auto-close could not parse the bot's instance location");
+        tracker.reset();
+        return;
+    };
+    let world_name = instance.world_name.as_deref().unwrap_or(world_id);
+    match client.close_instance(world_id, instance_id, Some(true), None).await {
+        Ok(_) => {
+            let reason = format!("Auto-closed: idle ({minutes} min, bot only)");
+            tracing::info!(location = instance.location, world_name, minutes, "Auto-closed idle bot instance");
+            emitter.emit_instance_enforcement(&instance.location, world_name, &reason).await;
+        }
+        Err(error) => {
+            tracing::warn!(%error, location = instance.location, world_name, "Failed to auto-close idle bot instance");
+        }
+    }
+    tracker.reset();
+}
+
+fn concrete_location_parts(location: &str) -> Option<(&str, &str)> {
+    let (world_id, instance_id) = location.split_once(':')?;
+    (!world_id.is_empty() && !instance_id.is_empty()).then_some((world_id, instance_id))
 }
 
 async fn reconcile_inactive(
@@ -181,5 +286,28 @@ mod tests {
             ),
             Some("Age-gating mandatory")
         );
+    }
+
+    #[test]
+    fn auto_close_requires_a_full_uninterrupted_bot_only_period() {
+        let mut tracker = AutoCloseTracker::default();
+        let start = Utc::now();
+        let location = "wrld_1:123~group(grp_1)";
+        let self_id = "usr_self";
+        assert!(!tracker.observe(location, self_id, &[self_id.into()], 5, start));
+        assert!(!tracker.observe(location, self_id, &[self_id.into(), "usr_other".into()], 5, start + Duration::minutes(4)));
+        assert!(!tracker.observe(location, self_id, &[self_id.into()], 5, start + Duration::minutes(5)));
+        assert!(tracker.observe(location, self_id, &[self_id.into()], 5, start + Duration::minutes(10)));
+    }
+
+    #[test]
+    fn changing_location_restarts_the_idle_timer() {
+        let mut tracker = AutoCloseTracker::default();
+        let start = Utc::now();
+        assert!(!tracker.observe("wrld_1:one", "usr_self", &[], 1, start));
+        assert!(!tracker.observe("wrld_1:two", "usr_self", &[], 1, start + Duration::minutes(2)));
+        assert!(tracker.observe("wrld_1:two", "usr_self", &[], 1, start + Duration::minutes(3)));
+        assert_eq!(concrete_location_parts("wrld_1:two~group(grp_1)"), Some(("wrld_1", "two~group(grp_1)")));
+        assert_eq!(concrete_location_parts("wrld_1"), None);
     }
 }

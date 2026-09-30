@@ -226,6 +226,7 @@ fn main() -> anyhow::Result<()> {
         settings.clone(),
         shared.scarlet_data.clone(),
         audit_emitter,
+        Arc::new(ui_state.clone()),
     ));
 
     // Java's main loop continuously polls the VRChat group audit endpoint.
