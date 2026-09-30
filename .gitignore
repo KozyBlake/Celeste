@@ -37,6 +37,7 @@ rust/moderation_tags.json
 rust/good_pronoun.json
 rust/bad_pronoun.json
 rust/backups/
+rust/caches/
 rust/logs/
 rust/ex/
 rust/usr/
