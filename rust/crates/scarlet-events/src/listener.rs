@@ -656,12 +656,11 @@ impl ScarletEventListener {
     /// Port of `switchPlayerAvatar`: the watched-avatar advisory, its TTS
     /// callout and the Discord emission.
     ///
-    /// The avatar-id resolution Java does here (`AvatarSearch`, optionally
-    /// by avatar image) is not ported yet, so `potential_ids` is always
-    /// empty and no watched avatar can match — the same state Java is in
-    /// with `Features.AVATAR_SEARCH_ENABLED` off. The surrounding gating,
-    /// emission and event recording are ported in full so that wiring the
-    /// search in later is a one-function change.
+    /// Java resolves candidate ids through its configured `AvatarSearch`
+    /// providers before checking the watched-avatar list. VRChat no longer
+    /// exposes the current-avatar image field needed for Java's more exact
+    /// image pass, so this uses Java's fallback: exact display-name matches
+    /// from the configured providers, in provider order, deduplicated.
     async fn switch_player_avatar(
         &mut self,
         preamble: bool,
@@ -679,7 +678,16 @@ impl ScarletEventListener {
             return;
         }
 
-        let potential_ids: Vec<String> = self.search_avatar(avatar_display_name);
+        let mut seen_ids = HashSet::new();
+        let potential_ids: Vec<String> = self
+            .deps
+            .avatar_search
+            .search_by_name(avatar_display_name)
+            .await
+            .into_iter()
+            .map(|avatar| avatar.id)
+            .filter(|id| seen_ids.insert(id.clone()))
+            .collect();
 
         let mut watched: Vec<_> = potential_ids
             .iter()
@@ -737,14 +745,6 @@ impl ScarletEventListener {
                 None,
             );
         }
-    }
-
-    /// Port of `searchAvatar`. The avatar-search provider subsystem isn't
-    /// ported, so this is empty — deliberately, rather than substituting a
-    /// plain VRChat avatar search, which would match different avatars than
-    /// Java's provider cache and quietly change who gets flagged.
-    fn search_avatar(&self, _avatar_display_name: &str) -> Vec<String> {
-        Vec::new()
     }
 
     /// Port of `rescanAvatarInfo`. See the module docs: the hydration it
@@ -1672,6 +1672,13 @@ mod tests {
     }
 
     fn harness(with_group_id: bool) -> Harness {
+        harness_with_avatar_search(with_group_id, Arc::new(crate::NoAvatarSearch))
+    }
+
+    fn harness_with_avatar_search(
+        with_group_id: bool,
+        avatar_search: Arc<dyn crate::AvatarSearch>,
+    ) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         if with_group_id {
@@ -1702,9 +1709,7 @@ mod tests {
             watched_groups: Arc::new(WatchedGroups::open(dir.path(), "watched_groups.json")),
             pronoun_lists: Arc::new(PronounLists::open(dir.path())),
             tts: Arc::new(tts.clone()),
-            // No avatar-search providers in tests: the same state as a run
-            // with the feature disabled.
-            avatar_search: Arc::new(crate::NoAvatarSearch),
+            avatar_search,
             emitter: Arc::new(emitter.clone()),
         });
         Harness { listener, ui, emitter, tts, _dir: dir }
@@ -1972,6 +1977,58 @@ mod tests {
             h.ui.player("usr_wearer").unwrap().avatar_name.as_deref(),
             Some("Thicc Catocat"),
             "a departed player's avatar is frozen, not updated"
+        );
+    }
+
+    struct FixedAvatarSearch;
+
+    #[async_trait::async_trait]
+    impl crate::AvatarSearch for FixedAvatarSearch {
+        async fn search_by_name(&self, avatar_display_name: &str) -> Vec<crate::SearchedAvatar> {
+            assert_eq!(avatar_display_name, "Watched Avatar");
+            vec![
+                crate::SearchedAvatar {
+                    id: "avtr_11111111-1111-1111-1111-111111111111".into(),
+                    name: Some(avatar_display_name.into()),
+                    performance_rating: None,
+                },
+                // Provider overlap must not make a single avatar ambiguous.
+                crate::SearchedAvatar {
+                    id: "avtr_11111111-1111-1111-1111-111111111111".into(),
+                    name: Some(avatar_display_name.into()),
+                    performance_rating: None,
+                },
+            ]
+        }
+    }
+
+    /// The provider adapter was fully ported but avatar switches still
+    /// called an obsolete empty stub, making every watched avatar inert.
+    #[tokio::test]
+    async fn avatar_switch_uses_the_configured_search_provider_for_watched_matches() {
+        let mut h = harness_with_avatar_search(true, Arc::new(FixedAvatarSearch));
+        let mut watched = scarlet_core::watched_entities::WatchedEntity::new(
+            "avtr_11111111-1111-1111-1111-111111111111",
+        );
+        watched.message = Some("Known crash avatar".into());
+        h.listener.deps.watched_avatars.add_watched_entity(watched);
+
+        h.listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        h.listener.handle(entry(false, 101, player_joined("Wearer", "usr_wearer"))).await;
+        h.listener
+            .handle(entry(
+                false,
+                102,
+                LogEventKind::PlayerSwitchAvatar {
+                    display_name: "Wearer".into(),
+                    avatar_display_name: "Watched Avatar".into(),
+                },
+            ))
+            .await;
+
+        assert_eq!(
+            h.ui.player("usr_wearer").unwrap().advisory.as_deref(),
+            Some("Watched avatar: Known crash avatar")
         );
     }
 

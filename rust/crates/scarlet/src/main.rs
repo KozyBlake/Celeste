@@ -72,6 +72,10 @@ fn main() -> anyhow::Result<()> {
     ui_state.refresh_vrchat_api_status("VRChat: signing in...");
 
     let runtime = tokio::runtime::Runtime::new()?;
+    // Startup login and the health watchdog share one UI-bound 2FA queue.
+    // Keeping the receiver alive for the whole window lifetime lets an
+    // expired mid-run session request a code instead of requiring a restart.
+    let (two_factor_tx, two_factor_rx) = std::sync::mpsc::channel();
 
     // One avatar-search client for the whole process: the Discord command
     // and the player table's avatar status share its cache and back-off.
@@ -110,6 +114,36 @@ fn main() -> anyhow::Result<()> {
         )),
     };
 
+    // Java calls `maybeSaveData` once per main-loop iteration
+    // (`Scarlet.java:1841`, `:3467-3472`) and `saveAll` during an orderly
+    // shutdown (`:945-947`). Most Rust stores write through immediately,
+    // but ScarletData's singleton global.json and live.json deliberately
+    // retain Java's dirty-tracked behavior. Without this task, Discord ↔
+    // VRChat account links and live-instance routing could remain only in
+    // memory for the entire process lifetime and be lost after a crash.
+    runtime.spawn({
+        let data = shared.scarlet_data.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            // `interval`'s first tick completes immediately; the stores are
+            // clean at startup, so consume it before entering the loop.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                data.save_dirty();
+            }
+        }
+    });
+
+    spawn_vrchat_session_watchdog(
+        runtime.handle(),
+        shared.vrchat_client.clone(),
+        settings.clone(),
+        ui_state.clone(),
+        (!headless).then_some(two_factor_tx.clone()),
+    );
+    spawn_cache_cleanup(runtime.handle(), data_dir.clone(), settings.clone());
+
     let tts = Arc::new(scarlet_ui::tts::TtsService::new());
     let pronoun_lists = Arc::new(scarlet_core::pronoun_lists::PronounLists::open(&data_dir));
 
@@ -117,22 +151,29 @@ fn main() -> anyhow::Result<()> {
     // relaunch this exact executable with its original arguments. This is the
     // Rust equivalent of Java's exit-code-69/self-relaunch path and works in
     // both GUI and headless modes.
-    runtime.spawn(async move {
-        if let Some(scarlet_discord::data::ProcessRequest::Restart) = process_requests.recv().await {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            if let Err(error) = std::fs::write("scarlet.version", scarlet_core::identity::VERSION) {
-                tracing::warn!(%error, "Failed to write scarlet.version before restart");
-            }
-            let relaunched = std::env::current_exe().and_then(|executable| {
-                let mut command = std::process::Command::new(executable);
-                command.args(std::env::args_os().skip(1));
-                command.spawn().map(|_| ())
-            });
-            match relaunched {
-                Ok(()) => std::process::exit(0),
-                Err(error) => {
-                    tracing::error!(%error, "Failed to relaunch Celeste");
-                    std::process::exit(69);
+    runtime.spawn({
+        let data = shared.scarlet_data.clone();
+        async move {
+            if let Some(scarlet_discord::data::ProcessRequest::Restart) = process_requests.recv().await {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                // `process::exit` skips destructors and the GUI close path,
+                // so persist the same data Java saves before its restart
+                // exit code.
+                data.save_all();
+                if let Err(error) = std::fs::write("scarlet.version", scarlet_core::identity::VERSION) {
+                    tracing::warn!(%error, "Failed to write scarlet.version before restart");
+                }
+                let relaunched = std::env::current_exe().and_then(|executable| {
+                    let mut command = std::process::Command::new(executable);
+                    command.args(std::env::args_os().skip(1));
+                    command.spawn().map(|_| ())
+                });
+                match relaunched {
+                    Ok(()) => std::process::exit(0),
+                    Err(error) => {
+                        tracing::error!(%error, "Failed to relaunch Celeste");
+                        std::process::exit(69);
+                    }
                 }
             }
         }
@@ -248,6 +289,10 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Both launch paths move `shared` into their long-lived owner. Retain
+    // the process-wide store so returning from either one can still perform
+    // Java's final `saveAll`.
+    let shutdown_data = shared.scarlet_data.clone();
     if headless {
         tracing::info!("No display detected; running headless. Ctrl+C to exit.");
         // Headless can't run the interactive setup wizard (no window to show
@@ -267,16 +312,193 @@ fn main() -> anyhow::Result<()> {
             }
         });
         runtime.spawn(scarlet_discord::client::connect_and_serve(discord_token, shared));
-        runtime.block_on(std::future::pending::<()>());
+        runtime.block_on(async {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                tracing::error!(%error, "Failed to listen for Ctrl+C");
+            }
+        });
     } else {
         // Blocks this (real OS main) thread until the window closes. The
         // setup wizard, if it needs to run, shares this one
         // `eframe::run_native` call; Discord connects once the wizard
         // resolves a token, or immediately if setup already ran.
-        if let Err(err) = scarlet_ui::run(ui_state, shared, data_dir, runtime.handle().clone(), tts) {
+        if let Err(err) = scarlet_ui::run(
+            ui_state,
+            shared,
+            data_dir,
+            runtime.handle().clone(),
+            tts,
+            two_factor_tx,
+            two_factor_rx,
+        ) {
             tracing::error!("UI error: {}", err);
         }
     }
 
+    // Headless mode has no eframe close callback, and this also provides a
+    // final safety net if a platform closes the GUI without its explicit
+    // confirmation path. The periodic saver limits hard-crash loss; this
+    // makes every orderly exit durable.
+    shutdown_data.save_all();
+
     Ok(())
+}
+
+/// Java's session half of `healthWatchdogTick` and its 72-hour
+/// `maybeRefresh` (`Scarlet.java:2612-2719`, `:3474-3485`). A failed network
+/// request is deliberately inconclusive; only HTTP 401 proves that the
+/// cookie is dead. Recovery reuses the normal saved-cookie/credentials/TOTP
+/// path, and hands an interactive code request back to the existing setup
+/// prompt when necessary.
+fn spawn_vrchat_session_watchdog(
+    runtime: &tokio::runtime::Handle,
+    slot: scarlet_discord::data::SharedVrChatClient,
+    settings: Arc<Settings>,
+    ui_state: scarlet_ui::UiState,
+    two_factor_tx: Option<
+        std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
+    >,
+) {
+    runtime.spawn(async move {
+        const INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(90);
+        const PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+        const RECOVERY_RETRY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+        tokio::time::sleep(INITIAL_DELAY).await;
+        let mut session_was_established = false;
+        let mut waiting_for_two_factor = false;
+        let mut last_recovery_attempt: Option<std::time::Instant> = None;
+
+        loop {
+            let current = slot.read().await.clone();
+            let mut must_recover = false;
+            let mut scheduled_refresh = false;
+
+            if let Some(client) = current.as_ref() {
+                session_was_established = true;
+                waiting_for_two_factor = false;
+                match client.get_current_user().await {
+                    Ok(_) => {
+                        // `/auth/user` may rotate cookies; keep the durable
+                        // jar current after every successful probe.
+                        scarlet_vrchat::client::save_session(&settings, client);
+                        let now = chrono::Utc::now();
+                        let last = settings.last_auth_refresh.get_or_supply().unwrap_or(now);
+                        scheduled_refresh = now.signed_duration_since(last) >= chrono::Duration::hours(72);
+                    }
+                    Err(error) if error.is_unauthorized() => {
+                        must_recover = true;
+                    }
+                    Err(error) => {
+                        // Java treats non-401 responses and transport errors
+                        // as inconclusive so a network outage never destroys
+                        // a usable saved session.
+                        tracing::debug!(%error, "VRChat session health probe was inconclusive");
+                    }
+                }
+            } else if session_was_established && !waiting_for_two_factor {
+                must_recover = true;
+            }
+
+            if must_recover || scheduled_refresh {
+                let now = std::time::Instant::now();
+                let retry_ready = last_recovery_attempt
+                    .map_or(true, |last| now.duration_since(last) >= RECOVERY_RETRY);
+                if scheduled_refresh || retry_ready {
+                    last_recovery_attempt = Some(now);
+                    settings.last_auth_refresh.set(Some(chrono::Utc::now()));
+
+                    if scheduled_refresh {
+                        tracing::info!("Refreshing the VRChat session after 72 hours");
+                        if let Some(client) = current.as_ref() {
+                            if let Err(error) = client.logout().await {
+                                tracing::warn!(%error, "VRChat refresh logout failed; continuing with credential recovery");
+                            }
+                        }
+                        scarlet_vrchat::client::clear_session(&settings);
+                    } else {
+                        tracing::warn!("VRChat session is no longer authorized; attempting unattended recovery");
+                    }
+
+                    ui_state.refresh_vrchat_api_status("VRChat: session expired; reconnecting...");
+                    match scarlet_vrchat::client::login_with_stored_credentials_detailed(&settings).await {
+                        scarlet_vrchat::client::StoredLogin::LoggedIn(client) => {
+                            *slot.write().await = Some(Arc::new(client));
+                            last_recovery_attempt = None;
+                            tracing::info!("VRChat session recovery succeeded");
+                            ui_state.refresh_vrchat_api_status("VRChat: session recovered");
+                        }
+                        scarlet_vrchat::client::StoredLogin::RequiresTwoFactor { client, methods } => {
+                            *slot.write().await = None;
+                            waiting_for_two_factor = true;
+                            ui_state.refresh_vrchat_api_status("VRChat: two-factor code required");
+                            if let Some(tx) = two_factor_tx.as_ref() {
+                                if tx.send((Arc::new(client), methods)).is_err() {
+                                    tracing::warn!("Could not open the VRChat two-factor prompt");
+                                }
+                            } else {
+                                tracing::warn!("VRChat session recovery requires two-factor authentication; restart with the UI to enter a code");
+                            }
+                        }
+                        scarlet_vrchat::client::StoredLogin::Unavailable => {
+                            *slot.write().await = None;
+                            ui_state.refresh_vrchat_api_status(
+                                "VRChat: reconnect failed; retrying in 10 minutes",
+                            );
+                            tracing::warn!("VRChat unattended session recovery failed; retrying in 10 minutes");
+                        }
+                    }
+                }
+            }
+
+            tokio::time::sleep(PROBE_INTERVAL).await;
+        }
+    });
+}
+
+/// Port of `ScarletCacheCleanup.maybeCleanup` and its six-hour schedule.
+/// Unlike Java's original implementation, this also includes old VRChat
+/// output logs, as explicitly requested for Celeste. The collector always
+/// protects the newest Celeste and VRChat log, so a running writer/tailer is
+/// never selected.
+fn spawn_cache_cleanup(
+    runtime: &tokio::runtime::Handle,
+    data_dir: std::path::PathBuf,
+    settings: Arc<Settings>,
+) {
+    runtime.spawn(async move {
+        const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+        const MIN_BETWEEN: chrono::Duration = chrono::Duration::hours(1);
+
+        loop {
+            if settings.cache_cleanup_enabled.get() {
+                let now = chrono::Utc::now();
+                let recently_cleaned = settings
+                    .last_cache_cleanup
+                    .get_or_null()
+                    .is_some_and(|last| now.signed_duration_since(last) < MIN_BETWEEN);
+                if !recently_cleaned {
+                    let days = settings.cache_cleanup_days.get().clamp(1, 30) as u64;
+                    let cutoff = std::time::SystemTime::now()
+                        - std::time::Duration::from_secs(days * 24 * 60 * 60);
+                    let vrchat_logs = scarlet_vrchat::log_tail::resolve_vrc_app_data_dir();
+                    let eligible = scarlet_core::cache_cleanup::collect_eligible(
+                        &data_dir,
+                        &vrchat_logs,
+                        cutoff,
+                    );
+                    let report = scarlet_core::cache_cleanup::delete_files(&eligible);
+                    settings.last_cache_cleanup.set(Some(now));
+                    tracing::info!(
+                        deleted = report.deleted,
+                        failed = report.failed,
+                        bytes_freed = report.bytes_freed,
+                        retention_days = days,
+                        "Cache cleanup complete"
+                    );
+                }
+            }
+            tokio::time::sleep(CHECK_INTERVAL).await;
+        }
+    });
 }

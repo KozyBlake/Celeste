@@ -85,6 +85,15 @@ pub enum VrChatError {
     UnexpectedShape(String),
 }
 
+impl VrChatError {
+    /// Session probes only treat an explicit 401 as an authentication
+    /// verdict. Rate limits, server errors, malformed responses and network
+    /// failures are inconclusive and must not discard a usable cookie jar.
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, VrChatError::Api { status, .. } if *status == StatusCode::UNAUTHORIZED)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LoginOutcome {
     LoggedIn(CurrentUser),
@@ -2348,6 +2357,21 @@ mod tests {
             VrChatError::Api { status, .. } => assert_eq!(status, StatusCode::UNAUTHORIZED),
             other => panic!("expected Api error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn only_a_401_is_an_unauthorized_session_verdict() {
+        assert!(VrChatError::Api {
+            status: StatusCode::UNAUTHORIZED,
+            body: String::new(),
+        }
+        .is_unauthorized());
+        assert!(!VrChatError::Api {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: String::new(),
+        }
+        .is_unauthorized());
+        assert!(!VrChatError::UnexpectedShape("temporary bad response".into()).is_unauthorized());
     }
 
     #[tokio::test]

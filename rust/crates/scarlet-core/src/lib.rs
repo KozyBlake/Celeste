@@ -3,6 +3,7 @@
 //! subsystem crate.
 
 pub mod change_listener;
+pub mod cache_cleanup;
 pub mod data;
 pub mod features;
 pub mod file_backups;

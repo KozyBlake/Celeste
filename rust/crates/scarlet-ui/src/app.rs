@@ -436,7 +436,8 @@ pub struct ScarletApp {
     process_controller: Arc<scarlet_discord::data::ProcessController>,
     /// Set when a background VRChat login stopped to ask for a two-factor
     /// code; drained in `update` to open the code prompt.
-    two_factor_rx: Option<std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>>,
+    two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
+    two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
     scarlet_data: Arc<scarlet_core::data::ScarletData>,
     staff_list: Arc<scarlet_core::staff_list::StaffList>,
     secret_staff_list: Arc<scarlet_core::staff_list::StaffList>,
@@ -511,6 +512,8 @@ impl ScarletApp {
         data_dir: PathBuf,
         runtime_handle: tokio::runtime::Handle,
         tts: Arc<crate::tts::TtsService>,
+        two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
+        two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
     ) -> Self {
         let scarlet_data = shared.scarlet_data.clone();
         let staff_list = shared.staff_list.clone();
@@ -528,7 +531,6 @@ impl ScarletApp {
         let settings = Some(shared.settings.clone());
         let last_window_bounds = settings.as_ref().and_then(|settings| settings.ui_bounds.get_or_null());
 
-        let mut pending_two_factor = None;
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
 
         // If setup already ran in an earlier session, the wizard is
@@ -547,7 +549,12 @@ impl ScarletApp {
                 // commands still get a working client. Matches Java's own
                 // unattended-re-login behavior, minus stored-TOTP-secret
                 // support (see `login_with_stored_credentials`'s docs).
-                pending_two_factor = Some(spawn_unattended_vrchat_login(&runtime_handle, vrchat_slot.clone(), settings.clone()));
+                spawn_unattended_vrchat_login(
+                    &runtime_handle,
+                    vrchat_slot.clone(),
+                    settings.clone(),
+                    two_factor_tx.clone(),
+                );
 
                 runtime_handle.spawn(scarlet_discord::client::connect_and_serve(
                     token,
@@ -590,7 +597,8 @@ impl ScarletApp {
             discord_config,
             voice_manager,
             process_controller,
-            two_factor_rx: pending_two_factor.take(),
+            two_factor_tx,
+            two_factor_rx,
             scarlet_data,
             staff_list,
             secret_staff_list,
@@ -897,14 +905,15 @@ impl ScarletApp {
         }
     }
 
-    /// Java's `scarlet.stop()`: flush what a crash would lose before the
-    /// process goes away. The settings and data stores write through on
-    /// every change, so this is about the in-memory UI state Java persists
-    /// on the way out.
+    /// Java's `scarlet.stop()` (`Scarlet.java:945-947`): flush what an
+    /// orderly exit must not lose before the process goes away. The
+    /// high-cardinality stores write through, while global.json/live.json
+    /// retain Java's dirty-tracked behavior and require this explicit save.
     fn shutdown(&mut self) {
         if let Some(settings) = self.settings.as_ref() {
             settings.store.save();
         }
+        self.scarlet_data.save_all();
         tracing::info!("Celeste is shutting down");
     }
 
@@ -2458,19 +2467,16 @@ impl eframe::App for ScarletApp {
         // A background login that stopped at the two-factor step opens the
         // code prompt, even though setup itself finished long ago.
         if self.wizard.is_none() {
-            if let Some(rx) = &self.two_factor_rx {
-                if let Ok((client, methods)) = rx.try_recv() {
-                    self.two_factor_rx = None;
-                    if let Some(settings) = self.settings.clone() {
-                        self.wizard = crate::setup::SetupWizard::for_two_factor_only(
-                            &settings,
-                            self.runtime_handle.clone(),
-                            client,
-                            &methods,
-                        );
-                        if self.wizard.is_none() {
-                            tracing::warn!("VRChat asked for an unsupported two-factor method: {methods:?}");
-                        }
+            if let Ok((client, methods)) = self.two_factor_rx.try_recv() {
+                if let Some(settings) = self.settings.clone() {
+                    self.wizard = crate::setup::SetupWizard::for_two_factor_only(
+                        &settings,
+                        self.runtime_handle.clone(),
+                        client,
+                        &methods,
+                    );
+                    if self.wizard.is_none() {
+                        tracing::warn!("VRChat asked for an unsupported two-factor method: {methods:?}");
                     }
                 }
             }
@@ -2529,8 +2535,12 @@ impl eframe::App for ScarletApp {
                     // from) -- fall back to an unattended login attempt.
                     None => {
                         if let Some(settings) = self.settings.clone() {
-                            self.two_factor_rx =
-                                Some(spawn_unattended_vrchat_login(&self.runtime_handle, self.vrchat_slot.clone(), settings));
+                            spawn_unattended_vrchat_login(
+                                &self.runtime_handle,
+                                self.vrchat_slot.clone(),
+                                settings,
+                                self.two_factor_tx.clone(),
+                            );
                         }
                     }
                 }
@@ -2736,6 +2746,8 @@ pub fn run(
     data_dir: PathBuf,
     runtime_handle: tokio::runtime::Handle,
     tts: Arc<crate::tts::TtsService>,
+    two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
+    two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
 ) -> eframe::Result<()> {
     let bounds = shared.settings.ui_bounds.get_or_null().filter(|bounds| {
         bounds.width > 0 && bounds.height > 0
@@ -2759,7 +2771,17 @@ pub fn run(
     eframe::run_native(
         scarlet_core::identity::APP_NAME,
         options,
-        Box::new(move |_cc| Ok(Box::new(ScarletApp::new(state, shared, data_dir, runtime_handle, tts)))),
+        Box::new(move |_cc| {
+            Ok(Box::new(ScarletApp::new(
+                state,
+                shared,
+                data_dir,
+                runtime_handle,
+                tts,
+                two_factor_tx,
+                two_factor_rx,
+            )))
+        }),
     )
 }
 
@@ -2774,8 +2796,8 @@ fn spawn_unattended_vrchat_login(
     runtime_handle: &tokio::runtime::Handle,
     slot: scarlet_discord::data::SharedVrChatClient,
     settings: Arc<Settings>,
-) -> std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
+) {
     runtime_handle.spawn(async move {
         match scarlet_vrchat::client::login_with_stored_credentials_detailed(&settings).await {
             scarlet_vrchat::client::StoredLogin::LoggedIn(client) => {
@@ -2786,12 +2808,11 @@ fn spawn_unattended_vrchat_login(
             // startup. Dropping it here (which is what used to happen) left
             // the app permanently signed out after first-run setup.
             scarlet_vrchat::client::StoredLogin::RequiresTwoFactor { client, methods } => {
-                let _ = tx.send((Arc::new(client), methods));
+                let _ = two_factor_tx.send((Arc::new(client), methods));
             }
             scarlet_vrchat::client::StoredLogin::Unavailable => {}
         }
     });
-    rx
 }
 
 #[cfg(test)]

@@ -162,3 +162,20 @@ thread routing, live-list edits, and close finalisation, because the unit suite
 can validate embed/data behavior but cannot exercise Discord's thread
 permissions. Java's instance-close reply/link to the opening audit post remains
 a separate follow-up.
+
+## Update 2026-09-30: runtime reliability
+
+`ScarletData`'s dirty-tracked `global.json` and `live.json` are now flushed
+every 30 seconds and saved on GUI/headless shutdown and before self-restart;
+previously no Rust caller invoked `save_dirty`/`save_all`, so links and live
+instance routing could remain memory-only. A five-minute VRChat session probe
+now treats only HTTP 401 as session loss, retries unattended recovery every ten
+minutes, refreshes auth after 72 hours, saves rotated cookies, and can reopen
+the existing UI 2FA prompt during a running session.
+
+Avatar-switch events now use the already-ported provider adapter (exact-name
+matches, deduplicated; World Balancer remains excluded), restoring watched-
+avatar advisories. Automatic six-hour cleanup now applies the configured
+retention to TTS files, entity caches, Celeste/legacy Scarlet logs, and—by
+explicit owner request—old VRChat output logs, always protecting the newest app
+and VRChat log files.

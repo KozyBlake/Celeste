@@ -5195,6 +5195,7 @@ name = "scarlet"
 version = "0.4.20"
 dependencies = [
  "anyhow",
+ "chrono",
  "scarlet-core",
  "scarlet-dave",
  "scarlet-discord",
