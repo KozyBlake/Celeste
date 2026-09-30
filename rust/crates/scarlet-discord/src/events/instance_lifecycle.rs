@@ -64,6 +64,118 @@ pub async fn run(
     }
 }
 
+/// Java's low-latency `maybeFastDetectNewInstance`: use the live instance
+/// endpoint as a short-cadence signal, but adopt the first successful result
+/// as a baseline so enabling Celeste never launches into an old instance.
+pub async fn run_fast_follow(
+    vrchat: SharedVrChatClient,
+    settings: Arc<Settings>,
+    ui: Arc<dyn CelesteUi>,
+) {
+    let mut known_locations = HashSet::new();
+    let mut baseline_seeded = false;
+    loop {
+        if !settings.vrchat_client_launch_on_instance_create.get() {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            continue;
+        }
+        let configured_seconds = settings.instance_follow_fast_poll_seconds.get();
+        if configured_seconds <= 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            continue;
+        }
+        let Some(group_id) = settings
+            .store
+            .get_string(scarlet_vrchat::client::GROUP_ID_KEY)
+            .filter(|id| !id.trim().is_empty())
+        else {
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            continue;
+        };
+        let Some(client) = vrchat.read().await.clone() else {
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            continue;
+        };
+        let instances = match client.get_group_instances(&group_id).await {
+            Ok(instances) => instances,
+            Err(error) => {
+                tracing::warn!(%error, group_id, "Fast instance detection failed; backing off for one minute");
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                continue;
+            }
+        };
+        let current: HashSet<String> = instances
+            .iter()
+            .filter_map(instance_location)
+            .map(str::to_string)
+            .collect();
+        if !baseline_seeded {
+            known_locations = current;
+            baseline_seeded = true;
+        } else {
+            let bot_location = ui.current_instance().map(|instance| instance.location);
+            let new_location = newly_opened_location(&current, &known_locations, bot_location.as_deref());
+            known_locations = current;
+            if let Some(location) = new_location {
+                tracing::info!(%location, "Fast instance detection found a new group instance; following");
+                launch_client_into_instance_if_enabled(&client, &settings, &location).await;
+                super::audit_poller::poll_soon();
+            }
+        }
+        let period = u64::try_from(configured_seconds.max(15)).unwrap_or(15);
+        tokio::time::sleep(std::time::Duration::from_secs(period)).await;
+    }
+}
+
+fn newly_opened_location(
+    current: &HashSet<String>,
+    known: &HashSet<String>,
+    bot_location: Option<&str>,
+) -> Option<String> {
+    current
+        .iter()
+        .find(|location| !known.contains(*location) && bot_location != Some(location.as_str()))
+        .cloned()
+}
+
+pub async fn launch_client_into_instance_if_enabled(
+    client: &scarlet_vrchat::client::VrChatClient,
+    settings: &Settings,
+    location: &str,
+) {
+    if !settings.vrchat_client_launch_on_instance_create.get()
+        || !scarlet_vrchat::launch::claim_recent_launch(location)
+    {
+        return;
+    }
+    let Some((world_id, instance_id)) = concrete_location_parts(location) else {
+        tracing::warn!(location, "Could not parse new instance location for automatic follow");
+        return;
+    };
+    let secure_name = match client.get_instance_secure_name(world_id, instance_id).await {
+        Ok(name) => name,
+        Err(error) => {
+            tracing::warn!(%error, location, "Could not obtain the instance secure join token; trying the general instance response");
+            client.get_instance(world_id, instance_id).await.ok().and_then(|instance| {
+                instance
+                    .secure_name
+                    .filter(|name| !name.trim().is_empty())
+                    .or_else(|| instance.short_name.filter(|name| !name.trim().is_empty()))
+            })
+        }
+    };
+    let user_id = client.get_current_user().await.ok().map(|user| user.id);
+    let location = location.to_string();
+    if let Err(error) = tokio::task::spawn_blocking(move || {
+        scarlet_vrchat::launch::launch_desktop(user_id.as_deref(), &location, secure_name.as_deref())
+    })
+    .await
+    .unwrap_or_else(|error| Err(std::io::Error::other(error.to_string())))
+    {
+        tracing::error!(%error, "Could not launch VRChat into the new group instance");
+    }
+}
+
 #[derive(Debug, Default)]
 struct AutoCloseTracker {
     location: Option<String>,
@@ -309,5 +421,20 @@ mod tests {
         assert!(tracker.observe("wrld_1:two", "usr_self", &[], 1, start + Duration::minutes(3)));
         assert_eq!(concrete_location_parts("wrld_1:two~group(grp_1)"), Some(("wrld_1", "two~group(grp_1)")));
         assert_eq!(concrete_location_parts("wrld_1"), None);
+    }
+
+    #[test]
+    fn fast_follow_ignores_the_baseline_and_the_bots_current_location() {
+        let known = HashSet::from(["wrld_1:old".to_string()]);
+        let current = HashSet::from([
+            "wrld_1:old".to_string(),
+            "wrld_1:bot".to_string(),
+            "wrld_1:new".to_string(),
+        ]);
+        assert_eq!(
+            newly_opened_location(&current, &known, Some("wrld_1:bot")).as_deref(),
+            Some("wrld_1:new")
+        );
+        assert_eq!(newly_opened_location(&known, &known, None), None);
     }
 }

@@ -1391,6 +1391,26 @@ impl VrChatClient {
         Self::parse_response(response).await
     }
 
+    /// VRChat's dedicated secure join-token endpoint. Restricted group,
+    /// age-gated, friends and invite instances cannot be deep-linked using
+    /// only the general instance response's plain `shortName`.
+    pub async fn get_instance_secure_name(
+        &self,
+        world_id: &str,
+        instance_id: &str,
+    ) -> Result<Option<String>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/instances/{world_id}:{instance_id}/shortName")))
+            .send()
+            .await?;
+        let value: crate::models::InstanceShortNameResponse = Self::parse_response(response).await?;
+        Ok(value
+            .secure_name
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| value.short_name.filter(|name| !name.trim().is_empty())))
+    }
+
     /// Port of Celeste's `createInstanceEx`, including fields omitted by the
     /// older generated Java model such as `minimumAvatarPerformance`.
     pub async fn create_instance(
@@ -2656,6 +2676,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(closed.instance_id.as_deref(), Some("12345"));
+    }
+
+    #[tokio::test]
+    async fn secure_instance_name_prefers_the_generated_join_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/instances/wrld_1:12345~group(grp_1)/shortName"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "shortName": "plain-name",
+                "secureName": "secure-name"
+            })))
+            .mount(&server)
+            .await;
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert_eq!(
+            client
+                .get_instance_secure_name("wrld_1", "12345~group(grp_1)")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("secure-name")
+        );
     }
 
     #[tokio::test]

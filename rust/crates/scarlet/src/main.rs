@@ -228,6 +228,11 @@ fn main() -> anyhow::Result<()> {
         audit_emitter,
         Arc::new(ui_state.clone()),
     ));
+    runtime.spawn(scarlet_discord::events::instance_lifecycle::run_fast_follow(
+        shared.vrchat_client.clone(),
+        settings.clone(),
+        Arc::new(ui_state.clone()),
+    ));
 
     // Java's main loop continuously polls the VRChat group audit endpoint.
     // This is separate from the local output-log listener above: it is what

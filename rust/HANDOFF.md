@@ -190,3 +190,19 @@ timer whenever another user is present or the bot moves, rechecks the roster
 immediately before acting, hard-closes only the concrete current location, and
 emits the configured instance-enforcement notice on success. Tests pin the
 uninterrupted bot-only interval and location-reset behavior.
+
+## Update 2026-09-30: fast instance follow
+
+`vrchat_client_launch_on_instance_create` and
+`instance_follow_fast_poll_seconds` now drive a dedicated low-latency worker.
+The first successful group-instance response becomes a baseline; later polls
+select at most one genuinely new location and exclude the bot's current
+location. API failures back off for a minute and the configured period is
+clamped to Java's 15-second minimum. Both this path and the eventual
+`group.instance.create` audit event share a five-minute launch-dedup guard.
+Celeste requests the dedicated secure-name token (falling back to the general
+instance response), closes an already-running VRChat client, and cold-launches
+desktop mode with the deep link, profile and debug-log flags. Linux prefers
+`steam -applaunch` and falls back to `xdg-open`; Windows tries Steam then the
+registered URI handler. Fast detection also wakes the audit poller immediately
+so the Discord monitor is not delayed by its normal interval.

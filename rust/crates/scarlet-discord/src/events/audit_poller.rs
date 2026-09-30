@@ -27,6 +27,12 @@ use serenity::model::Colour;
 
 use crate::data::{DiscordConfigStore, SharedHttp, SharedVrChatClient};
 
+static POLL_SOON: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+pub fn poll_soon() {
+    POLL_SOON.notify_one();
+}
+
 const OVERLAP_MINUTES: i64 = 5;
 const MAX_QUERY_HOURS: i64 = 24;
 
@@ -171,6 +177,14 @@ impl AuditPoller {
         let secret = entry.actor_id.as_deref().is_some_and(|id| self.secret_staff.is_id(id));
         if entry.event_type == "group.instance.create" {
             self.create_instance_monitor(&entry, client.as_deref()).await;
+            if let (Some(client), Some(location)) = (client.as_deref(), entry.target_id.as_deref()) {
+                super::instance_lifecycle::launch_client_into_instance_if_enabled(
+                    client,
+                    &self.settings,
+                    location,
+                )
+                .await;
+            }
         } else if entry.event_type == "group.instance.close" {
             if let Some(location) = entry.target_id.as_deref() {
                 self.data.live_instances_set_location_closed_at(location, entry.created_at);
@@ -591,7 +605,10 @@ pub async fn run(poller: AuditPoller) {
         }
         poller.process_timed_bans().await;
         let seconds = poller.settings.audit_polling_interval.get().clamp(10, 300) as u64;
-        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {}
+            _ = POLL_SOON.notified() => {}
+        }
     }
 }
 

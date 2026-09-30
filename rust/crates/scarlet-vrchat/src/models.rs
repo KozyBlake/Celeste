@@ -362,6 +362,18 @@ pub struct Instance {
     pub owner_id: Option<String>,
     pub closed: Option<serde_json::Value>,
     pub full: Option<bool>,
+    #[serde(rename = "shortName")]
+    pub short_name: Option<String>,
+    #[serde(rename = "secureName")]
+    pub secure_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstanceShortNameResponse {
+    #[serde(rename = "shortName")]
+    pub short_name: Option<String>,
+    #[serde(rename = "secureName")]
+    pub secure_name: Option<String>,
 }
 
 /// Port of `io.github.vrchatapi.model.File` (the API's `File`, called
