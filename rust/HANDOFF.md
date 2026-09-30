@@ -324,3 +324,17 @@ event), and rechecks the newest filename before publishing catch-up events. If
 a new VRChat process created a log during that read, stale events are discarded
 and the new file preempts them. Regression coverage brings the workspace total
 to 488 passing tests.
+
+## Update 2026-09-30: do not log out healthy VRChat sessions
+
+The long-running-session 2FA popup was self-inflicted. The Rust watchdog had
+ported Java's 72-hour `maybeRefresh`, whose "refresh" calls logout, clears the
+valid cookie, and performs a credential login. A real log captured Celeste
+doing exactly that and immediately receiving `Requires Two-Factor
+Authentication`; an old persisted `lastAuthRefresh` timestamp made it occur a
+few hours into the current process rather than 72 hours after launch.
+
+The watchdog still probes `/auth/user`, saves rotated cookies, and performs
+unattended recovery after a real HTTP 401. It no longer destroys a healthy
+session merely because a timestamp is old. The informational refresh timestamp
+is advanced at most once per day after a successful authenticated probe.

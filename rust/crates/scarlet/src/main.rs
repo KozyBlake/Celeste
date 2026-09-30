@@ -357,12 +357,16 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Java's session half of `healthWatchdogTick` and its 72-hour
-/// `maybeRefresh` (`Scarlet.java:2612-2719`, `:3474-3485`). A failed network
-/// request is deliberately inconclusive; only HTTP 401 proves that the
-/// cookie is dead. Recovery reuses the normal saved-cookie/credentials/TOTP
-/// path, and hands an interactive code request back to the existing setup
-/// prompt when necessary.
+/// Java's session half of `healthWatchdogTick` (`Scarlet.java:2612-2719`). A
+/// failed network request is deliberately inconclusive; only HTTP 401 proves
+/// that the cookie is dead. Recovery reuses the normal
+/// saved-cookie/credentials/TOTP path, and hands an interactive code request
+/// back to the existing setup prompt when necessary.
+///
+/// Java's separate 72-hour `maybeRefresh` is intentionally *not* copied: it
+/// implements refresh by logging out a healthy session and signing in again.
+/// On an account without a stored TOTP secret that guarantees an unsolicited
+/// 2FA prompt, even though VRChat's auth cookie is still valid for months.
 fn spawn_vrchat_session_watchdog(
     runtime: &tokio::runtime::Handle,
     slot: scarlet_discord::data::SharedVrChatClient,
@@ -385,7 +389,6 @@ fn spawn_vrchat_session_watchdog(
         loop {
             let current = slot.read().await.clone();
             let mut must_recover = false;
-            let mut scheduled_refresh = false;
 
             if let Some(client) = current.as_ref() {
                 session_was_established = true;
@@ -396,8 +399,17 @@ fn spawn_vrchat_session_watchdog(
                         // jar current after every successful probe.
                         scarlet_vrchat::client::save_session(&settings, client);
                         let now = chrono::Utc::now();
-                        let last = settings.last_auth_refresh.get_or_supply().unwrap_or(now);
-                        scheduled_refresh = now.signed_duration_since(last) >= chrono::Duration::hours(72);
+                        // Keep the informational timestamp useful without
+                        // rewriting registry.json every five minutes.
+                        if settings
+                            .last_auth_refresh
+                            .get_or_null()
+                            .is_none_or(|last| {
+                                now.signed_duration_since(last) >= chrono::Duration::hours(24)
+                            })
+                        {
+                            settings.last_auth_refresh.set(Some(now));
+                        }
                     }
                     Err(error) if error.is_unauthorized() => {
                         must_recover = true;
@@ -413,25 +425,13 @@ fn spawn_vrchat_session_watchdog(
                 must_recover = true;
             }
 
-            if must_recover || scheduled_refresh {
+            if must_recover {
                 let now = std::time::Instant::now();
                 let retry_ready = last_recovery_attempt
                     .map_or(true, |last| now.duration_since(last) >= RECOVERY_RETRY);
-                if scheduled_refresh || retry_ready {
+                if retry_ready {
                     last_recovery_attempt = Some(now);
-                    settings.last_auth_refresh.set(Some(chrono::Utc::now()));
-
-                    if scheduled_refresh {
-                        tracing::info!("Refreshing the VRChat session after 72 hours");
-                        if let Some(client) = current.as_ref() {
-                            if let Err(error) = client.logout().await {
-                                tracing::warn!(%error, "VRChat refresh logout failed; continuing with credential recovery");
-                            }
-                        }
-                        scarlet_vrchat::client::clear_session(&settings);
-                    } else {
-                        tracing::warn!("VRChat session is no longer authorized; attempting unattended recovery");
-                    }
+                    tracing::warn!("VRChat session is no longer authorized; attempting unattended recovery");
 
                     ui_state.refresh_vrchat_api_status("VRChat: session expired; reconnecting...");
                     match scarlet_vrchat::client::login_with_stored_credentials_detailed(&settings).await {
