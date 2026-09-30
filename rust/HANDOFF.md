@@ -206,3 +206,29 @@ desktop mode with the deep link, profile and debug-log flags. Linux prefers
 `steam -applaunch` and falls back to `xdg-open`; Windows tries Steam then the
 registered URI handler. Fast detection also wakes the audit poller immediately
 so the Discord monitor is not delayed by its normal interval.
+
+## Update 2026-09-30: maintenance and live settings actions
+
+The Settings/System `Run cache cleanup now` action is complete: it previews
+the eligible file count and size, asks for confirmation, deletes off the UI
+thread, and reports deleted/failed counts and bytes freed. Runtime entity
+caches are ignored by Git (`rust/caches/`); commit `c533d3c` accidentally
+added 122 generated cache files and follow-up `e5ff613` removed only their Git
+tracking while preserving the local files on disk.
+
+The remaining Java appearance/maintenance actions now have real Rust UI
+implementations. UI scale (50–400%) and accent colour (presets plus custom
+RGB) apply live and persist under Java's `ui_scale` and `ui_accent_color`
+keys. The shared `PronounLists` object is now passed into the window, so
+`Reload lists` atomically updates the same allow/deny sets the live event
+listener reads and reports the loaded counts. The avatar-provider manager
+can enable, disable, add, and restore VRCX-compatible sources; saving clears
+the process cache/back-off state and future lookups read the new selection
+without restart. World Balancer is excluded both in the manager and at the
+network boundary. If local TTS has no supported engine, the desktop now opens
+a cross-platform explanatory warning rather than offering an installer.
+
+Verification at this point: `cargo test --workspace` passes 481 tests. Two
+old unused moderation-context helper warnings remain; the selected-widget
+theme warnings introduced in `c533d3c` were fixed with explicit `f32` stroke
+widths.

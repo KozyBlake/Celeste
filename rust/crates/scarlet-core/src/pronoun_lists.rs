@@ -142,6 +142,11 @@ impl PronounLists {
         let haystack = despace(normalised);
         self.bad.read().unwrap().iter().filter(|bad| !bad.is_empty()).any(|bad| haystack.contains(&despace(bad)))
     }
+
+    /// Number of active allow-list and deny-list entries.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.good.read().unwrap().len(), self.bad.read().unwrap().len())
+    }
 }
 
 fn despace(s: &str) -> String {
@@ -185,5 +190,17 @@ mod tests {
         std::fs::write(dir.path().join("bad_pronoun.json"), "{ not an array").unwrap();
         let lists = PronounLists::open(dir.path());
         assert!(lists.is_known_bad("who/cares"));
+    }
+
+    #[test]
+    fn load_replaces_the_live_sets_and_reports_the_new_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let lists = PronounLists::open(dir.path());
+        std::fs::write(&lists.good_file, r#"["custom/good"]"#).unwrap();
+        std::fs::write(&lists.bad_file, r#"["custom/bad", "another/bad"]"#).unwrap();
+        lists.load();
+        assert_eq!(lists.counts(), (1, 2));
+        assert!(lists.is_known_good("custom/good"));
+        assert!(lists.is_known_bad("custom/bad"));
     }
 }

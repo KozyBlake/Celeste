@@ -200,7 +200,7 @@ fn main() -> anyhow::Result<()> {
         watched_users: shared.watched_users.clone(),
         watched_avatars: shared.watched_avatars.clone(),
         watched_groups: shared.watched_groups.clone(),
-        pronoun_lists,
+        pronoun_lists: pronoun_lists.clone(),
         tts: Arc::new(scarlet_ui::tts::TtsSinkAdapter::new(
             tts.clone(),
             settings.clone(),
@@ -334,6 +334,7 @@ fn main() -> anyhow::Result<()> {
             data_dir,
             runtime.handle().clone(),
             tts,
+            pronoun_lists,
             two_factor_tx,
             two_factor_rx,
         ) {

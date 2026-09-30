@@ -77,6 +77,14 @@ impl Default for AvatarSearch {
 }
 
 impl AvatarSearch {
+    /// Forget cached results and provider back-offs after the provider list
+    /// changes so the new selection takes effect on the next lookup.
+    pub async fn clear_provider_state(&self) {
+        let mut state = self.state.lock().await;
+        state.cache.clear();
+        state.failures.clear();
+    }
+
     pub async fn search_all(&self, providers: &[String], search: &str) -> Vec<VrcxAvatar> {
         let mut all = Vec::new();
         for provider in providers {
@@ -440,6 +448,20 @@ mod tests {
         assert!(is_world_balancer("https://worldbalancer.com/search"));
         assert!(!is_world_balancer("https://api.avtrdb.com/v2/avatar/search/vrcx"));
         assert!(!BUILTIN_PROVIDERS.iter().any(|provider| is_world_balancer(provider)));
+    }
+
+    #[tokio::test]
+    async fn clearing_provider_state_drops_results_and_backoffs() {
+        let search = AvatarSearch::default();
+        let mut state = search.state.lock().await;
+        state.cache.insert(("https://example.test".into(), 1, "test".into()), Arc::new(vec![VrcxAvatar::default()]));
+        state.failures.insert("https://example.test".into(), FailureState { streak: 2, blocked_until: Instant::now() });
+        drop(state);
+
+        search.clear_provider_state().await;
+        let state = search.state.lock().await;
+        assert!(state.cache.is_empty());
+        assert!(state.failures.is_empty());
     }
 }
 

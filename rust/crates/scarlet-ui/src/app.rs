@@ -417,6 +417,12 @@ struct PendingCacheCleanup {
     retention_days: i32,
 }
 
+#[derive(Clone)]
+struct AvatarProviderChoice {
+    url: String,
+    enabled: bool,
+}
+
 pub struct ScarletApp {
     state: UiState,
     settings: Option<Arc<Settings>>,
@@ -451,6 +457,7 @@ pub struct ScarletApp {
     watched_groups: Arc<scarlet_core::watched_groups::WatchedGroups>,
     watched_users: Arc<scarlet_core::watched_entities::WatchedEntities>,
     watched_avatars: Arc<scarlet_core::watched_entities::WatchedEntities>,
+    pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
     tts: Arc<crate::tts::TtsService>,
     tab: Tab,
     /// Java uses `DO_NOTHING_ON_CLOSE` and asks before quitting
@@ -505,6 +512,17 @@ pub struct ScarletApp {
     cache_cleanup_confirm: Option<PendingCacheCleanup>,
     cache_cleanup_rx: Option<std::sync::mpsc::Receiver<scarlet_core::cache_cleanup::CleanupReport>>,
     cache_cleanup_notice: Option<String>,
+    settings_notice: Option<String>,
+    ui_scale_open: bool,
+    ui_scale_percent: f32,
+    ui_scale: f32,
+    accent_open: bool,
+    accent: egui::Color32,
+    accent_edit: [u8; 3],
+    avatar_providers_open: bool,
+    avatar_provider_choices: Vec<AvatarProviderChoice>,
+    avatar_provider_input: String,
+    avatar_provider_error: Option<String>,
     visual_style_installed: bool,
 }
 
@@ -521,6 +539,7 @@ impl ScarletApp {
         data_dir: PathBuf,
         runtime_handle: tokio::runtime::Handle,
         tts: Arc<crate::tts::TtsService>,
+        pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
         two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
         two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
     ) -> Self {
@@ -539,6 +558,18 @@ impl ScarletApp {
         let process_controller = shared.process_controller.clone();
         let settings = Some(shared.settings.clone());
         let last_window_bounds = settings.as_ref().and_then(|settings| settings.ui_bounds.get_or_null());
+        let ui_scale = settings.as_ref()
+            .and_then(|settings| settings.store.get_object::<f32>("ui_scale"))
+            .unwrap_or(1.0)
+            .clamp(0.5, 4.0);
+        let accent = settings.as_ref()
+            .and_then(|settings| settings.store.get_object::<Vec<u8>>("ui_accent_color"))
+            .filter(|rgb| rgb.len() == 3)
+            .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+            .unwrap_or_else(|| egui::Color32::from_rgb(38, 104, 170));
+        let settings_notice = tts.engine_name().is_none().then(||
+            "Local text-to-speech is unavailable because no supported speech engine was found. Install eSpeak NG/eSpeak, Speech Dispatcher, or Flite on Linux; use macOS 'say'; or ensure PowerShell is available on Windows. Discord voice TTS can still work when configured.".to_string()
+        );
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
 
@@ -615,6 +646,7 @@ impl ScarletApp {
             watched_groups,
             watched_users,
             watched_avatars,
+            pronoun_lists,
             tts,
             tab: Tab::Instance,
             exit_prompt_open: false,
@@ -641,6 +673,17 @@ impl ScarletApp {
             cache_cleanup_confirm: None,
             cache_cleanup_rx: None,
             cache_cleanup_notice: None,
+            settings_notice,
+            ui_scale_open: false,
+            ui_scale_percent: ui_scale * 100.0,
+            ui_scale,
+            accent_open: false,
+            accent,
+            accent_edit: [accent.r(), accent.g(), accent.b()],
+            avatar_providers_open: false,
+            avatar_provider_choices: Vec::new(),
+            avatar_provider_input: String::new(),
+            avatar_provider_error: None,
             visual_style_installed: false,
         }
     }
@@ -657,7 +700,7 @@ impl ScarletApp {
         style.visuals.window_fill = egui::Color32::from_rgb(22, 26, 34);
         style.visuals.extreme_bg_color = egui::Color32::from_rgb(10, 13, 18);
         style.visuals.faint_bg_color = egui::Color32::from_rgb(24, 29, 38);
-        style.visuals.selection.bg_fill = egui::Color32::from_rgb(38, 104, 170);
+        style.visuals.selection.bg_fill = self.accent;
         style.visuals.selection.stroke.color = egui::Color32::from_rgb(226, 239, 255);
         style.visuals.window_rounding = egui::Rounding::same(9.0);
         style.visuals.menu_rounding = egui::Rounding::same(7.0);
@@ -672,7 +715,7 @@ impl ScarletApp {
         }
         style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 36, 46);
         style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(42, 51, 65);
-        style.visuals.widgets.active.weak_bg_fill = egui::Color32::from_rgb(38, 104, 170);
+        style.visuals.widgets.active.weak_bg_fill = self.accent;
 
         // Setting the fills above without also setting the text and border
         // colours leaves egui's defaults on top of them. Those defaults are
@@ -685,26 +728,26 @@ impl ScarletApp {
         let text_emphasis = egui::Color32::from_rgb(232, 240, 252);
         let border_subtle = egui::Color32::from_rgb(44, 53, 67);
         style.visuals.widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(168, 178, 193));
-        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, border_subtle);
-        style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_default);
-        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border_subtle);
-        style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text_emphasis);
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(168, 178, 193));
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, border_subtle);
+        style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, text_default);
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, border_subtle);
+        style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, text_emphasis);
         style.visuals.widgets.hovered.bg_stroke =
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(66, 78, 96));
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(66, 78, 96));
         // On the blue, text has to be near-white to stay readable, and the
         // border has to be a lighter blue rather than a grey outline.
-        style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, text_emphasis);
+        style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, text_emphasis);
         style.visuals.widgets.active.bg_stroke =
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(74, 140, 205));
-        style.visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, text_emphasis);
-        style.visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, border_subtle);
+            egui::Stroke::new(1.0_f32, self.accent);
+        style.visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0_f32, text_emphasis);
+        style.visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0_f32, border_subtle);
         // `selectable_value` (the tab bar, the settings sidebar, the
         // create-instance pickers) fills with `selection.bg_fill` and draws
         // its label with `selection.stroke`, so those two must agree with
         // each other for a selected tab to read as selected rather than
         // smudged.
-        style.visuals.selection.stroke = egui::Stroke::new(1.0, text_emphasis);
+        style.visuals.selection.stroke = egui::Stroke::new(1.0_f32, text_emphasis);
 
         ctx.set_style(style);
         self.visual_style_installed = true;
@@ -2217,7 +2260,7 @@ impl ScarletApp {
     /// Java registers these as `FileValuedVoid` rows. They are UI actions,
     /// not stored values, so keep them beside the registry-backed controls.
     fn render_settings_actions(&mut self, ui: &mut egui::Ui, category: SettingCategory) {
-        if !matches!(category, SettingCategory::General | SettingCategory::System | SettingCategory::Discord) {
+        if !matches!(category, SettingCategory::General | SettingCategory::System | SettingCategory::Discord | SettingCategory::Integrations) {
             return;
         }
         ui.add_space(2.0);
@@ -2226,18 +2269,35 @@ impl ScarletApp {
             ui.add_space(5.0);
             match category {
                 SettingCategory::General => {
+                    ui.label("Appearance");
+                    ui.horizontal(|ui| {
+                        if ui.button("Set UI scale").clicked() {
+                            self.ui_scale_percent = self.ui_scale * 100.0;
+                            self.ui_scale_open = true;
+                        }
+                        if ui.button("Choose accent colour").clicked() {
+                            self.accent_edit = [self.accent.r(), self.accent.g(), self.accent.b()];
+                            self.accent_open = true;
+                        }
+                    });
+                    ui.add_space(8.0);
                     ui.label("Pronoun validation lists");
                     ui.horizontal(|ui| {
                         if ui.button("Edit good list").clicked() {
-                            let lists = scarlet_core::pronoun_lists::PronounLists::open(&self.data_dir);
-                            if let Err(error) = open::that(&lists.good_file) { self.state.append_cli_output(format!("Could not open good_pronoun.json: {error}")); }
+                            if let Err(error) = open::that(&self.pronoun_lists.good_file) { self.state.append_cli_output(format!("Could not open good_pronoun.json: {error}")); }
                         }
                         if ui.button("Edit bad list").clicked() {
-                            let lists = scarlet_core::pronoun_lists::PronounLists::open(&self.data_dir);
-                            if let Err(error) = open::that(&lists.bad_file) { self.state.append_cli_output(format!("Could not open bad_pronoun.json: {error}")); }
+                            if let Err(error) = open::that(&self.pronoun_lists.bad_file) { self.state.append_cli_output(format!("Could not open bad_pronoun.json: {error}")); }
+                        }
+                        if ui.button("Reload lists").clicked() {
+                            self.pronoun_lists.load();
+                            let (good, bad) = self.pronoun_lists.counts();
+                            let message = format!("Pronoun lists reloaded: {good} good, {bad} bad entries.");
+                            self.state.append_cli_output(&message);
+                            self.settings_notice = Some(message);
                         }
                     });
-                    ui.label(egui::RichText::new("Restart Celeste after editing so the live validator reloads them.").small().weak());
+                    ui.label(egui::RichText::new("Edit either file, then reload it here. New player checks use the updated lists immediately.").small().weak());
                 }
                 SettingCategory::System => {
                     let cleanup_running = self.cache_cleanup_rx.is_some();
@@ -2269,6 +2329,13 @@ impl ScarletApp {
                         }
                     }
                 }
+                SettingCategory::Integrations => {
+                    ui.label("Avatar search databases");
+                    if ui.button("Manage avatar search providers").clicked() {
+                        self.open_avatar_provider_manager();
+                    }
+                    ui.label(egui::RichText::new("Provider changes apply to new lookups immediately. World Balancer is always excluded.").small().weak());
+                }
                 _ => {}
             }
             if category == SettingCategory::System {
@@ -2289,6 +2356,152 @@ impl ScarletApp {
             }
         });
         ui.add_space(10.0);
+    }
+
+    fn open_avatar_provider_manager(&mut self) {
+        let Some(settings) = self.settings.as_ref() else { return };
+        let builtins: Vec<String> = scarlet_discord::avatar_search::BUILTIN_PROVIDERS.iter().map(|url| (*url).to_string()).collect();
+        let selected: std::collections::HashSet<String> = if settings.avatar_search_providers_enabled.get() {
+            settings.avatar_search_providers.get().into_iter().collect()
+        } else {
+            builtins.iter().cloned().collect()
+        };
+        let mut known = builtins;
+        for url in settings.avatar_search_providers.get() {
+            if !known.contains(&url) && !url.to_ascii_lowercase().contains("worldbalancer") { known.push(url); }
+        }
+        self.avatar_provider_choices = known.into_iter()
+            .filter(|url| !url.to_ascii_lowercase().contains("worldbalancer"))
+            .map(|url| AvatarProviderChoice { enabled: selected.contains(&url), url })
+            .collect();
+        self.avatar_provider_input.clear();
+        self.avatar_provider_error = None;
+        self.avatar_providers_open = true;
+    }
+
+    fn save_avatar_provider_choices(&mut self) {
+        let Some(settings) = self.settings.as_ref() else { return };
+        let selected: Vec<String> = self.avatar_provider_choices.iter()
+            .filter(|choice| choice.enabled).map(|choice| choice.url.clone()).collect();
+        let defaults: std::collections::HashSet<&str> = scarlet_discord::avatar_search::BUILTIN_PROVIDERS.iter().copied().collect();
+        let selected_set: std::collections::HashSet<&str> = selected.iter().map(String::as_str).collect();
+        let uses_defaults = selected_set == defaults;
+        settings.avatar_search_providers.set(if uses_defaults { None } else { Some(selected) }, "ui");
+        settings.avatar_search_providers_enabled.set(Some(!uses_defaults), "ui");
+        let search = self.avatar_search.clone();
+        self.runtime_handle.spawn(async move { search.clear_provider_state().await });
+        self.settings_notice = Some(if uses_defaults {
+            "Avatar search providers restored to the built-in defaults.".to_string()
+        } else {
+            "Avatar search providers saved. New avatar lookups use this selection immediately.".to_string()
+        });
+    }
+
+    fn settings_action_windows(&mut self, ctx: &egui::Context) {
+        if self.ui_scale_open {
+            let mut open = true;
+            let mut apply = false;
+            egui::Window::new("UI scale").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+                ui.label(format!("Scale: {:.0}%", self.ui_scale_percent));
+                ui.add(egui::Slider::new(&mut self.ui_scale_percent, 50.0..=400.0).suffix("%"));
+                ui.horizontal(|ui| {
+                    apply = ui.button("Apply").clicked();
+                    if ui.button("Cancel").clicked() { self.ui_scale_open = false; }
+                });
+            });
+            if !open { self.ui_scale_open = false; }
+            if apply {
+                self.ui_scale = (self.ui_scale_percent / 100.0).clamp(0.5, 4.0);
+                if let Some(settings) = &self.settings { settings.store.set_object("ui_scale", &self.ui_scale); }
+                ctx.set_zoom_factor(self.ui_scale);
+                self.ui_scale_open = false;
+                self.settings_notice = Some(format!("UI scale set to {:.0}%.", self.ui_scale * 100.0));
+            }
+        }
+
+        if self.accent_open {
+            let mut open = true;
+            let mut save = false;
+            egui::Window::new("Accent colour").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+                ui.label("Choose a preset or a custom colour.");
+                for (name, value) in [
+                    ("Celeste blue", [38, 104, 170]), ("Crimson", [200, 55, 65]),
+                    ("Cobalt", [59, 125, 216]), ("Forest", [46, 158, 91]),
+                    ("Amber", [212, 130, 26]), ("Violet", [124, 77, 184]), ("Rose", [212, 68, 128]),
+                ] {
+                    if ui.selectable_label(self.accent_edit == value, name).clicked() { self.accent_edit = value; }
+                }
+                ui.add_space(6.0);
+                ui.color_edit_button_srgb(&mut self.accent_edit);
+                ui.horizontal(|ui| {
+                    save = ui.button("Apply").clicked();
+                    if ui.button("Cancel").clicked() { self.accent_open = false; }
+                });
+            });
+            if !open { self.accent_open = false; }
+            if save {
+                self.accent = egui::Color32::from_rgb(self.accent_edit[0], self.accent_edit[1], self.accent_edit[2]);
+                if let Some(settings) = &self.settings { settings.store.set_object("ui_accent_color", &self.accent_edit.to_vec()); }
+                self.visual_style_installed = false;
+                self.accent_open = false;
+                self.settings_notice = Some("Accent colour updated.".to_string());
+            }
+        }
+
+        if self.avatar_providers_open {
+            let mut open = true;
+            let mut save = false;
+            let mut restore = false;
+            let mut add = false;
+            egui::Window::new("Avatar search providers").collapsible(false).resizable(true).default_width(620.0).open(&mut open).show(ctx, |ui| {
+                ui.label("Choose the VRCX-compatible databases Celeste may query.");
+                ui.label(egui::RichText::new("World Balancer entries are intentionally ignored.").small().weak());
+                ui.add_space(6.0);
+                for choice in &mut self.avatar_provider_choices { ui.checkbox(&mut choice.enabled, &choice.url); }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.avatar_provider_input).desired_width(430.0).hint_text("https://..."));
+                    add = ui.button("Add").clicked();
+                });
+                if let Some(error) = &self.avatar_provider_error { ui.colored_label(egui::Color32::from_rgb(235, 120, 100), error); }
+                ui.horizontal(|ui| {
+                    restore = ui.button("Restore defaults").clicked();
+                    save = ui.button("Save").clicked();
+                    if ui.button("Cancel").clicked() { self.avatar_providers_open = false; }
+                });
+            });
+            if add {
+                let url = self.avatar_provider_input.trim().to_string();
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    self.avatar_provider_error = Some("Enter a full http(s) URL.".to_string());
+                } else if url.to_ascii_lowercase().contains("worldbalancer") {
+                    self.avatar_provider_error = Some("World Balancer is excluded from avatar searches.".to_string());
+                } else {
+                    if let Some(choice) = self.avatar_provider_choices.iter_mut().find(|choice| choice.url == url) { choice.enabled = true; }
+                    else { self.avatar_provider_choices.push(AvatarProviderChoice { url, enabled: true }); }
+                    self.avatar_provider_input.clear();
+                    self.avatar_provider_error = None;
+                }
+            }
+            if restore {
+                let defaults: std::collections::HashSet<&str> = scarlet_discord::avatar_search::BUILTIN_PROVIDERS.iter().copied().collect();
+                for choice in &mut self.avatar_provider_choices { choice.enabled = defaults.contains(choice.url.as_str()); }
+            }
+            if !open { self.avatar_providers_open = false; }
+            if save { self.save_avatar_provider_choices(); self.avatar_providers_open = false; }
+        }
+
+        if self.settings_notice.is_some() {
+            let message = self.settings_notice.clone().unwrap();
+            let mut close = false;
+            egui::Window::new("Celeste").collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                    ui.label(message);
+                    ui.add_space(8.0);
+                    close = ui.button("Close").clicked();
+                });
+            if close { self.settings_notice = None; }
+        }
     }
 
     fn prepare_cache_cleanup(&mut self) {
@@ -2615,6 +2828,7 @@ impl ScarletApp {
 impl eframe::App for ScarletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+        ctx.set_zoom_factor(self.ui_scale);
         self.install_visual_style(ctx);
         self.persist_window_bounds(ctx);
 
@@ -2805,6 +3019,7 @@ impl eframe::App for ScarletApp {
         self.avatar_stats_window(ctx);
         self.group_action_confirm_window(ctx);
         self.cache_cleanup_windows(ctx);
+        self.settings_action_windows(ctx);
 
         egui::CentralPanel::default()
             .frame(
@@ -2908,6 +3123,7 @@ pub fn run(
     data_dir: PathBuf,
     runtime_handle: tokio::runtime::Handle,
     tts: Arc<crate::tts::TtsService>,
+    pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
     two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
     two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
 ) -> eframe::Result<()> {
@@ -2940,6 +3156,7 @@ pub fn run(
                 data_dir,
                 runtime_handle,
                 tts,
+                pronoun_lists,
                 two_factor_tx,
                 two_factor_rx,
             )))
