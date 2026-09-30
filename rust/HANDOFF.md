@@ -232,3 +232,18 @@ Verification at this point: `cargo test --workspace` passes 481 tests. Two
 old unused moderation-context helper warnings remain; the selected-widget
 theme warnings introduced in `c533d3c` were fixed with explicit `f32` stroke
 widths.
+
+## Update 2026-09-30: desktop parity tail
+
+The remaining measured desktop divergences from `AUDIT-2026-09-28.md` are
+closed without reverting to Swing's layout. Manual `Clear current instance`
+now has Java's confirmation step. Joined/Left timestamps include seconds
+(`yyyy-MM-dd HH:mm:ss`), and account ages use Java's `stringify_ymd` behavior
+(zero components omitted, all-zero rendered as `0D`). A Help menu makes the
+previously unreachable credits/about information, project and policy links,
+and a read-only diagnostics report available. Diagnostics includes the data
+folder, VRChat/Discord connection state, local TTS engine, audit cursor and
+polling interval, and configured avatar-provider back-offs; it uses cached
+state only and never performs or delays an API request. Manual updater actions
+remain deliberately omitted because the owner does not need an updater for
+the private repository.

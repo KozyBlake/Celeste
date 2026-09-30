@@ -523,6 +523,9 @@ pub struct ScarletApp {
     avatar_provider_choices: Vec<AvatarProviderChoice>,
     avatar_provider_input: String,
     avatar_provider_error: Option<String>,
+    clear_instance_confirm: bool,
+    diagnostics_open: bool,
+    credits_open: bool,
     visual_style_installed: bool,
 }
 
@@ -684,6 +687,9 @@ impl ScarletApp {
             avatar_provider_choices: Vec::new(),
             avatar_provider_input: String::new(),
             avatar_provider_error: None,
+            clear_instance_confirm: false,
+            diagnostics_open: false,
+            credits_open: false,
             visual_style_installed: false,
         }
     }
@@ -881,8 +887,7 @@ impl ScarletApp {
                 }
                 ui.separator();
                 if ui.button("Clear current instance").clicked() {
-                    self.state.clear_instance();
-                    self.state.append_cli_output("Instance cleared.");
+                    self.clear_instance_confirm = true;
                     ui.close_menu();
                 }
             });
@@ -904,6 +909,32 @@ impl ScarletApp {
             if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
                 self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
             }
+
+            ui.menu_button("Help...", |ui| {
+                if ui.button("Diagnostics").clicked() {
+                    self.diagnostics_open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Credits / About Celeste").clicked() {
+                    self.credits_open = true;
+                    ui.close_menu();
+                }
+                ui.separator();
+                for (label, url) in [
+                    ("GitHub repository", scarlet_core::identity::GITHUB_URL),
+                    ("VRChat group", "https://vrchat.com/home/group/grp_eb2eb120-67bd-404e-9665-498f567cb56d"),
+                    ("License", scarlet_core::identity::LICENSE_URL),
+                    ("Community API docs", "https://vrchat.community/"),
+                    ("VRChat Terms of Service", "https://hello.vrchat.com/legal"),
+                    ("VRChat Privacy Policy", "https://hello.vrchat.com/privacy#7"),
+                    ("VRChat Community Guidelines", "https://hello.vrchat.com/community-guidelines"),
+                ] {
+                    if ui.button(label).clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        ui.close_menu();
+                    }
+                }
+            });
         });
     }
 
@@ -1101,14 +1132,14 @@ impl ScarletApp {
                 }
             }
             ColumnId::AccAge => {
-                let age = player.account_age.map(|(y, m, d)| format!("{y}y {m}m {d}d")).unwrap_or_default();
+                let age = player.account_age.map(format_account_age).unwrap_or_default();
                 Self::text_cell(ui, &age);
             }
             ColumnId::Joined => {
-                Self::text_cell(ui, &player.joined.format("%Y-%m-%d %H:%M").to_string());
+                Self::text_cell(ui, &player.joined.format("%Y-%m-%d %H:%M:%S").to_string());
             }
             ColumnId::Left => {
-                let left = player.left.map(|l| l.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default();
+                let left = player.left.map(|l| l.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default();
                 Self::text_cell(ui, &left);
             }
             ColumnId::Advisory => {
@@ -2504,6 +2535,101 @@ impl ScarletApp {
         }
     }
 
+    fn diagnostics_report(&self) -> String {
+        let vrchat = self.vrchat_slot.try_read().map(|slot| if slot.is_some() { "connected" } else { "not connected" }).unwrap_or("busy");
+        let discord = self.discord_http.try_read().map(|http| if http.is_some() { "connected" } else { "not connected / staff mode" }).unwrap_or("busy");
+        let mut report = format!(
+            "Celeste {}\nData folder: {}\n\nVRChat\n  Session: {}\n  Status: {}\n\nDiscord\n  Gateway/HTTP: {}\n\nText to speech\n  Local engine: {}\n",
+            scarlet_core::identity::VERSION,
+            self.data_dir.display(),
+            vrchat,
+            self.state.connection_status(),
+            discord,
+            self.tts.engine_name().unwrap_or("not installed"),
+        );
+        if let Some(settings) = &self.settings {
+            let last_audit = settings.last_audit_query.get_or_null()
+                .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "never".to_string());
+            report.push_str(&format!("\nAudit log\n  Polling interval: {}s\n  Last query cursor: {}\n", settings.audit_polling_interval.get(), last_audit));
+            let providers: Vec<String> = if settings.avatar_search_providers_enabled.get() {
+                settings.avatar_search_providers.get()
+            } else {
+                scarlet_discord::avatar_search::BUILTIN_PROVIDERS.iter().map(|url| (*url).to_string()).collect()
+            };
+            let backoffs = self.avatar_search.provider_backoffs();
+            report.push_str("\nAvatar search providers\n");
+            for provider in providers.into_iter().filter(|url| !url.to_ascii_lowercase().contains("worldbalancer")) {
+                let status = backoffs.as_ref().and_then(|states| states.get(&provider)).filter(|seconds| **seconds > 0)
+                    .map(|seconds| format!("backoff {seconds}s")).unwrap_or_else(|| "ready".to_string());
+                report.push_str(&format!("  [{status}] {provider}\n"));
+            }
+            if backoffs.is_none() { report.push_str("  (provider status is busy; no request was delayed)\n"); }
+        }
+        report
+    }
+
+    fn utility_windows(&mut self, ctx: &egui::Context) {
+        if self.clear_instance_confirm {
+            let mut confirm = false;
+            let mut cancel = false;
+            egui::Window::new("Clear current instance?").collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                    ui.label("Clear every player row from the current Instance view?");
+                    ui.label(egui::RichText::new("New VRChat log events will continue to populate the table.").small().weak());
+                    ui.horizontal(|ui| {
+                        confirm = ui.button("Clear instance").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+            if confirm {
+                self.state.clear_instance();
+                self.state.append_cli_output("Instance cleared.");
+                self.clear_instance_confirm = false;
+            } else if cancel { self.clear_instance_confirm = false; }
+        }
+
+        if self.diagnostics_open {
+            let report = self.diagnostics_report();
+            let mut open = true;
+            egui::Window::new("Diagnostics").default_width(680.0).default_height(440.0).open(&mut open).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Copy report").clicked() { ui.ctx().copy_text(report.clone()); }
+                    if ui.button("Open data folder").clicked() {
+                        if let Err(error) = open::that(&self.data_dir) { self.state.append_cli_output(format!("Could not open data folder: {error}")); }
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::both().show(ui, |ui| { ui.monospace(&report); });
+            });
+            if !open { self.diagnostics_open = false; }
+        }
+
+        if self.credits_open {
+            let credits: Vec<serde_json::Value> = serde_json::from_str(include_str!("../../../../src/main/resources/net/sybyline/scarlet/util/credits.json")).unwrap_or_default();
+            let mut open = true;
+            egui::Window::new("Credits / About Celeste").default_width(650.0).default_height(420.0).open(&mut open).show(ctx, |ui| {
+                ui.heading(format!("Celeste {}", scarlet_core::identity::VERSION));
+                ui.label(scarlet_core::identity::FORK_NOTE);
+                ui.label("Rust continuation of the Scarlet VRChat moderation logger.");
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for credit in &credits {
+                        let name = credit.get("name").and_then(serde_json::Value::as_str).unwrap_or("Unknown");
+                        let role = credit.get("role").and_then(serde_json::Value::as_str).unwrap_or("");
+                        let url = credit.get("url").and_then(serde_json::Value::as_str).unwrap_or("");
+                        ui.horizontal_wrapped(|ui| {
+                            if url.is_empty() { ui.strong(name); }
+                            else if ui.link(name).clicked() { ui.ctx().open_url(egui::OpenUrl::new_tab(url)); }
+                            ui.label(format!("— {role}"));
+                        });
+                    }
+                });
+            });
+            if !open { self.credits_open = false; }
+        }
+    }
+
     fn prepare_cache_cleanup(&mut self) {
         let Some(settings) = self.settings.as_ref() else { return };
         let days = settings.cache_cleanup_days.get().clamp(1, 30);
@@ -3020,6 +3146,7 @@ impl eframe::App for ScarletApp {
         self.group_action_confirm_window(ctx);
         self.cache_cleanup_windows(ctx);
         self.settings_action_windows(ctx);
+        self.utility_windows(ctx);
 
         egui::CentralPanel::default()
             .frame(
@@ -3062,6 +3189,14 @@ impl eframe::App for ScarletApp {
 /// Java's condition is deliberately narrow: amber only when the pronouns are
 /// flagged, the player is still present, and no advisory colour already
 /// applies — so the background never competes with a watched-entity colour.
+fn format_account_age((years, months, days): (i32, i32, i32)) -> String {
+    let mut parts = Vec::new();
+    if years != 0 { parts.push(format!("{years}y")); }
+    if months != 0 { parts.push(format!("{months}m")); }
+    if days != 0 { parts.push(format!("{days}d")); }
+    if parts.is_empty() { "0D".to_string() } else { parts.join(" ") }
+}
+
 fn sort_players(players: &mut [scarlet_core::ui::ConnectedPlayer], sort: Option<TableSort>) {
     let Some(sort) = sort else {
         return;
@@ -3412,5 +3547,12 @@ mod tests {
         assert_eq!(canonicalize_cli_command("halt"), "halt");
         assert_eq!(canonicalize_cli_command("restart"), "restart");
         assert_eq!(canonicalize_cli_command("not-a-command"), "not-a-command");
+    }
+
+    #[test]
+    fn account_age_omits_zero_components_like_javas_period_renderer() {
+        assert_eq!(format_account_age((4, 0, 3)), "4y 3d");
+        assert_eq!(format_account_age((0, 7, 0)), "7m");
+        assert_eq!(format_account_age((0, 0, 0)), "0D");
     }
 }

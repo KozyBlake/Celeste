@@ -85,6 +85,17 @@ impl AvatarSearch {
         state.failures.clear();
     }
 
+    /// Read-only provider back-off snapshot for the desktop diagnostics
+    /// window. `None` means a lookup currently owns the state lock; opening
+    /// diagnostics never waits on or delays a network request.
+    pub fn provider_backoffs(&self) -> Option<HashMap<String, u64>> {
+        let state = self.state.try_lock().ok()?;
+        let now = Instant::now();
+        Some(state.failures.iter().map(|(provider, failure)| {
+            (provider.clone(), failure.blocked_until.saturating_duration_since(now).as_secs())
+        }).collect())
+    }
+
     pub async fn search_all(&self, providers: &[String], search: &str) -> Vec<VrcxAvatar> {
         let mut all = Vec::new();
         for provider in providers {
@@ -455,8 +466,10 @@ mod tests {
         let search = AvatarSearch::default();
         let mut state = search.state.lock().await;
         state.cache.insert(("https://example.test".into(), 1, "test".into()), Arc::new(vec![VrcxAvatar::default()]));
-        state.failures.insert("https://example.test".into(), FailureState { streak: 2, blocked_until: Instant::now() });
+        state.failures.insert("https://example.test".into(), FailureState { streak: 2, blocked_until: Instant::now() + Duration::from_secs(30) });
         drop(state);
+
+        assert!(search.provider_backoffs().unwrap()["https://example.test"] <= 30);
 
         search.clear_provider_state().await;
         let state = search.state.lock().await;
