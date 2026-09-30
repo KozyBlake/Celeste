@@ -199,6 +199,7 @@ fn main() -> anyhow::Result<()> {
             settings.clone(),
             shared.secret_staff_list.clone(),
             shared.moderation_tags.clone(),
+            shared.watched_users.clone(),
         ),
     ));
 

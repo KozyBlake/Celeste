@@ -15,6 +15,7 @@ use scarlet_core::data::{AuditEntryMetadata, ScarletData};
 use scarlet_core::moderation_tags::ModerationTags;
 use scarlet_core::settings::Settings;
 use scarlet_core::staff_list::StaffList;
+use scarlet_core::watched_entities::WatchedEntities;
 use scarlet_vrchat::models::GroupAuditLogEntry;
 use serenity::builder::{
     CreateActionRow, CreateAllowedMentions, CreateButton, CreateEmbed, CreateEmbedAuthor,
@@ -37,6 +38,7 @@ pub struct AuditPoller {
     settings: Arc<Settings>,
     secret_staff: Arc<StaffList>,
     moderation_tags: Arc<ModerationTags>,
+    watched_users: Arc<WatchedEntities>,
 }
 
 impl AuditPoller {
@@ -48,8 +50,9 @@ impl AuditPoller {
         settings: Arc<Settings>,
         secret_staff: Arc<StaffList>,
         moderation_tags: Arc<ModerationTags>,
+        watched_users: Arc<WatchedEntities>,
     ) -> Self {
-        Self { vrchat, http, config, data, settings, secret_staff, moderation_tags }
+        Self { vrchat, http, config, data, settings, secret_staff, moderation_tags, watched_users }
     }
 
     fn group_id(&self) -> Option<String> {
@@ -192,12 +195,13 @@ impl AuditPoller {
             None
         };
 
+        let target = if let (Some(client), Some(target_id)) = (client.as_ref(), entry.target_id.as_deref()) {
+            client.get_user(target_id).await.ok()
+        } else {
+            None
+        };
+
         if let (Some(http), Some(channel)) = (self.http.read().await.clone(), channel) {
-            let target = if let (Some(client), Some(target_id)) = (client.as_ref(), entry.target_id.as_deref()) {
-                client.get_user(target_id).await.ok()
-            } else {
-                None
-            };
             let mut embed = entry_embed(&entry, target.as_ref());
             if let Some(url) = previous_instance.as_ref().and_then(AuditEntryMetadata::message_url) {
                 embed = embed.title("Instance Close").url(url);
@@ -264,7 +268,108 @@ impl AuditPoller {
         // Java records known entries even when no route is configured, so
         // overlap polling cannot repeatedly process the same event.
         self.data.set_audit_entry_metadata(&entry.id, metadata);
+        if matches!(entry.event_type.as_str(), "group.instance.kick" | "group.instance.warn") {
+            if let Some(target) = target.as_ref() {
+                if entry.event_type == "group.instance.kick" {
+                    self.emit_suggested_moderation(target).await;
+                }
+                self.emit_watched_moderation(target).await;
+            }
+        }
         Ok(())
+    }
+
+    async fn emit_suggested_moderation(&self, target: &scarlet_vrchat::models::User) {
+        let Some(client) = self.vrchat.read().await.clone() else { return };
+        let Some(group_id) = self.group_id() else { return };
+        let period_days = self.settings.heuristic_period_days.get();
+        let threshold = self.settings.heuristic_kick_count.get();
+        let now = Utc::now();
+        let entries = match client
+            .query_group_audit_logs(
+                &group_id,
+                now - Duration::days(i64::from(period_days)),
+                now,
+                None,
+                Some("group.instance.kick"),
+                Some(&target.id),
+            )
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(%error, target_id = target.id, "Could not query suggested-moderation history");
+                return;
+            }
+        };
+        let kicks = entries
+            .iter()
+            .filter(|entry| !self.data.audit_entry_metadata(&entry.id).entry_redacted)
+            .count();
+        if kicks < threshold as usize {
+            return;
+        }
+        let display_name = target.display_name.as_deref().unwrap_or(&target.id);
+        let embed = extended_embed("Suggested Moderation", 0xFF007F)
+            .title(display_name)
+            .url(format!("https://vrchat.com/home/user/{}", target.id))
+            // Java's visible sentence uses `kickThreshold * 24`, even though
+            // the query window uses `heuristicPeriodDays`; preserve it.
+            .description(format!(
+                "{display_name} has been kicked from group instances {kicks} time{} in the last {} hours",
+                if kicks == 1 { "" } else { "s" },
+                threshold * 24,
+            ))
+            .field("User ID", format!("`{}`", target.id), false);
+        self.emit_extended("groupex.heuristic.mod", embed, &target.id).await;
+    }
+
+    async fn emit_watched_moderation(&self, target: &scarlet_vrchat::models::User) {
+        let Some(watched) = self.watched_users.get_watched_entity(&target.id) else { return };
+        let display_name = target.display_name.as_deref().unwrap_or(&target.id);
+        let tags = watched
+            .tags
+            .iter()
+            .map(|tag| self.moderation_tags.get_tag_label(tag))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let message = watched.message.as_deref().unwrap_or_default();
+        let embed = extended_embed("Watched Moderation", 0xFF7F7F)
+            .title(display_name)
+            .url(format!("https://vrchat.com/home/user/{}", target.id))
+            .description(message)
+            .field("User ID", format!("`{}`", target.id), false)
+            .field("Type", format!("`{}`", watched.r#type.as_str()), false)
+            .field("Tags", tags, false)
+            .field("Message", message, false)
+            .field("Critical", format!("`{}`", watched.critical), true)
+            .field("Priority", format!("`{}`", watched.priority), true)
+            .field("Silent", format!("`{}`", watched.silent), true);
+        self.emit_extended("groupex.watched.mod", embed, &target.id).await;
+    }
+
+    async fn emit_extended(&self, event_type: &str, embed: CreateEmbed, target_id: &str) {
+        let Some(http) = self.http.read().await.clone() else { return };
+        let Some(channel) = self
+            .config
+            .map_value("auditExType2channelSf", event_type)
+            .and_then(|id| id.parse::<u64>().ok())
+            .map(ChannelId::new)
+        else { return };
+        let controls = CreateActionRow::Buttons(vec![
+            CreateButton::new(format!("vrchat-user-ban:{target_id}"))
+                .style(serenity::model::application::ButtonStyle::Danger)
+                .label("Ban user"),
+            CreateButton::new(format!("vrchat-user-unban:{target_id}"))
+                .style(serenity::model::application::ButtonStyle::Success)
+                .label("Unban user"),
+        ]);
+        if let Err(error) = channel
+            .send_message(&http, CreateMessage::new().embed(embed).components(vec![controls]))
+            .await
+        {
+            tracing::warn!(%error, event_type, "Could not emit extended moderation event");
+        }
     }
 
     async fn create_instance_monitor(
@@ -592,6 +697,18 @@ fn launch_link(location: &str) -> String {
         "https://vrchat.com/home/launch?worldId={}",
         location.replacen(':', "&instanceId=", 1)
     )
+}
+
+fn extended_embed(title: &str, colour: u32) -> CreateEmbed {
+    CreateEmbed::new()
+        .title(title)
+        .colour(Colour::new(colour))
+        .footer(CreateEmbedFooter::new(format!(
+            "{} {} ✧ Extended event",
+            scarlet_core::identity::APP_NAME,
+            scarlet_core::identity::VERSION,
+        )))
+        .timestamp(serenity::model::Timestamp::now())
 }
 
 fn entry_embed(entry: &GroupAuditLogEntry, target: Option<&scarlet_vrchat::models::User>) -> CreateEmbed {
