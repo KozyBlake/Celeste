@@ -308,3 +308,19 @@ waiting behind a long queue—the same class of race called out in Java's source
 The file now survives for exactly as long as its queued track needs it and is
 deleted afterward. Route-selection, real WAV synthesis, and cleanup regression
 tests bring the workspace total to 487 passing tests.
+
+## Update 2026-09-30: live instance transition catch-up
+
+A real 30 MB VRChat log exposed a responsiveness bug in the Rust tailer.
+Celeste parsed timestamps for every unrelated Unity diagnostic line and queued
+every recognized event from every historical world before it could follow a
+new `output_log_*.txt`. If VRChat launched after Celeste, the UI could remain
+on the previous process's final world while the correct new log waited behind
+that backlog.
+
+The tailer now rejects irrelevant lines before timestamp parsing, compacts an
+initial log replay to the most recent instance (plus the local authentication
+event), and rechecks the newest filename before publishing catch-up events. If
+a new VRChat process created a log during that read, stale events are discarded
+and the new file preempts them. Regression coverage brings the workspace total
+to 488 passing tests.

@@ -524,7 +524,7 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
         tracing::info!("Waiting for log file to appear...");
     };
 
-    loop {
+    'files: loop {
         tracing::info!("Tailing {}", file_name_of(&current_path));
         if sender.send(TailerEvent::Init { file: current_path.clone() }).is_err() {
             return;
@@ -536,14 +536,46 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
         loop {
             match read_new_lines(&current_path, &mut position) {
                 Ok(lines) => {
+                    let mut events = Vec::new();
                     for line in lines {
+                        // Parsing a NaiveDateTime is comparatively expensive.
+                        // Real VRChat logs contain hundreds of thousands of
+                        // unrelated Unity lines, so reject those before doing
+                        // any timestamp work. A large previous-session log
+                        // otherwise takes minutes to catch up and prevents a
+                        // newly-created log from becoming the active target.
+                        if !might_contain_event(&line) {
+                            continue;
+                        }
                         if let Some((timestamp, _level, text)) = parse_log_line(&line) {
                             if let Some(kind) = parse_entry_text(text) {
-                                let event = LogEvent { preamble, timestamp, kind };
-                                if sender.send(TailerEvent::Entry(event)).is_err() {
-                                    return;
-                                }
+                                events.push(LogEvent { preamble, timestamp, kind });
                             }
+                        }
+                    }
+
+                    if preamble {
+                        // VRChat may have started while we were reading the
+                        // previous process's log. Never enqueue stale history
+                        // ahead of the new session: switch immediately and
+                        // let its Init event supersede this one.
+                        if let Some(newest) = locate_latest_log(&app_data_dir) {
+                            if newest != current_path {
+                                tracing::info!(
+                                    from = %file_name_of(&current_path),
+                                    to = %file_name_of(&newest),
+                                    "A newer VRChat log appeared during catch-up; discarding stale backlog"
+                                );
+                                current_path = newest;
+                                continue 'files;
+                            }
+                        }
+                        events = compact_preamble(events);
+                    }
+
+                    for event in events {
+                        if sender.send(TailerEvent::Entry(event)).is_err() {
+                            return;
                         }
                     }
                 }
@@ -574,6 +606,60 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
             }
         }
     }
+}
+
+/// Fast string gate for the exact families understood by
+/// [`parse_entry_text`]. It avoids parsing timestamps for the overwhelming
+/// majority of Unity's diagnostic chatter without changing parser behavior.
+fn might_contain_event(line: &str) -> bool {
+    [
+        "User Authenticated: ",
+        "[Behaviour] Entering Room: ",
+        "[Behaviour] Joining ",
+        "[Behaviour] OnLeftRoom",
+        "[Behaviour] OnPlayerJoined ",
+        "[Behaviour] OnPlayerLeft ",
+        "[Behaviour] Switching ",
+        "[API] [",
+        "[ModerationManager] ",
+        "[SharingManager] User ",
+        "[StickersManager] User ",
+        "[VRCProps] Prop ",
+        "VRCApplication: HandleApplicationQuit at ",
+        "USharpVideo</color>] Started video load for URL: ",
+        "[USharpVideo] Started video load for URL: ",
+    ]
+    .iter()
+    .any(|marker| line.contains(marker))
+}
+
+/// A historical VRChat log can contain several worlds and thousands of
+/// recognized events. Only the most recent instance can describe the roster
+/// visible when that process ended. Keeping its `EnteringRoom`/`UserJoined`
+/// pair and everything after it both matches the final state and prevents the
+/// async listener from spending minutes replaying obsolete worlds before it
+/// can process the current log.
+fn compact_preamble(events: Vec<LogEvent>) -> Vec<LogEvent> {
+    let Some(last_join) = events
+        .iter()
+        .rposition(|event| matches!(&event.kind, LogEventKind::UserJoined { .. }))
+    else {
+        return events;
+    };
+    let start = events[..=last_join]
+        .iter()
+        .rposition(|event| matches!(&event.kind, LogEventKind::EnteringRoom { .. }))
+        .unwrap_or(last_join);
+    let authenticated = events[..start]
+        .iter()
+        .rposition(|event| matches!(&event.kind, LogEventKind::UserAuthenticated { .. }))
+        .map(|index| events[index].clone());
+    let mut compact = Vec::with_capacity(events.len() - start + usize::from(authenticated.is_some()));
+    if let Some(event) = authenticated {
+        compact.push(event);
+    }
+    compact.extend(events.into_iter().skip(start));
+    compact
 }
 
 fn file_name_of(path: &Path) -> std::borrow::Cow<'_, str> {
@@ -678,6 +764,56 @@ mod tests {
                 },
             ]
         );
+        assert!(real.iter().all(|line| might_contain_event(line)));
+    }
+
+    #[test]
+    fn catch_up_keeps_only_the_latest_instance_and_authentication() {
+        fn event(second: u32, kind: LogEventKind) -> LogEvent {
+            LogEvent {
+                preamble: true,
+                timestamp: NaiveDateTime::parse_from_str(
+                    &format!("2026.09.30 12:00:{second:02}"),
+                    "%Y.%m.%d %H:%M:%S",
+                )
+                .unwrap(),
+                kind,
+            }
+        }
+
+        let compact = compact_preamble(vec![
+            event(0, LogEventKind::UserAuthenticated {
+                display_name: "Owner".into(),
+                user_id: "usr_owner".into(),
+            }),
+            event(1, LogEventKind::EnteringRoom { world_name: "Old world".into() }),
+            event(2, LogEventKind::UserJoined { location: "wrld_old:1".into() }),
+            event(3, LogEventKind::PlayerJoined {
+                display_name: "Old player".into(),
+                user_id: "usr_old".into(),
+            }),
+            event(4, LogEventKind::EnteringRoom { world_name: "Current world".into() }),
+            event(5, LogEventKind::UserJoined { location: "wrld_current:2".into() }),
+            event(6, LogEventKind::PlayerJoined {
+                display_name: "Current player".into(),
+                user_id: "usr_current".into(),
+            }),
+        ]);
+
+        assert_eq!(compact.len(), 4);
+        assert!(matches!(&compact[0].kind, LogEventKind::UserAuthenticated { .. }));
+        assert!(matches!(
+            &compact[1].kind,
+            LogEventKind::EnteringRoom { world_name } if world_name == "Current world"
+        ));
+        assert!(matches!(
+            &compact[2].kind,
+            LogEventKind::UserJoined { location } if location == "wrld_current:2"
+        ));
+        assert!(matches!(
+            &compact[3].kind,
+            LogEventKind::PlayerJoined { display_name, .. } if display_name == "Current player"
+        ));
     }
 
     #[test]
