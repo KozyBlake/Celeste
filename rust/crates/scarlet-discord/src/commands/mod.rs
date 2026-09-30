@@ -1020,20 +1020,19 @@ mod command_surface_tests {
         "schedule set-tags",
         "schedule set-time",
         "schedule set-title",
+        // The Java launcher can fetch a selected jar version before restart.
+        // Celeste ships as a native binary and the owner explicitly does not
+        // want a self-updater for this private repository. Normal restart is
+        // still supported by `/server-restart`.
+        "server-restart update-now",
     ];
 
     /// Java commands that *should* exist here and don't yet — a gap, not a
     /// decision. Kept separate from the list above so "we chose not to" and
     /// "we haven't got there" never blur together.
-    const NOT_YET_PORTED: &[(&str, &str)] = &[(
-        "server-restart update-now",
-        "Java writes the target version to scarlet.version and restarts into it, \
-         which works because its launcher fetches that version's jar. A native \
-         binary has no equivalent; an in-place self-updater would be a new \
-         subsystem rather than a port.",
-    )];
+    const NOT_YET_PORTED: &[(&str, &str)] = &[];
 
-    /// The one test that answers "what's still missing?" with a list instead
+    /// The test that answers "what's still missing?" with a list instead
     /// of a feeling. It fails when a Java command has no Rust counterpart
     /// and isn't on the deliberately-absent list, and prints exactly which.
     #[test]

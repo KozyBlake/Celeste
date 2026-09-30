@@ -11,9 +11,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 const MIXED_CHARACTER_ALERT: &[u8] =
-    include_bytes!("../../../../src/main/resources/tts/mixed-character-alert.wav");
+    include_bytes!("../resources/tts/mixed-character-alert.wav");
 const NUISANCE_ALERT: &[u8] =
-    include_bytes!("../../../../src/main/resources/tts/bl_sfx_siren_chirp.wav");
+    include_bytes!("../resources/tts/bl_sfx_siren_chirp.wav");
 
 #[derive(Debug, Clone)]
 enum Engine {

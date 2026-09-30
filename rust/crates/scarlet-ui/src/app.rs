@@ -2606,7 +2606,7 @@ impl ScarletApp {
         }
 
         if self.credits_open {
-            let credits: Vec<serde_json::Value> = serde_json::from_str(include_str!("../../../../src/main/resources/net/sybyline/scarlet/util/credits.json")).unwrap_or_default();
+            let credits: Vec<serde_json::Value> = serde_json::from_str(include_str!("../resources/credits.json")).unwrap_or_default();
             let mut open = true;
             egui::Window::new("Credits / About Celeste").default_width(650.0).default_height(420.0).open(&mut open).show(ctx, |ui| {
                 ui.heading(format!("Celeste {}", scarlet_core::identity::VERSION));

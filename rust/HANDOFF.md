@@ -60,13 +60,12 @@ cargo test -p scarlet-discord command_surface_matches_java
 ```
 
 Fails with a list when a Java command has no Rust counterpart and isn't on
-the deliberately-absent list. 161 Java leaves; 130 ported, 30 deliberately
-out of scope (the whole `schedule` family, report templates,
-`submit-evidence`), 1 real gap (`server-restart update-now` — needs a design
-decision, not a port: Java restarts into a freshly-fetched jar and a native
-binary has no equivalent).
+the deliberately-absent list. All 161 Java leaves are accounted for: 130 are
+ported and 31 are deliberately excluded (the whole `schedule` family, report
+templates, `submit-evidence`, and `server-restart update-now`). The updater is
+an explicit owner decision: this private native build does not need one.
 
-`cargo test --workspace` should be 15 green groups with no failures.
+`cargo test --workspace` should pass all 482 tests with no failures.
 
 ## Build and ship
 
@@ -93,16 +92,17 @@ implemented. The owner explicitly prefers a modern Rust UI rather than a
 visual Swing clone; use Java as the behavioral and information-architecture
 reference while continuing the Rust design language.
 
-**3. Discoverability regressions.** Audit event choices/autocomplete (A5),
-`/aux-webhooks remove`, and `/export-log` were restored on 2026-09-28. B2
-remains: `/settings edit` hides valid values behind a 45-char truncated label.
+**3. Discoverability regressions — completed.** Audit event
+choices/autocomplete (A5), `/aux-webhooks remove`, `/export-log`, and the full
+typed `/settings edit` selection flow (B2) are restored.
 
-**4. The cosmetic tail.** Wording, the menu bar, timestamp seconds. Log
-them; don't spend a session on them.
+**4. The measured desktop tail — completed 2026-09-30.** The Help menu,
+confirmation, timestamp, account-age, diagnostics, scale, accent, and
+maintenance differences are closed; see the updates below.
 
-**Not yet diffed at all:** the `watched-*` command family. Four families
-were audited on 28 Sep; that one wasn't. Expect it to yield findings at a
-similar rate.
+The `watched-*` families have since been audited and their slash-command,
+component, modal, import, and export surfaces are ported. Remaining validation
+is live integration testing, not an unaccounted command inventory.
 
 ## Things that are already right — don't re-audit
 
@@ -160,8 +160,9 @@ marks the session ended and removes its Join button.
 Still worth testing with a live Discord server: instance-monitor creation,
 thread routing, live-list edits, and close finalisation, because the unit suite
 can validate embed/data behavior but cannot exercise Discord's thread
-permissions. Java's instance-close reply/link to the opening audit post remains
-a separate follow-up.
+permissions. The owner has explicitly deferred Java's instance-close
+reply/backlink to the opening audit post; revisit it only if live Discord
+testing shows that omission causes an operational problem.
 
 ## Update 2026-09-30: runtime reliability
 
@@ -228,7 +229,7 @@ without restart. World Balancer is excluded both in the manager and at the
 network boundary. If local TTS has no supported engine, the desktop now opens
 a cross-platform explanatory warning rather than offering an installer.
 
-Verification at this point: `cargo test --workspace` passes 481 tests. Two
+Verification at this point: `cargo test --workspace` passes 482 tests. Two
 old unused moderation-context helper warnings remain; the selected-widget
 theme warnings introduced in `c533d3c` were fixed with explicit `f32` stroke
 widths.
@@ -247,3 +248,18 @@ polling interval, and configured avatar-provider back-offs; it uses cached
 state only and never performs or delays an API request. Manual updater actions
 remain deliberately omitted because the owner does not need an updater for
 the private repository.
+
+## Update 2026-09-30: Rust-owned bundled resources
+
+Rust no longer compiles assets out of Java's `src/main/resources` tree. The
+six translation bundles now live under `crates/scarlet-core/resources/i18n`,
+while credits and both bundled TTS alert sounds live under
+`crates/scarlet-ui/resources`. They were copied byte-for-byte so behavior and
+attribution do not change. The Java copies remain only because the Java source
+is still being kept as a parity reference; deleting that reference tree is a
+separate final-cleanup decision.
+
+The remaining release gate is hands-on testing: Discord permissions, command
+responses, threads/components/modals, VRChat authentication and live logs, TTS,
+and desktop behavior on the owner's real configuration. Unit tests cannot
+fully exercise those external services.

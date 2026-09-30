@@ -9,13 +9,9 @@
 //!
 //! ## Where the strings come from
 //!
-//! The bundles are `include_str!`'d straight out of the Java resource
-//! directory in this same repository rather than copied into the Rust tree.
-//! The Java implementation remains the reference for this port, so the two
-//! must not be allowed to drift: a copy would silently go stale the first
-//! time a string was edited on the Java side. The trade-off is that the
-//! `rust/` workspace can't be built detached from the repository root, which
-//! is fine — they ship together.
+//! The bundles are embedded from this crate's Rust-owned resources. They
+//! were copied byte-for-byte from the Java reference bundles so removing
+//! the Java tree later cannot break or change the Rust build.
 //!
 //! ## Deliberate simplifications, tracked not hidden
 //!
@@ -37,12 +33,12 @@ use std::sync::{Mutex, OnceLock, RwLock};
 /// Languages Celeste ships translations for (base English is always present).
 pub const SHIPPED_LANGUAGES: [&str; 6] = ["en", "de", "es", "id", "ja", "ru"];
 
-const BUNDLE_EN: &str = include_str!("../../../../src/main/resources/net/sybyline/scarlet/i18n/messages.properties");
-const BUNDLE_DE: &str = include_str!("../../../../src/main/resources/net/sybyline/scarlet/i18n/messages_de.properties");
-const BUNDLE_ES: &str = include_str!("../../../../src/main/resources/net/sybyline/scarlet/i18n/messages_es.properties");
-const BUNDLE_ID: &str = include_str!("../../../../src/main/resources/net/sybyline/scarlet/i18n/messages_id.properties");
-const BUNDLE_JA: &str = include_str!("../../../../src/main/resources/net/sybyline/scarlet/i18n/messages_ja.properties");
-const BUNDLE_RU: &str = include_str!("../../../../src/main/resources/net/sybyline/scarlet/i18n/messages_ru.properties");
+const BUNDLE_EN: &str = include_str!("../resources/i18n/messages.properties");
+const BUNDLE_DE: &str = include_str!("../resources/i18n/messages_de.properties");
+const BUNDLE_ES: &str = include_str!("../resources/i18n/messages_es.properties");
+const BUNDLE_ID: &str = include_str!("../resources/i18n/messages_id.properties");
+const BUNDLE_JA: &str = include_str!("../resources/i18n/messages_ja.properties");
+const BUNDLE_RU: &str = include_str!("../resources/i18n/messages_ru.properties");
 
 fn bundled_source(lang: &str) -> Option<&'static str> {
     match lang {

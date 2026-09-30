@@ -11,19 +11,32 @@ implementation throughout the port. Total size: **70,679 lines** in
 large, multi-session port — there is no shortcut to reading and faithfully
 translating each subsystem.
 
+**Current status (2026-09-30):** the in-scope implementation inventory is
+complete. All 161 Java command leaves are accounted for (130 ported, 31
+explicitly excluded), Rust owns every resource it compiles, and the full
+workspace suite passes. The remaining release gate is hands-on Discord,
+VRChat, audio, and desktop testing on the owner's real configuration. The
+numbered update log below is chronological history; old “next” paragraphs in
+that history are superseded by this status and `HANDOFF.md`.
+
 Crate layout (`rust/crates/`), each mapped to a Java package/class group:
 
 | Crate | Java equivalent | Status |
 |---|---|---|
-| `scarlet-core` | `net.sybyline.scarlet` root + `log` + `util` | **done for now** — log layer, app-identity constants, `Features`, `ScarletPermission`, `ScarletMeta`, `ScarletJsonCache`, `Maths`, `ChangeListener`, `FileBackups`, `EncryptedPrefs`, `ScarletSettings`, `ScarletData`, `UniqueStrings` all ported. Remaining `net.sybyline.scarlet.util` files not yet inventoried in detail (`MiscUtils`, `I18n`, `Platform`, `VrcIds`, `GithubApi`, TTS, etc.) — port on demand as scarlet-discord/scarlet-vrchat need them. |
+| `scarlet-core` | `net.sybyline.scarlet` root + `log` + `util` | working shared core: identity, paths/migration, settings and encrypted preferences, persistent data, caches/cleanup, i18n, feature flags, list stores, naming/pronoun analysis, permissions, metadata, logging, and utility behavior used by the live application are ported and tested |
 | `scarlet-gif` | `com.madgag.gif.fmsware` | **done** — NeuQuant, LZWEncoder, AnimatedGifEncoder, GifDecoder all ported and cross-checked byte-for-byte against the real Java classes |
-| `scarlet-discord` | `net.sybyline.scarlet.server.discord`, `ScarletDiscordJDA`, `ScarletDiscordCommands`, `ScarletEventListener` | real, working partial port: connects with a bot token and registers/dispatches seventeen top-level slash commands. `/vrchat-group` includes every currently identified Java subcommand, including the stateful `open-instance` component/modal picker (see Update 13), and all three watched-list families now include their full Java command surfaces (see Updates 15-16). Shared VRChat/data/settings/list state is available through serenity's `TypeMap`; unattended VRChat login and common linked-account/permission checks are wired. The remaining Java command and moderation-event surfaces are still being inventoried and ported. |
-| `scarlet-vrchat` | `ScarletVRChat*`, `net.sybyline.scarlet.ext` (VRC-related) | real, working skeleton: VRChat's non-standard Basic Auth, login + TOTP 2FA, encrypted session/TOTP persistence, group audit log lookups, get-user, and the group moderation surface (get/ban/unban/member/roles/search — see `client.rs`, every endpoint confirmed against the community OpenAPI spec, not guessed) plus `user_has_group_permission` — all tested against a real mock HTTP server (`wiremock`), not just type-checked. No generated API client (see `client.rs` docs). Also: `log_tail` (port of `ScarletVRChatLogs`/`VrcAppData`) — locates and live-tails VRChat's own local `output_log_*.txt` (a different data source than the REST API above; this is what actually populates the Instance tab's player table from a running VRChat client), with Steam/Proton app-data-dir detection on Linux and `HOME`/`USERPROFILE`/`HOMEDRIVE`+`HOMEPATH` fallback for Windows/macOS. Line-parsing is unit-tested against every branch of the real log format; live growing-file tailing (preamble-catch-up vs. live) is tested end-to-end against a real appended-to file, not just the parser in isolation — but still **not yet confirmed against an actual running VRChat client** (no VRChat installed in this sandbox), so treat the live-tailing half as "should work" until the repo owner confirms it on their Linux machine |
-| `scarlet-dave` | `libdave-maven/*`, `net.sybyline.scarlet.server.discord.dave`, `moe.kyokobot.libdave` | data types only; MLS crypto engine + native Opus/codec bindings not started |
-| `scarlet-ui` | `net.sybyline.scarlet.ui`, `ScarletUI`, `ScarletDiscordUI`, `IScarletUI` (Swing/FlatLaf, ~8,500 lines total) | **visually confirmed working by the repo owner** on their own machine (screenshot review round-trip, see below). A first-run setup wizard (`setup.rs`: vibe-coded notice → Discord bot token/guild → real VRChat login with TOTP) runs before any of this on a fresh install — see item 11 below. Real toolbar, Instance/Settings/CLI tabs, and the full 17-column live player table are present. Table columns can be sorted, reordered, resized, hidden, and restored through Java's `ui_instance_columns` format; Unban and Invite remain hidden by default like Java. Ban/Unban/Invite call the shared VRChat client. The Settings tab is wired to the real `SettingsRegistry`, the status bar uses Java's wording, window geometry persists through `uiBounds`, and `TrustRank` is fully ported. Some toolbar actions and most of the CLI interpreter remain incomplete. |
+| `scarlet-discord` | `net.sybyline.scarlet.server.discord`, `ScarletDiscordJDA`, `ScarletDiscordCommands`, `ScarletEventListener` | working port with every Java command leaf accounted for: 130 ported and 31 owner-approved exclusions (scheduling, report templates, evidence submission, and the native updater). Commands, components, modals, audit polling/routing, moderation events, live-instance monitoring, voice/TTS routing, and DAVE are implemented. Live testing against the owner's Discord server is still required, especially permissions, threads, and interaction timing. |
+| `scarlet-vrchat` | `ScarletVRChat*`, `net.sybyline.scarlet.ext` (VRC-related) | working client for authentication (email/username, TOTP/email OTP, encrypted cookies and cached TOTP), group moderation/audit/instance operations, user/world/avatar search, caches, local VRChat log discovery/tailing, and secure instance launching. Endpoint contracts and log parsing are extensively mock/unit tested; production VRChat behavior remains part of hands-on release testing. |
+| `scarlet-dave` | `libdave-maven/*`, `net.sybyline.scarlet.server.discord.dave`, `moe.kyokobot.libdave` | historical compatibility/data scaffolding; the live Discord DAVE E2EE implementation is provided through Songbird's `davey` integration and is wired into voice connections |
+| `scarlet-ui` | `net.sybyline.scarlet.ui`, `ScarletUI`, `ScarletDiscordUI`, `IScarletUI` (Swing/FlatLaf, ~8,500 lines total) | working modernized egui port, visually reviewed by the owner. Setup/auth/2FA, toolbar actions, resizable persistent player table, settings editor, CLI, TTS, cache cleanup, provider/list management, diagnostics, confirmation flows, scale/accent settings, and orderly shutdown are implemented. Further UI changes should be driven by hands-on testing rather than the old Swing layout. |
 | `scarlet` (bin) | `Main.java` / `Scarlet.java` entry point | wires settings + Discord + UI together; runs for real (`cargo run -p scarlet`). Spawns the VRChat log tailer and dispatches its events into real `UiState` player join/update/leave calls (`dispatch_vrchat_log_events`), so the Instance tab reflects a locally-running VRChat client without any REST polling. No longer spawns Discord eagerly at startup — that now happens once `scarlet-ui`'s setup wizard resolves a token (see below), or immediately for a headless run (no wizard to show) |
 
-## Biggest files still to port (line counts, `src/main/java/net/sybyline/scarlet/`)
+## Java reference files retained for final parity checks
+
+This is a reference-size list, not a claim that each file remains unported.
+Rust functionality is split across smaller modules and the command inventory
+is now complete. Keep these sources until live testing and final cleanup are
+finished; they remain useful when a behavioral discrepancy appears.
 
 - `ScarletDiscordCommands.java` — 5,765 (all slash commands)
 - `ScarletDiscordJDA.java` — 4,068 (JDA client wiring, → serenity)
@@ -32,7 +45,9 @@ Crate layout (`rust/crates/`), each mapped to a Java package/class group:
 - `ScarletEventListener.java` — 1,364
 - `ScarletSettings.java` — 1,204 (typed settings/FileValued<T> system)
 - `ScarletData.java` — 1,030
-- Plus `ext/`, `util/`, `util/tts/`, `server/discord/dave/` packages not yet inventoried in detail.
+- Plus `ext/`, `util/`, `util/tts/`, and `server/discord/dave/`, retained for
+  behavioral reference even where Rust uses a different library or module
+  boundary.
 
 ## Scope decisions (agreed with the repo owner, 27 Sep 2026)
 
@@ -40,9 +55,9 @@ The goal is a **full 1:1 port** of the Java build, with these exceptions,
 decided feature by feature rather than inferred:
 
 **Keep and port:** desktop TTS, DAVE E2EE voice, the animated-emoji tools,
-avatar-search providers, `/server-restart`, `/set-voice-channel`, and every
-Discord command (all of them, whatever the exact count turns out to be —
-Java has 50 top-level and 193 total `@SlashCmd` entries).
+avatar-search providers, normal `/server-restart`, `/set-voice-channel`, and every
+in-scope Discord command. The executable Java command inventory contains 161
+leaves; 130 are ported and 31 are explicit exclusions below.
 
 **Dropped, do not port:** the mobile companion (`ScarletMobile`, FCM relay,
 pairing), evidence submission (`/submit-evidence`, `ScarletEvidence`), the
@@ -50,6 +65,8 @@ report-template subsystem, LibreTranslate advisory translation, `/schedule`
 and calendar events, and training/simulation mode (`ScarletSimulation`, the
 UI's `parkedPlayers`/training view). Where Java calls into one of these, the
 Rust port omits the call and says so in a comment rather than stubbing it.
+The `server-restart update-now` native updater is also excluded by owner
+decision; this private repository does not need a self-update subsystem.
 
 **Other standing decisions:**
 
@@ -79,7 +96,9 @@ Rust port omits the call and says so in a comment rather than stubbing it.
 1. ~~`scarlet-gif`~~ **done.** `AnimatedGifEncoder`/`LZWEncoder`/`NeuQuant`/`GifDecoder` all ported to `crates/scarlet-gif/src/{encoder,lzw,neuquant,decoder}.rs`. All four are pinned with byte-for-byte golden tests cross-checked against the real Java classes compiled with OpenJDK 21 (see the `matches_java_reference_output_byte_for_byte` tests) — do this same cross-check (`javac` + a small harness in the same package, diff the output) for any other numerically-tricky file before trusting a port of it. `GifDecoder` additionally has a real encode-with-our-encoder-then-decode-with-our-decoder round-trip test, and was manually verified frame-by-frame against the real Java decoder on a generated multi-frame GIF before the golden test was written (not just assumed correct because the round-trip test passed). `AnimatedGifEncoder`'s `BufferedImage`/`Graphics2D` resize-on-add (`scaleToFit`) was intentionally dropped, not silently approximated — see the doc comment on `encoder.rs` for the replacement API (raw RGB buffers) and the `FrameSizeMismatch` error it returns instead of resampling. `GifDecoder` represents frames as packed-ARGB `Vec<u32>` instead of `BufferedImage` (see `decoder.rs` docs for why that's exactly equivalent here, not an approximation).
 2. ~~Port `ScarletSettings`~~ **done** (`scarlet_core::settings`: `store` = the JSON half, `registry` = the `Preferences`-replacement half, `file_valued` = the typed-settings registry with a dyn-safe `SettingDescriptor` trait standing in for Java's non-object-safe `FileValuedVisitor` generic-method interface, `backup_warning` + `prompt` for the two UI-adjacent pieces deferred to `scarlet-ui`). Two real Java quirks were caught by porting to working tests rather than guessing: `FileValued.set()` caches/persists the *raw* input value, not the validated/clamped/pattern-extracted one (only the change-listener notification sees the validated value) — confirmed against the actual Java logic and preserved, with tests documenting it so it isn't "fixed" by accident later.
 3. ~~Port `ScarletData`~~ **done** (`scarlet_core::data`). Skipped the type-erased `Datum<?>`/`Data<?>` registry Java uses — grepping the codebase shows it's only ever called from inside `ScarletData` itself for five fixed (name/kind, type) pairs, so `ScarletData` now just has five concrete typed fields instead of reinventing Java's reflection-driven registry. `AuditEntryMetadata.entry` is a `serde_json::Value` placeholder for the not-yet-ported `GroupAuditLogEntry` VRChat model — swap it once that's ported (task 6), don't invent a partial model now. Also ported along the way: `UniqueStrings` (`scarlet_core::unique_strings`) and a `java_string_hash_code` port (`scarlet_core::java_hash`), the latter kept as an exact algorithmic port (not just "a hash") so a data directory carried over from a Java install stays filterable by custom-event type without rewriting every file.
-4. The rest of `Scarlet.java`'s data-dir resolution/migration logic → `scarlet_core::paths` (the app-identity constants are already ported to `scarlet_core::identity`; this is the remainder of that god-class's static init block, still not started).
+4. ~~The rest of `Scarlet.java`'s data-dir resolution/migration logic~~ **done**
+   in `scarlet_core::paths`, including legacy directory discovery, explicit
+   overrides, remembered choices, and conflicting-config reporting.
 5. ~~`scarlet-discord`: serenity client bootstrap + event listener skeleton~~ **done** (`client.rs`/`handler.rs`/`token.rs`/`commands/`). Verified with an actual `cargo run`, not just a type-checked guess: with no token configured it logs and exits cleanly; `Settings::open` creates real `registry.json`/`secure-prefs.json`/log files on disk. Next: port `/scarlet-version`-shaped commands one at a time from `ScarletDiscordCommands.java`, and start on `ScarletEventListener.java` (moderation event handling) once a few commands exist to give it something to act on.
 6. ~~`scarlet-vrchat`: auth/cookie-jar + a handful of high-traffic endpoints~~ **done for the skeleton** (`basic_auth.rs`/`client.rs`/`models.rs`). VRChat's non-standard "percent-encode before base64" Basic Auth quirk is ported exactly (confirmed against the Java version's own comment explaining why RFC-7617-correct clients fail VRChat logins) and covered by a test that would catch a regression to plain base64. Login, TOTP verification, persistent encrypted cookies/TOTP seeds, and group-audit-log pagination are all tested against a real local mock server (`wiremock`), not just compiled and trusted. The generated client's hundreds of low-use endpoints are still added incrementally. Alt-account support is deliberately out of scope at the repo owner's request and is not a parity gap.
 7. ~~Revisit UI~~ **matches the real shape now, confirmed on a real display.** Toolkit: egui/eframe (immediate-mode, pure Rust, no native toolkit cross-compile concerns, good fit for a live-updating player list). `UiState` is real and unit-tested — the actual data model behind `IScarletUI`'s contract (player join/update/leave/sort, connection status, announcements, CLI log, TTS toggle), safely shareable across threads (no Swing-EDT equivalent needed for an immediate-mode renderer) — a fresh instance always starts empty, there is no seeded/sample data anywhere (guarded by `fresh_state_has_no_seeded_players`). `main.rs` was restructured off `#[tokio::main]` to a manually-built runtime specifically so the GUI can own the real OS main thread (`winit` requires this on some platforms) while Discord runs on background tokio tasks. The repo owner ran this on their own machine and confirmed the window opens and matches the target layout (toolbar/tabs/table/status bar) from a real screenshot of the Java app, which is how the exact column set and status-bar wording here were confirmed rather than guessed. Remaining: `ScarletUI.java`'s actual moderation-action wiring (Ban/Unban/Invite/Create Instance/Import Groups/Sync Discord), the real CLI command interpreter, and `ScarletDiscordUI.java`'s Discord config panel are still stubs/not started — build them incrementally against this now-confirmed-working foundation, and get another screenshot after any further UI change since this container still can't render one itself.
