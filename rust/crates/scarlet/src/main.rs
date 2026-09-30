@@ -194,6 +194,17 @@ fn main() -> anyhow::Result<()> {
         shared.staff_list.clone(),
         shared.watched_users.clone(),
     ));
+    let tts_route = Arc::new(scarlet_ui::tts::TtsSinkAdapter::new(
+        tts.clone(),
+        settings.clone(),
+        Some(scarlet_discord::voice_tts::DiscordVoiceTts::new(
+            voice_manager,
+            shared.discord_config.clone(),
+            settings.clone(),
+            runtime.handle().clone(),
+        )),
+        Some(ui_state.clone()),
+    ));
     let listener = scarlet_events::ScarletEventListener::new(scarlet_events::listener::ListenerDeps {
         ui: Arc::new(ui_state.clone()),
         vrchat: shared.vrchat_client.clone(),
@@ -204,17 +215,7 @@ fn main() -> anyhow::Result<()> {
         watched_avatars: shared.watched_avatars.clone(),
         watched_groups: shared.watched_groups.clone(),
         pronoun_lists: pronoun_lists.clone(),
-        tts: Arc::new(scarlet_ui::tts::TtsSinkAdapter::new(
-            tts.clone(),
-            settings.clone(),
-            Some(scarlet_discord::voice_tts::DiscordVoiceTts::new(
-                voice_manager,
-                shared.discord_config.clone(),
-                settings.clone(),
-                runtime.handle().clone(),
-            )),
-            Some(ui_state.clone()),
-        )),
+        tts: tts_route.clone(),
         avatar_search: Arc::new(scarlet_discord::avatar_search::ListenerAvatarSearch::new(
             avatar_search.clone(),
             settings.clone(),
@@ -338,6 +339,7 @@ fn main() -> anyhow::Result<()> {
             data_dir,
             runtime.handle().clone(),
             tts,
+            tts_route,
             pronoun_lists,
             two_factor_tx,
             two_factor_rx,

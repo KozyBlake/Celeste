@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use serenity::model::id::{ChannelId, GuildId};
+use songbird::{Event, EventContext, EventHandler, TrackEvent};
 
 #[derive(Clone)]
 pub struct DiscordVoiceTts {
@@ -176,15 +176,68 @@ async fn queue_audio_file(
     let call = manager
         .join(GuildId::new(guild_id), ChannelId::new(channel_id))
         .await?;
-    call.lock()
+    let track = call
+        .lock()
         .await
         .enqueue_input(songbird::input::File::new(output.clone()).into())
         .await;
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(10 * 60)).await;
-        let _ = tokio::fs::remove_file(output).await;
-    });
+
+    // `File` is opened lazily by Songbird. Deleting it immediately after
+    // enqueueing recreates the exact race fixed in Java's TtsService: a
+    // queued track can reach the decoder after its WAV has disappeared.
+    // A fixed timeout is not safe either when several announcements are
+    // queued. Keep the file until Songbird says this particular track has
+    // ended (or failed), then remove it.
+    let cleanup = DeleteAudioFile::new(output);
+    track.add_event(Event::Track(TrackEvent::End), cleanup.clone())?;
+    if let Err(error) = track.add_event(Event::Track(TrackEvent::Error), cleanup) {
+        // End cleanup is already installed, so an inability to add the
+        // extra error hook must not turn a successfully queued utterance
+        // into a reported playback failure.
+        tracing::debug!(%error, "Could not attach Discord TTS error cleanup hook");
+    }
+    tracing::info!(guild_id, channel_id, "Queued Discord TTS audio");
     Ok(())
+}
+
+#[derive(Clone)]
+struct DeleteAudioFile {
+    path: Arc<PathBuf>,
+    removed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl DeleteAudioFile {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path: Arc::new(path),
+            removed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    async fn remove(&self) {
+        if !self
+            .removed
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            if let Err(error) = tokio::fs::remove_file(self.path.as_ref()).await {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        %error,
+                        path = %self.path.display(),
+                        "Could not remove completed Discord TTS audio file"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EventHandler for DeleteAudioFile {
+    async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
+        self.remove().await;
+        None
+    }
 }
 
 async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Result<()> {
@@ -302,5 +355,18 @@ mod tests {
         assert_eq!(&bytes[..4], b"RIFF");
         assert!(bytes.len() > 44);
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn completed_track_cleanup_removes_the_wave_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queued.wav");
+        tokio::fs::write(&path, b"RIFF test data").await.unwrap();
+        let cleanup = DeleteAudioFile::new(path.clone());
+
+        cleanup.clone().remove().await;
+        cleanup.remove().await;
+
+        assert!(!path.exists());
     }
 }

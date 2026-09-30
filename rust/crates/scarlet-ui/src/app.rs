@@ -459,6 +459,7 @@ pub struct ScarletApp {
     watched_avatars: Arc<scarlet_core::watched_entities::WatchedEntities>,
     pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
     tts: Arc<crate::tts::TtsService>,
+    tts_route: Arc<crate::tts::TtsSinkAdapter>,
     tab: Tab,
     /// Java uses `DO_NOTHING_ON_CLOSE` and asks before quitting
     /// (`ScarletUI.java:1281-1288`, `uiModalExit` at `:1391-1401`), so the
@@ -542,6 +543,7 @@ impl ScarletApp {
         data_dir: PathBuf,
         runtime_handle: tokio::runtime::Handle,
         tts: Arc<crate::tts::TtsService>,
+        tts_route: Arc<crate::tts::TtsSinkAdapter>,
         pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
         two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
         two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
@@ -651,6 +653,7 @@ impl ScarletApp {
             watched_avatars,
             pronoun_lists,
             tts,
+            tts_route,
             tab: Tab::Instance,
             exit_prompt_open: false,
             exit_confirmed: false,
@@ -2990,11 +2993,13 @@ impl ScarletApp {
             }
             "tts" => {
                 if rest.is_empty() { return; }
-                let voice = self.settings.as_ref().map(|s| s.tts_voice_name.get()).unwrap_or_default();
-                match self.tts.submit(rest, voice) {
-                    Ok(()) => self.state.append_cli_output(format!("Submitting TTS: `{rest}`")),
-                    Err(error) => self.state.append_cli_output(format!("[warn] TTS service not available: {error}")),
-                }
+                self.tts_route.submit_routed("cli", rest);
+                let route = if self.settings.as_ref().is_some_and(|settings| settings.tts_use_default_audio_device.get()) {
+                    "local audio"
+                } else {
+                    "Discord voice"
+                };
+                self.state.append_cli_output(format!("Submitting TTS to {route}: `{rest}`"));
             }
             "reboot" | "restart" => {
                 self.state.append_cli_output(if self.process_controller.restart() { "Restarting Celeste..." } else { "Restart is already queued" });
@@ -3385,6 +3390,7 @@ pub fn run(
     data_dir: PathBuf,
     runtime_handle: tokio::runtime::Handle,
     tts: Arc<crate::tts::TtsService>,
+    tts_route: Arc<crate::tts::TtsSinkAdapter>,
     pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
     two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
     two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
@@ -3418,6 +3424,7 @@ pub fn run(
                 data_dir,
                 runtime_handle,
                 tts,
+                tts_route,
                 pronoun_lists,
                 two_factor_tx,
                 two_factor_rx,

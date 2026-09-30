@@ -292,3 +292,19 @@ player table share the same surface hierarchy. Toolbar actions are separated
 into navigation, primary work, voice, and View/Help groups. The CLI is a framed
 command console with a stable header, output surface and prompt, and a View menu
 makes its visibility discoverable even while the tab is hidden.
+
+## Update 2026-09-30: Discord-only TTS routing and WAV lifetime
+
+Java's current `TtsService.playPreparedAudio` treats
+`tts_use_default_audio_device` as an output-route switch: enabled means local
+system audio, while disabled submits the synthesized WAV to Discord and does
+not fall back locally. Rust event callouts already used that switch, and the
+desktop CLI's `tts` command now goes through the same shared route instead of
+bypassing it and always playing locally.
+
+Discord WAV cleanup is tied to Songbird's track `End`/`Error` events. The old
+fixed ten-minute deletion could remove a lazily opened file while it was still
+waiting behind a long queue—the same class of race called out in Java's source.
+The file now survives for exactly as long as its queued track needs it and is
+deleted afterward. Route-selection, real WAV synthesis, and cleanup regression
+tests bring the workspace total to 487 passing tests.

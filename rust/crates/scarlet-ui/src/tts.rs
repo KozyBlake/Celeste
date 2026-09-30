@@ -552,6 +552,30 @@ mod tests {
             assert!(Engine::detect().is_some());
         }
     }
+
+    #[test]
+    fn disabling_default_audio_selects_discord_only() {
+        assert_eq!(select_output_route(true, true), OutputRoute::Local);
+        assert_eq!(select_output_route(false, true), OutputRoute::Discord);
+        assert_eq!(select_output_route(false, false), OutputRoute::Unavailable);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputRoute {
+    Local,
+    Discord,
+    Unavailable,
+}
+
+fn select_output_route(use_default_audio_device: bool, discord_available: bool) -> OutputRoute {
+    if use_default_audio_device {
+        OutputRoute::Local
+    } else if discord_available {
+        OutputRoute::Discord
+    } else {
+        OutputRoute::Unavailable
+    }
 }
 
 /// Adapts the desktop [`TtsService`] to the event listener's
@@ -600,21 +624,24 @@ impl TtsSinkAdapter {
     /// broken.
     fn speak_now(&self, marker: &str, text: &str) {
         let voice = self.settings.tts_voice_name.get();
-        if self.settings.tts_use_default_audio_device.get() {
-            if let Err(err) = self.service.submit(text, voice) {
-                tracing::debug!("TTS({marker}): {err}");
+        match select_output_route(
+            self.settings.tts_use_default_audio_device.get(),
+            self.discord.is_some(),
+        ) {
+            OutputRoute::Local => {
+                if let Err(err) = self.service.submit(text, voice) {
+                    tracing::debug!("TTS({marker}): {err}");
+                }
             }
-            return;
-        }
-        match &self.discord {
-            Some(discord) => {
+            OutputRoute::Discord => {
+                let discord = self.discord.as_ref().expect("route checked Discord availability");
                 discord.submit(text, &voice);
                 self.publish_route_status();
             }
             // Java logs exactly this and drops the utterance rather than
             // falling back to the speakers, because "not the local device"
             // is the thing the user asked for.
-            None => {
+            OutputRoute::Unavailable => {
                 let problem = "TTS has no output route: Discord voice isn't available and \
                                \"use default audio device\" is off.";
                 tracing::warn!("TTS({marker}): {problem}");
@@ -623,6 +650,13 @@ impl TtsSinkAdapter {
                 }
             }
         }
+    }
+
+    /// Route an explicit utterance through the same switch used by event
+    /// callouts. The desktop CLI uses this so `tts <text>` does not bypass
+    /// Discord whenever local-device playback is disabled.
+    pub fn submit_routed(&self, marker: &str, text: &str) {
+        self.speak_now(marker, text);
     }
 }
 
