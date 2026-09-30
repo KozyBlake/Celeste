@@ -1197,6 +1197,19 @@ impl VrChatClient {
 
     // ---- worlds / avatars / instances ----
 
+    /// Java `GroupsApi.getGroupInstances`: `GET /groups/{groupId}/instances`.
+    /// Kept as JSON because the lifecycle worker only needs the location,
+    /// instance id, and nested world identity from VRChat's much larger
+    /// `GroupInstance` response.
+    pub async fn get_group_instances(&self, group_id: &str) -> Result<Vec<serde_json::Value>, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/groups/{group_id}/instances")))
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     /// `GET /prints/{printId}`. Kept as JSON because Celeste only needs the
     /// owner and nested file/image fields for Discord audit decoration.
     pub async fn get_print(&self, print_id: &str) -> Result<serde_json::Value, VrChatError> {
@@ -2557,6 +2570,24 @@ mod tests {
             client.get_user_inventory_item("usr_1", "inv_1").await.unwrap()["itemType"],
             "emoji"
         );
+    }
+
+    #[tokio::test]
+    async fn get_group_instances_uses_the_groups_instances_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/instances"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "instanceId": "123~group(grp_1)",
+                "location": "wrld_1:123~group(grp_1)",
+                "world": {"id": "wrld_1", "name": "Test World"}
+            }])))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let instances = client.get_group_instances("grp_1").await.unwrap();
+        assert_eq!(instances[0]["location"], "wrld_1:123~group(grp_1)");
     }
 
     #[tokio::test]

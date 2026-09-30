@@ -142,6 +142,14 @@ fn main() -> anyhow::Result<()> {
     // the instance table. `spawn_tailer` reports and then stops on a machine
     // with no VRChat client, so this costs nothing there.
     let tailer_events = scarlet_vrchat::log_tail::spawn_tailer(&runtime.handle().clone());
+    let audit_emitter = Arc::new(scarlet_discord::events::audit_emitter::DiscordAuditEmitter::new(
+        discord_http,
+        discord_config,
+        shared.scarlet_data.clone(),
+        settings.clone(),
+        shared.staff_list.clone(),
+        shared.watched_users.clone(),
+    ));
     let listener = scarlet_events::ScarletEventListener::new(scarlet_events::listener::ListenerDeps {
         ui: Arc::new(ui_state.clone()),
         vrchat: shared.vrchat_client.clone(),
@@ -166,16 +174,18 @@ fn main() -> anyhow::Result<()> {
             avatar_search.clone(),
             settings.clone(),
         )),
-        emitter: Arc::new(scarlet_discord::events::audit_emitter::DiscordAuditEmitter::new(
-            discord_http,
-            discord_config,
-            shared.scarlet_data.clone(),
-            settings.clone(),
-            shared.staff_list.clone(),
-            shared.watched_users.clone(),
-        )),
+        emitter: audit_emitter.clone(),
     });
     runtime.spawn(scarlet_events::listener::run(listener, tailer_events));
+
+    // Java independently reconciles tracked instance monitors every five
+    // minutes and enforces the configured world/18+ policy every minute.
+    runtime.spawn(scarlet_discord::events::instance_lifecycle::run(
+        shared.vrchat_client.clone(),
+        settings.clone(),
+        shared.scarlet_data.clone(),
+        audit_emitter,
+    ));
 
     // Java's main loop continuously polls the VRChat group audit endpoint.
     // This is separate from the local output-log listener above: it is what

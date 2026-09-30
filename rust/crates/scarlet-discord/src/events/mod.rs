@@ -10,4 +10,5 @@
 
 pub mod audit_emitter;
 pub mod audit_poller;
+pub mod instance_lifecycle;
 pub mod ticket;

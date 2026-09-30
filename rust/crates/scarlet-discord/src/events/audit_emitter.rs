@@ -21,8 +21,6 @@
 //! **Not ported, tracked rather than faked:** the "Report <content>" links
 //! on the spawn embeds (Java builds VRChat-Zendesk help-desk URLs through
 //! `VRChatHelpDeskURLs`, a large per-category form-field builder that isn't
-//! ported), the sticker/print/emoji/prop *lookups* that decorate those
-//! embeds with images and author names (their VRChat endpoints aren't
 //! ported), and the training-mode
 //! channel split (training mode is out of scope — see PORTING.md).
 
@@ -54,6 +52,8 @@ mod audit_type {
     pub const SPAWN_PRINT: (&str, u32) = ("groupex.instance.user.print", 0x7F007F);
     pub const SPAWN_EMOJI: (&str, u32) = ("groupex.instance.user.emoji", 0x7F007F);
     pub const SPAWN_PROP: (&str, u32) = ("groupex.instance.user.prop", 0x7F007F);
+    pub const INSTANCE_INACTIVE: (&str, u32) = ("groupex.instance.inactive", 0x7F7FFF);
+    pub const INSTANCE_ENFORCE: (&str, u32) = ("groupex.instance.enforce", 0xFF0000);
 }
 
 /// Java's `ScarletDiscord.FOOTER_PREFIX`.
@@ -321,6 +321,41 @@ impl DiscordAuditEmitter {
         // the setting isn't silently forgotten when they land.
         let _ = &self.settings;
         None
+    }
+
+    /// Java `emitExtendedInstanceInactive`, sent after a previously tracked
+    /// location disappears from `getGroupInstances`.
+    pub async fn emit_instance_inactive(&self, location: &str) {
+        let embed = self
+            .base_embed(audit_type::INSTANCE_INACTIVE)
+            .title("Instance Inactive")
+            .field("Location", format!("`{location}`"), false);
+        self.cond_emit_ex(
+            audit_type::INSTANCE_INACTIVE,
+            false,
+            false,
+            Some(location),
+            CreateMessage::new().embed(embed),
+        )
+        .await;
+    }
+
+    /// Java `emitExtendedInstanceEnforcement`.
+    pub async fn emit_instance_enforcement(&self, location: &str, world_name: &str, reason: &str) {
+        let embed = self
+            .base_embed(audit_type::INSTANCE_ENFORCE)
+            .title("Instance Enforcement")
+            .field("Location", format!("`{location}`"), false)
+            .field("World", escape_markdown(world_name), false)
+            .field("Reason", reason, false);
+        self.cond_emit_ex(
+            audit_type::INSTANCE_ENFORCE,
+            false,
+            false,
+            Some(location),
+            CreateMessage::new().embed(embed),
+        )
+        .await;
     }
 }
 
