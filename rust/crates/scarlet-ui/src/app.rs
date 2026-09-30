@@ -411,6 +411,12 @@ pub struct AvatarStatsView {
     note: Option<String>,
 }
 
+struct PendingCacheCleanup {
+    files: Vec<PathBuf>,
+    bytes: u64,
+    retention_days: i32,
+}
+
 pub struct ScarletApp {
     state: UiState,
     settings: Option<Arc<Settings>>,
@@ -496,6 +502,9 @@ pub struct ScarletApp {
     import_groups_url: String,
     import_groups_rx: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
     import_groups_file_rx: Option<std::sync::mpsc::Receiver<PendingGroupFileImport>>,
+    cache_cleanup_confirm: Option<PendingCacheCleanup>,
+    cache_cleanup_rx: Option<std::sync::mpsc::Receiver<scarlet_core::cache_cleanup::CleanupReport>>,
+    cache_cleanup_notice: Option<String>,
     visual_style_installed: bool,
 }
 
@@ -629,6 +638,9 @@ impl ScarletApp {
             import_groups_url: String::new(),
             import_groups_rx: None,
             import_groups_file_rx: None,
+            cache_cleanup_confirm: None,
+            cache_cleanup_rx: None,
+            cache_cleanup_notice: None,
             visual_style_installed: false,
         }
     }
@@ -661,6 +673,39 @@ impl ScarletApp {
         style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 36, 46);
         style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(42, 51, 65);
         style.visuals.widgets.active.weak_bg_fill = egui::Color32::from_rgb(38, 104, 170);
+
+        // Setting the fills above without also setting the text and border
+        // colours leaves egui's defaults on top of them. Those defaults are
+        // tuned for egui's own darker, desaturated widgets, so on the
+        // saturated blue pressed/selected fill the label stayed a dim grey
+        // and the border kept a bright stock outline -- which is what made a
+        // pressed or selected control look wrong rather than merely
+        // different. A fill and the text on it have to be chosen together.
+        let text_default = egui::Color32::from_rgb(205, 213, 226);
+        let text_emphasis = egui::Color32::from_rgb(232, 240, 252);
+        let border_subtle = egui::Color32::from_rgb(44, 53, 67);
+        style.visuals.widgets.noninteractive.fg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(168, 178, 193));
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, border_subtle);
+        style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_default);
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border_subtle);
+        style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text_emphasis);
+        style.visuals.widgets.hovered.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(66, 78, 96));
+        // On the blue, text has to be near-white to stay readable, and the
+        // border has to be a lighter blue rather than a grey outline.
+        style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, text_emphasis);
+        style.visuals.widgets.active.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(74, 140, 205));
+        style.visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, text_emphasis);
+        style.visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, border_subtle);
+        // `selectable_value` (the tab bar, the settings sidebar, the
+        // create-instance pickers) fills with `selection.bg_fill` and draws
+        // its label with `selection.stroke`, so those two must agree with
+        // each other for a selected tab to read as selected rather than
+        // smudged.
+        style.visuals.selection.stroke = egui::Stroke::new(1.0, text_emphasis);
+
         ctx.set_style(style);
         self.visual_style_installed = true;
     }
@@ -2195,6 +2240,17 @@ impl ScarletApp {
                     ui.label(egui::RichText::new("Restart Celeste after editing so the live validator reloads them.").small().weak());
                 }
                 SettingCategory::System => {
+                    let cleanup_running = self.cache_cleanup_rx.is_some();
+                    if ui
+                        .add_enabled(!cleanup_running, egui::Button::new(if cleanup_running {
+                            "Cache cleanup running..."
+                        } else {
+                            "Run cache cleanup now"
+                        }))
+                        .clicked()
+                    {
+                        self.prepare_cache_cleanup();
+                    }
                     if ui.button("Restart Celeste").clicked() {
                         self.state.append_cli_output(if self.process_controller.restart() { "Restarting Celeste..." } else { "Restart is already queued" });
                     }
@@ -2233,6 +2289,111 @@ impl ScarletApp {
             }
         });
         ui.add_space(10.0);
+    }
+
+    fn prepare_cache_cleanup(&mut self) {
+        let Some(settings) = self.settings.as_ref() else { return };
+        let days = settings.cache_cleanup_days.get().clamp(1, 30);
+        let cutoff = std::time::SystemTime::now()
+            - std::time::Duration::from_secs(days as u64 * 24 * 60 * 60);
+        let files = scarlet_core::cache_cleanup::collect_eligible(
+            &self.data_dir,
+            &scarlet_vrchat::log_tail::resolve_vrc_app_data_dir(),
+            cutoff,
+        );
+        if files.is_empty() {
+            self.cache_cleanup_notice = Some(format!(
+                "Nothing to clean. No disposable files older than {days} day(s) were found."
+            ));
+            return;
+        }
+        let bytes = files
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|metadata| metadata.len())
+            .sum();
+        self.cache_cleanup_confirm = Some(PendingCacheCleanup {
+            files,
+            bytes,
+            retention_days: days,
+        });
+    }
+
+    fn cache_cleanup_windows(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.cache_cleanup_rx {
+            match rx.try_recv() {
+                Ok(report) => {
+                    self.cache_cleanup_rx = None;
+                    let message = format!(
+                        "Cache cleanup complete: {} file(s) deleted, {} failed, {:.1} MiB freed.",
+                        report.deleted,
+                        report.failed,
+                        report.bytes_freed as f64 / (1024.0 * 1024.0),
+                    );
+                    self.state.append_cli_output(&message);
+                    self.cache_cleanup_notice = Some(message);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.cache_cleanup_rx = None;
+                    self.cache_cleanup_notice = Some("Cache cleanup stopped unexpectedly.".into());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        if let Some(pending) = self.cache_cleanup_confirm.as_ref() {
+            let count = pending.files.len();
+            let bytes = pending.bytes;
+            let days = pending.retention_days;
+            let mut confirm = false;
+            let mut cancel = false;
+            egui::Window::new("Confirm cache cleanup")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "{count} disposable file(s) older than {days} day(s) will be permanently deleted."
+                    ));
+                    ui.label(format!("Estimated space: {:.1} MiB", bytes as f64 / (1024.0 * 1024.0)));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        confirm = ui.button("Delete old files").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+            if cancel {
+                self.cache_cleanup_confirm = None;
+            } else if confirm {
+                let pending = self.cache_cleanup_confirm.take().unwrap();
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.cache_cleanup_rx = Some(rx);
+                if let Some(settings) = self.settings.clone() {
+                    self.runtime_handle.spawn_blocking(move || {
+                        let report = scarlet_core::cache_cleanup::delete_files(&pending.files);
+                        settings.last_cache_cleanup.set(Some(chrono::Utc::now()));
+                        let _ = tx.send(report);
+                    });
+                }
+            }
+        }
+
+        if self.cache_cleanup_notice.is_some() {
+            let message = self.cache_cleanup_notice.clone().unwrap();
+            let mut close = false;
+            egui::Window::new("Cache cleanup")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(message);
+                    ui.add_space(8.0);
+                    close = ui.button("Close").clicked();
+                });
+            if close {
+                self.cache_cleanup_notice = None;
+            }
+        }
     }
 
     /// The control for one setting, sized so the column lines up.
@@ -2643,6 +2804,7 @@ impl eframe::App for ScarletApp {
         self.import_groups_windows(ctx);
         self.avatar_stats_window(ctx);
         self.group_action_confirm_window(ctx);
+        self.cache_cleanup_windows(ctx);
 
         egui::CentralPanel::default()
             .frame(
