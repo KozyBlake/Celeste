@@ -699,14 +699,14 @@ impl ScarletApp {
             return;
         }
         let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8.0, 7.0);
-        style.spacing.button_padding = egui::vec2(11.0, 6.0);
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(12.0, 7.0);
         style.spacing.window_margin = egui::Margin::same(12.0);
         style.visuals.panel_fill = egui::Color32::from_rgb(16, 19, 25);
         style.visuals.window_fill = egui::Color32::from_rgb(22, 26, 34);
         style.visuals.extreme_bg_color = egui::Color32::from_rgb(10, 13, 18);
         style.visuals.faint_bg_color = egui::Color32::from_rgb(24, 29, 38);
-        style.visuals.selection.bg_fill = self.accent;
+        style.visuals.selection.bg_fill = self.accent.gamma_multiply(0.62);
         style.visuals.selection.stroke.color = egui::Color32::from_rgb(226, 239, 255);
         style.visuals.window_rounding = egui::Rounding::same(9.0);
         style.visuals.menu_rounding = egui::Rounding::same(7.0);
@@ -717,11 +717,11 @@ impl ScarletApp {
             &mut style.visuals.widgets.active,
             &mut style.visuals.widgets.open,
         ] {
-            widget.rounding = egui::Rounding::same(6.0);
+            widget.rounding = egui::Rounding::same(7.0);
         }
         style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 36, 46);
         style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(42, 51, 65);
-        style.visuals.widgets.active.weak_bg_fill = self.accent;
+        style.visuals.widgets.active.weak_bg_fill = self.accent.gamma_multiply(0.72);
 
         // Setting the fills above without also setting the text and border
         // colours leaves egui's defaults on top of them. Those defaults are
@@ -757,6 +757,36 @@ impl ScarletApp {
 
         ctx.set_style(style);
         self.visual_style_installed = true;
+    }
+
+    /// Shared visual primitives. Keeping these here prevents each newly
+    /// ported screen from inventing its own shade, border and corner radius.
+    fn card_frame() -> egui::Frame {
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(22, 27, 35))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                egui::Color32::from_rgb(45, 55, 69),
+            ))
+            .rounding(egui::Rounding::same(9.0))
+            .inner_margin(egui::Margin::same(12.0))
+    }
+
+    fn inset_frame() -> egui::Frame {
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(12, 15, 21))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                egui::Color32::from_rgb(37, 45, 57),
+            ))
+            .rounding(egui::Rounding::same(7.0))
+            .inner_margin(egui::Margin::same(10.0))
+    }
+
+    fn primary_button(&self, label: impl Into<egui::WidgetText>) -> egui::Button<'_> {
+        egui::Button::new(label)
+            .fill(self.accent.gamma_multiply(0.78))
+            .stroke(egui::Stroke::new(1.0_f32, self.accent))
     }
 
     fn window_title(&self) -> String {
@@ -852,17 +882,26 @@ impl ScarletApp {
             });
         });
 
-        ui.add_space(7.0);
+        ui.add_space(9.0);
+        ui.separator();
+        ui.add_space(3.0);
         ui.horizontal_wrapped(|ui| {
-            self.tab_bar(ui);
+            egui::Frame::none()
+                .fill(egui::Color32::from_rgb(12, 15, 21))
+                .rounding(egui::Rounding::same(8.0))
+                .inner_margin(egui::Margin::same(3.0))
+                .show(ui, |ui| self.tab_bar(ui));
             ui.separator();
 
-            if ui.button(egui::RichText::new("+ Create instance").strong()).clicked() {
+            if ui
+                .add(self.primary_button(egui::RichText::new("+ Create instance").strong()))
+                .clicked()
+            {
                 self.create_instance_open = true;
                 self.create_instance_error = None;
             }
 
-            ui.menu_button("Import groups...", |ui| {
+            ui.menu_button("Import groups", |ui| {
                 if ui.button("From URL...").clicked() {
                     self.import_groups_url_open = true;
                     self.import_groups_url.clear();
@@ -874,7 +913,7 @@ impl ScarletApp {
                 }
             });
 
-            ui.menu_button("Tools...", |ui| {
+            ui.menu_button("Tools", |ui| {
                 if ui.button("Open data folder").on_hover_text("Open the KozyBlake/Scarlet data directory").clicked() {
                     if let Err(err) = open::that(&self.data_dir) {
                         self.state.append_cli_output(format!("Could not open data folder: {err}"));
@@ -891,8 +930,8 @@ impl ScarletApp {
                     ui.close_menu();
                 }
             });
-
             ui.separator();
+
             let tts_on = self.state.tts_enabled();
             let voice_colour = if tts_on {
                 egui::Color32::from_rgb(91, 196, 125)
@@ -909,8 +948,23 @@ impl ScarletApp {
             if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
                 self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
             }
+            ui.separator();
 
-            ui.menu_button("Help...", |ui| {
+            ui.menu_button("View", |ui| {
+                let mut show_cli = self.cli_tab_visible();
+                if ui.checkbox(&mut show_cli, "Show CLI tab").changed() {
+                    if let Some(settings) = &self.settings {
+                        settings.show_cli_tab.set(Some(show_cli), "ui-view-menu");
+                    }
+                    if show_cli {
+                        self.tab = Tab::Cli;
+                    } else if self.tab == Tab::Cli {
+                        self.tab = Tab::Instance;
+                    }
+                }
+            });
+
+            ui.menu_button("Help", |ui| {
                 if ui.button("Diagnostics").clicked() {
                     self.diagnostics_open = true;
                     ui.close_menu();
@@ -1045,31 +1099,31 @@ impl ScarletApp {
         }
         let tabs = [(Tab::Instance, "Instance"), (Tab::Settings, "Settings"), (Tab::Cli, "CLI")];
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
             for (tab, label) in tabs {
                 if tab == Tab::Cli && !show_cli {
                     continue;
                 }
                 let selected = self.tab == tab;
                 let text = if selected {
-                    egui::RichText::new(label).strong().color(egui::Color32::from_rgb(112, 181, 247))
+                    egui::RichText::new(label)
+                        .strong()
+                        .color(egui::Color32::from_rgb(240, 246, 255))
                 } else {
                     egui::RichText::new(label)
                 };
                 let response = ui.add_sized(
-                    [76.0, 28.0],
-                    egui::Button::new(text).frame(false),
+                    [82.0, 30.0],
+                    egui::Button::new(text)
+                        .fill(if selected {
+                            self.accent.gamma_multiply(0.62)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        })
+                        .stroke(egui::Stroke::NONE),
                 );
                 if response.clicked() {
                     self.tab = tab;
-                }
-                if selected {
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(response.rect.left() + 9.0, response.rect.bottom() - 1.0),
-                            egui::pos2(response.rect.right() - 9.0, response.rect.bottom() - 1.0),
-                        ],
-                        egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(63, 139, 211)),
-                    );
                 }
             }
         });
@@ -1206,9 +1260,7 @@ impl ScarletApp {
             .as_ref()
             .and_then(|instance| instance.world_name.clone())
             .unwrap_or_else(|| "Current instance".to_string());
-        egui::Frame::none()
-            .fill(egui::Color32::from_rgb(22, 27, 35))
-            .rounding(egui::Rounding::same(8.0))
+        Self::card_frame()
             .inner_margin(if compact_height {
                 egui::Margin::symmetric(12.0, 7.0)
             } else {
@@ -1271,11 +1323,7 @@ impl ScarletApp {
         let active_sort = self.table_sort;
         let player_panel_height = ui.available_height();
 
-        egui::Frame::none()
-            .fill(egui::Color32::from_rgb(23, 28, 36))
-            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 59, 72)))
-            .rounding(egui::Rounding::same(10.0))
-            .inner_margin(egui::Margin::same(12.0))
+        Self::card_frame()
             .show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.set_min_height((player_panel_height - 24.0).max(0.0));
@@ -1286,10 +1334,7 @@ impl ScarletApp {
         });
         ui.add_space(8.0);
         let table_panel_height = ui.available_height();
-        egui::Frame::none()
-            .fill(egui::Color32::from_rgb(13, 16, 22))
-            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(38, 46, 58)))
-            .rounding(egui::Rounding::same(7.0))
+        Self::inset_frame()
             .inner_margin(egui::Margin::same(6.0))
             .show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -2120,7 +2165,7 @@ impl ScarletApp {
             ("Staff activity", None, Some("toast_notify_staff")),
         ];
         let find = |id: &str| descriptors.iter().find(|descriptor| descriptor.id() == id);
-        egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
+        Self::card_frame().show(ui, |ui| {
             ui.label(egui::RichText::new("Event notifications").strong().size(15.0));
             ui.label(egui::RichText::new("Choose how each event should get your attention.").small().weak());
             ui.add_space(8.0);
@@ -2171,10 +2216,17 @@ impl ScarletApp {
             })
             .collect();
 
-        egui::SidePanel::left("settings_categories").resizable(false).min_width(150.0).show_inside(ui, |ui| {
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("CATEGORIES").small().weak());
-            ui.add_space(2.0);
+        egui::SidePanel::left("settings_categories")
+            .resizable(false)
+            .exact_width(176.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(19, 23, 30))
+                    .inner_margin(egui::Margin::same(10.0)),
+            )
+            .show_inside(ui, |ui| {
+            ui.label(egui::RichText::new("SETTINGS").strong().small().weak());
+            ui.add_space(5.0);
             for category in SettingCategory::ALL {
                 let count = visible.iter().filter(|d| d.category() == category).count();
                 let label = if count == 0 {
@@ -2183,7 +2235,13 @@ impl ScarletApp {
                     egui::RichText::new(format!("{}  ({count})", category.label()))
                 };
                 let selected = self.settings_category == category;
-                if ui.selectable_label(selected, label).clicked() {
+                let response = ui.add_sized(
+                    [ui.available_width(), 32.0],
+                    egui::Button::new(label)
+                        .selected(selected)
+                        .stroke(egui::Stroke::NONE),
+                );
+                if response.clicked() {
                     Self::activate_settings_category(
                         &mut self.settings_category,
                         &mut self.settings_search,
@@ -2191,13 +2249,23 @@ impl ScarletApp {
                     );
                 }
             }
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             ui.separator();
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("Settings for features this build doesn't have are hidden.").small().weak());
+            ui.add_space(5.0);
+            ui.label(
+                egui::RichText::new("Unavailable features are hidden.")
+                    .small()
+                    .weak(),
+            );
         });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(16, 19, 25))
+                    .inner_margin(egui::Margin::same(14.0)),
+            )
+            .show_inside(ui, |ui| {
             let category = self.settings_category;
 
             ui.horizontal(|ui| {
@@ -2275,7 +2343,7 @@ impl ScarletApp {
                     while end < rows.len() && Self::setting_group(rows[end].id()) == group {
                         end += 1;
                     }
-                    egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
+                    Self::card_frame().show(ui, |ui| {
                         ui.label(egui::RichText::new(group).strong().size(15.0));
                         ui.add_space(5.0);
                         for (offset, descriptor) in rows[start..end].iter().enumerate() {
@@ -2315,7 +2383,7 @@ impl ScarletApp {
             return;
         }
         ui.add_space(2.0);
-        egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
+        Self::card_frame().show(ui, |ui| {
             ui.label(egui::RichText::new("Actions").strong().size(15.0));
             ui.add_space(5.0);
             match category {
@@ -2851,15 +2919,51 @@ impl ScarletApp {
     }
 
     fn cli_tab(&mut self, ui: &mut egui::Ui) {
-        let available_height = ui.available_height() - 30.0;
-        egui::ScrollArea::vertical().max_height(available_height.max(0.0)).stick_to_bottom(true).show(ui, |ui| {
-            for line in self.state.cli_log() {
-                ui.monospace(&line.0);
-            }
-        });
         ui.horizontal(|ui| {
-            let response = ui.text_edit_singleline(&mut self.cli_input);
-            let run = ui.button("Run").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+            ui.vertical(|ui| {
+                ui.heading("Command console");
+                ui.label(
+                    egui::RichText::new("Run local Celeste maintenance commands and inspect their output.")
+                        .small()
+                        .weak(),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Clear output").clicked() {
+                    self.state.clear_cli_log();
+                }
+            });
+        });
+        ui.add_space(8.0);
+
+        let available_height = (ui.available_height() - 50.0).max(0.0);
+        Self::inset_frame().show(ui, |ui| {
+            ui.set_min_height((available_height - 20.0).max(80.0));
+            egui::ScrollArea::vertical()
+                .max_height(available_height.max(80.0))
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for line in self.state.cli_log() {
+                        ui.label(
+                            egui::RichText::new(&line.0)
+                                .monospace()
+                                .color(egui::Color32::from_rgb(198, 211, 226)),
+                        );
+                    }
+                });
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(">").monospace().strong());
+            let width = (ui.available_width() - 78.0).max(120.0);
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.cli_input)
+                    .desired_width(width)
+                    .hint_text("Type help for available commands"),
+            );
+            let run = ui.add(self.primary_button("Run")).clicked()
+                || (response.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter)));
             if run && !self.cli_input.trim().is_empty() {
                 self.run_cli_command(ui.ctx(), self.cli_input.trim().to_string());
                 self.cli_input.clear();

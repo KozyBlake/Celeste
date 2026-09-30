@@ -281,3 +281,14 @@ is clicked. Previously the selected category and heading changed while stale
 cross-category search results remained visible, making the navigation appear
 nonfunctional after searching/editing a setting. Regression coverage brings
 the workspace total to 485 tests.
+
+## Update 2026-09-30: cohesive desktop styling
+
+The desktop now uses shared card/inset/primary-action primitives instead of
+letting each ported feature invent its own border, radius, padding and selected
+state. Tabs use one segmented-navigation treatment; the settings sidebar uses
+the same filled selection language; instance details, setting groups and the
+player table share the same surface hierarchy. Toolbar actions are separated
+into navigation, primary work, voice, and View/Help groups. The CLI is a framed
+command console with a stable header, output surface and prompt, and a View menu
+makes its visibility discoverable even while the tab is hidden.
