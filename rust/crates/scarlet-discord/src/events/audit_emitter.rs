@@ -51,6 +51,8 @@ mod audit_type {
     pub const VTK_START: (&str, u32) = ("groupex.instance.vtk", 0xFF7F00);
     pub const SPAWN_PEDESTAL: (&str, u32) = ("groupex.instance.user.pedestal", 0x7F007F);
     pub const SPAWN_STICKER: (&str, u32) = ("groupex.instance.user.sticker", 0x7F007F);
+    pub const SPAWN_PRINT: (&str, u32) = ("groupex.instance.user.print", 0x7F007F);
+    pub const SPAWN_EMOJI: (&str, u32) = ("groupex.instance.user.emoji", 0x7F007F);
     pub const SPAWN_PROP: (&str, u32) = ("groupex.instance.user.prop", 0x7F007F);
 }
 
@@ -538,16 +540,96 @@ impl scarlet_events::AuditEmitter for DiscordAuditEmitter {
         user_id: &str,
         display_name: &str,
         sticker_id: &str,
+        file_id: Option<&str>,
     ) {
-        let embed = self
+        let mut embed = self
             .base_embed(audit_type::SPAWN_STICKER)
             .title(format!("{} spawned a sticker", escape_markdown(display_name)))
             .url(user_link(user_id))
             .field("User ID", format!("`{user_id}`"), false)
             .field("Location", format!("`{location}`"), false)
             .field("Sticker ID", format!("`{sticker_id}`"), false);
+        if let Some(file_id) = file_id {
+            embed = embed
+                .field("File ID", format!("`{file_id}`"), false)
+                .image(format!("https://api.vrchat.cloud/api/1/file/{file_id}/1/file"));
+        }
         self.cond_emit_ex(
             audit_type::SPAWN_STICKER,
+            false,
+            false,
+            Some(location),
+            CreateMessage::new().embed(embed).components(vec![Self::moderation_buttons(user_id)]),
+        )
+        .await;
+    }
+
+    async fn emit_user_spawn_print(
+        &self,
+        _timestamp: NaiveDateTime,
+        location: &str,
+        user_id: &str,
+        display_name: &str,
+        print_id: &str,
+        file_id: Option<&str>,
+        image_url: Option<&str>,
+    ) {
+        let mut embed = self
+            .base_embed(audit_type::SPAWN_PRINT)
+            .title(format!("{} spawned a print", escape_markdown(display_name)))
+            .url(user_link(user_id))
+            .field("User ID", format!("`{user_id}`"), false)
+            .field("Location", format!("`{location}`"), false)
+            .field("Print ID", format!("`{print_id}`"), false);
+        if let Some(file_id) = file_id {
+            embed = embed.field("File ID", format!("`{file_id}`"), false);
+            embed = embed.image(
+                image_url
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("https://api.vrchat.cloud/api/1/file/{file_id}/1/file")),
+            );
+        } else if let Some(image_url) = image_url {
+            embed = embed.image(image_url);
+        }
+        self.cond_emit_ex(
+            audit_type::SPAWN_PRINT,
+            false,
+            false,
+            Some(location),
+            CreateMessage::new().embed(embed).components(vec![Self::moderation_buttons(user_id)]),
+        )
+        .await;
+    }
+
+    async fn emit_user_spawn_emoji(
+        &self,
+        _timestamp: NaiveDateTime,
+        location: &str,
+        user_id: &str,
+        display_name: &str,
+        emoji_id: &str,
+        file_id: Option<&str>,
+        image_url: Option<&str>,
+    ) {
+        let mut embed = self
+            .base_embed(audit_type::SPAWN_EMOJI)
+            .title(format!("{} spawned an emoji", escape_markdown(display_name)))
+            .url(user_link(user_id))
+            .field("User ID", format!("`{user_id}`"), false)
+            .field("Location", format!("`{location}`"), false)
+            .field("Emoji ID", format!("`{emoji_id}`"), false);
+        if let Some(file_id) = file_id {
+            embed = embed.field("File ID", format!("`{file_id}`"), false);
+            embed = embed.image(
+                image_url
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("https://api.vrchat.cloud/api/1/file/{file_id}/1/file")),
+            );
+        } else if let Some(image_url) = image_url {
+            embed = embed.image(image_url);
+        }
+        self.cond_emit_ex(
+            audit_type::SPAWN_EMOJI,
             false,
             false,
             Some(location),
@@ -563,14 +645,24 @@ impl scarlet_events::AuditEmitter for DiscordAuditEmitter {
         user_id: &str,
         display_name: &str,
         prop_id: &str,
+        author_id: Option<&str>,
+        author_name: Option<&str>,
+        image_url: Option<&str>,
     ) {
-        let embed = self
+        let mut embed = self
             .base_embed(audit_type::SPAWN_PROP)
             .title(format!("{} spawned a prop", escape_markdown(display_name)))
             .url(user_link(user_id))
             .field("User ID", format!("`{user_id}`"), false)
             .field("Location", format!("`{location}`"), false)
             .field("Prop ID", format!("`{prop_id}`"), false);
+        if let Some(author_id) = author_id {
+            let label = escape_markdown(author_name.unwrap_or(author_id));
+            embed = embed.field("Prop Author", format!("[{label}]({})", user_link(author_id)), false);
+        }
+        if let Some(image_url) = image_url {
+            embed = embed.image(image_url);
+        }
         self.cond_emit_ex(
             audit_type::SPAWN_PROP,
             false,

@@ -80,6 +80,8 @@ mod audit_type {
     pub const VTK_START: &str = "groupex.instance.vtk";
     pub const SPAWN_PEDESTAL: &str = "groupex.instance.user.pedestal";
     pub const SPAWN_STICKER: &str = "groupex.instance.user.sticker";
+    pub const SPAWN_PRINT: &str = "groupex.instance.user.print";
+    pub const SPAWN_EMOJI: &str = "groupex.instance.user.emoji";
     pub const SPAWN_PROP: &str = "groupex.instance.user.prop";
     pub const USER_VIDEO: &str = "groupex.instance.user.video";
 }
@@ -1147,7 +1149,25 @@ impl ScarletEventListener {
             return;
         }
         let location = self.client_location.clone().unwrap_or_default();
-        self.deps.emitter.emit_user_spawn_sticker(timestamp, &location, &user_id, &display_name, &sticker_id).await;
+        let file_id = if sticker_id.starts_with("file_") {
+            Some(sticker_id.clone())
+        } else if sticker_id.starts_with("inv_") {
+            match self.vrchat().await {
+                Some(client) => client
+                    .get_user_inventory_item(&user_id, &sticker_id)
+                    .await
+                    .ok()
+                    .and_then(|item| item.get("imageUrl").and_then(serde_json::Value::as_str).map(str::to_string))
+                    .and_then(|url| scarlet_core::versioned_file::VersionedFile::parse(&url).map(|file| file.id)),
+                None => None,
+            }
+        } else {
+            None
+        };
+        self.deps
+            .emitter
+            .emit_user_spawn_sticker(timestamp, &location, &user_id, &display_name, &sticker_id, file_id.as_deref())
+            .await;
         self.deps.data.custom_event_new(
             audit_type::SPAWN_STICKER,
             Utc.from_utc_datetime(&timestamp),
@@ -1161,16 +1181,34 @@ impl ScarletEventListener {
 
     /// Port of `log_playerSpawnProp`.
     ///
-    /// Java also fetches the prop itself (`vrc.getProp`) to decorate the
-    /// Discord embed; that endpoint isn't ported, so the emission carries
-    /// the id alone.
     async fn log_spawn_prop(&mut self, preamble: bool, timestamp: NaiveDateTime, user_id: String, prop_id: String) {
         if preamble || !self.is_in_group_instance {
             return;
         }
         let display_name = self.roster.display_name_or(&user_id, &user_id);
         let location = self.client_location.clone().unwrap_or_default();
-        self.deps.emitter.emit_user_spawn_prop(timestamp, &location, &user_id, &display_name, &prop_id).await;
+        let prop = match self.vrchat().await {
+            Some(client) => client.get_prop(&prop_id).await.ok(),
+            None => None,
+        };
+        let author_id = prop.as_ref().and_then(|value| json_str(value, "/authorId"));
+        let author_name = prop.as_ref().and_then(|value| json_str(value, "/authorName"));
+        let image_url = prop.as_ref().and_then(|value| {
+            json_nonblank(value, "/thumbnailImageUrl").or_else(|| json_nonblank(value, "/imageUrl"))
+        });
+        self.deps
+            .emitter
+            .emit_user_spawn_prop(
+                timestamp,
+                &location,
+                &user_id,
+                &display_name,
+                &prop_id,
+                author_id,
+                author_name,
+                image_url,
+            )
+            .await;
         self.deps.data.custom_event_new(
             audit_type::SPAWN_PROP,
             Utc.from_utc_datetime(&timestamp),
@@ -1184,11 +1222,6 @@ impl ScarletEventListener {
 
     /// Port of `log_apiRequest`.
     ///
-    /// The print/emoji spawn detection and the avatar-bundle analysis path
-    /// both need VRChat endpoints that aren't ported yet; what is ported
-    /// here is the part everything else depends on — noting that this
-    /// session *does* write `[API]` lines, which is what suppresses the
-    /// "launched without debug logging" warning.
     async fn log_api_request(&mut self, preamble: bool, timestamp: NaiveDateTime, index: i32, method: &str, url: &str) {
         // Any [API] line proves this VRChat session has API debug logging
         // enabled, which is what the exact avatar-status path depends on.
@@ -1200,6 +1233,18 @@ impl ScarletEventListener {
         }
         let path_index = url.find("/api/1/").map(|at| at + 7).unwrap_or(0);
         let rest = &url[path_index.min(url.len())..];
+
+        if !preamble && self.is_in_group_instance {
+            if let Some(print_id) = api_print_id(rest) {
+                self.log_spawn_print_from_api(timestamp, print_id).await;
+                return;
+            }
+            if let Some((user_id, inventory_id)) = api_inventory_item(rest) {
+                self.log_spawn_emoji_from_api(timestamp, user_id, inventory_id).await;
+                return;
+            }
+        }
+
         let Some(analysis) = rest.strip_prefix("analysis/") else { return };
         if !analysis.starts_with("file_") {
             return;
@@ -1218,6 +1263,76 @@ impl ScarletEventListener {
 
         let Some(versioned) = scarlet_core::versioned_file::VersionedFile::parse(analysis) else { return };
         self.apply_avatar_analysis(&versioned).await;
+    }
+
+    async fn log_spawn_print_from_api(&mut self, timestamp: NaiveDateTime, print_id: &str) {
+        let Some(client) = self.vrchat().await else { return };
+        let print = match client.get_print(print_id).await {
+            Ok(print) => print,
+            Err(error) => {
+                tracing::warn!(%error, print_id, "Could not resolve spawned print");
+                return;
+            }
+        };
+        let Some(owner_id) = json_str(&print, "/ownerId").map(str::to_string) else { return };
+        let display_name = client
+            .get_user(&owner_id)
+            .await
+            .ok()
+            .and_then(|user| user.display_name)
+            .unwrap_or_else(|| owner_id.clone());
+        let file_id = json_str(&print, "/files/fileId");
+        let image_url = json_nonblank(&print, "/files/image");
+        let location = self.client_location.clone().unwrap_or_default();
+        self.deps
+            .emitter
+            .emit_user_spawn_print(timestamp, &location, &owner_id, &display_name, print_id, file_id, image_url)
+            .await;
+        self.deps.data.custom_event_new(
+            audit_type::SPAWN_PRINT,
+            Utc.from_utc_datetime(&timestamp),
+            Some(owner_id),
+            Some(display_name),
+            Some(print_id.to_string()),
+            None,
+            None,
+        );
+    }
+
+    async fn log_spawn_emoji_from_api(&mut self, timestamp: NaiveDateTime, user_id: &str, inventory_id: &str) {
+        let Some(client) = self.vrchat().await else { return };
+        let item = match client.get_user_inventory_item(user_id, inventory_id).await {
+            Ok(item) => item,
+            Err(error) => {
+                tracing::warn!(%error, user_id, inventory_id, "Could not resolve spawned inventory item");
+                return;
+            }
+        };
+        if !json_str(&item, "/itemType").is_some_and(|kind| kind.eq_ignore_ascii_case("emoji")) {
+            return;
+        }
+        let display_name = client
+            .get_user(user_id)
+            .await
+            .ok()
+            .and_then(|user| user.display_name)
+            .unwrap_or_else(|| user_id.to_string());
+        let file_id = json_str(&item, "/metadata/fileId");
+        let image_url = json_nonblank(&item, "/imageUrl");
+        let location = self.client_location.clone().unwrap_or_default();
+        self.deps
+            .emitter
+            .emit_user_spawn_emoji(timestamp, &location, user_id, &display_name, inventory_id, file_id, image_url)
+            .await;
+        self.deps.data.custom_event_new(
+            audit_type::SPAWN_EMOJI,
+            Utc.from_utc_datetime(&timestamp),
+            Some(user_id.to_string()),
+            Some(display_name),
+            Some(inventory_id.to_string()),
+            None,
+            None,
+        );
     }
 
     /// Port of the `analysis/file_...` branch of `log_apiRequest`: resolve
@@ -1429,6 +1544,30 @@ pub async fn run(
     }
 }
 
+fn json_str<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a str> {
+    value.pointer(pointer).and_then(serde_json::Value::as_str)
+}
+
+fn json_nonblank<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a str> {
+    json_str(value, pointer).filter(|text| !text.trim().is_empty())
+}
+
+fn api_path_without_query(path: &str) -> &str {
+    path.split(['?', '#']).next().unwrap_or(path)
+}
+
+fn api_print_id(path: &str) -> Option<&str> {
+    let id = api_path_without_query(path).strip_prefix("prints/")?;
+    (id.starts_with("prnt_") && !id.contains('/')).then_some(id)
+}
+
+fn api_inventory_item(path: &str) -> Option<(&str, &str)> {
+    let rest = api_path_without_query(path).strip_prefix("user/")?;
+    let (user_id, inventory_id) = rest.split_once("/inventory/")?;
+    (user_id.starts_with("usr_") && inventory_id.starts_with("inv_") && !inventory_id.contains('/'))
+        .then_some((user_id, inventory_id))
+}
+
 /// Java builds these as `"join-" + Long.toUnsignedString(System.nanoTime())`.
 fn marker(prefix: &str) -> String {
     let nanos = std::time::SystemTime::now()
@@ -1517,6 +1656,7 @@ mod tests {
     use super::*;
     use crate::tests_support::{RecordingEmitter, RecordingTts, RecordingUi};
     use scarlet_vrchat::log_tail::{LogEvent, LogEventKind, TailerEvent};
+    use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
 
     const GROUP_ID: &str = "grp_11111111-1111-1111-1111-111111111111";
     const GROUP_LOCATION: &str =
@@ -1871,6 +2011,69 @@ mod tests {
         assert!(h.emitter.events().iter().any(|event| event.starts_with("user_join:")));
     }
 
+    #[tokio::test]
+    async fn api_log_lines_emit_prints_and_only_emoji_inventory_items() {
+        let server = MockServer::start().await;
+        for (request_path, body) in [
+            (
+                "/prints/prnt_1",
+                serde_json::json!({
+                    "id": "prnt_1",
+                    "ownerId": "usr_owner",
+                    "files": {"fileId": "file_print", "image": "https://example.test/print.png"}
+                }),
+            ),
+            (
+                "/user/usr_owner/inventory/inv_emoji",
+                serde_json::json!({
+                    "id": "inv_emoji",
+                    "itemType": "emoji",
+                    "metadata": {"fileId": "file_emoji"},
+                    "imageUrl": "https://example.test/emoji.png"
+                }),
+            ),
+            (
+                "/user/usr_owner/inventory/inv_other",
+                serde_json::json!({"id": "inv_other", "itemType": "sticker"}),
+            ),
+            (
+                "/users/usr_owner",
+                serde_json::json!({"id": "usr_owner", "displayName": "Owner"}),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(request_path))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+
+        let mut h = harness(true);
+        *h.listener.deps.vrchat.write().await = Some(Arc::new(VrChatClient::with_base_url(&server.uri()).unwrap()));
+        h.listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        for (index, url) in [
+            "https://api.vrchat.cloud/api/1/prints/prnt_1",
+            "https://api.vrchat.cloud/api/1/user/usr_owner/inventory/inv_emoji",
+            "https://api.vrchat.cloud/api/1/user/usr_owner/inventory/inv_other",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            h.listener
+                .handle(entry(
+                    false,
+                    101 + index as i64,
+                    LogEventKind::ApiRequest { index: index as i32, method: "GET".into(), url: url.into() },
+                ))
+                .await;
+        }
+
+        assert_eq!(
+            h.emitter.events(),
+            vec!["print:usr_owner:prnt_1".to_string(), "emoji:usr_owner:inv_emoji".to_string()]
+        );
+    }
+
     #[test]
     fn advisory_helpers_match_java() {
         assert_eq!(end_dot(" hello "), "hello.");
@@ -1886,6 +2089,20 @@ mod tests {
         // Duplicates collapse in the formatter, matching `distinct()`.
         assert_eq!(format_advisories(&advisories).as_deref(), Some("first / second"));
         assert_eq!(format_advisories(&[]), None);
+    }
+
+    #[test]
+    fn api_spawn_paths_are_parsed_strictly() {
+        assert_eq!(api_print_id("prints/prnt_123?foo=bar"), Some("prnt_123"));
+        assert_eq!(api_print_id("prints/file_123"), None);
+        assert_eq!(api_print_id("prints/prnt_123/extra"), None);
+
+        assert_eq!(
+            api_inventory_item("user/usr_123/inventory/inv_456?foo=bar"),
+            Some(("usr_123", "inv_456"))
+        );
+        assert_eq!(api_inventory_item("users/usr_123/inventory/inv_456"), None);
+        assert_eq!(api_inventory_item("user/usr_123/inventory/file_456"), None);
     }
 
     #[test]

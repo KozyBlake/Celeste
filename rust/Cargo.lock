@@ -5279,9 +5279,11 @@ dependencies = [
  "chrono",
  "scarlet-core",
  "scarlet-vrchat",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

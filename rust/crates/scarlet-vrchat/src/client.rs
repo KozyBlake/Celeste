@@ -1197,6 +1197,35 @@ impl VrChatClient {
 
     // ---- worlds / avatars / instances ----
 
+    /// `GET /prints/{printId}`. Kept as JSON because Celeste only needs the
+    /// owner and nested file/image fields for Discord audit decoration.
+    pub async fn get_print(&self, print_id: &str) -> Result<serde_json::Value, VrChatError> {
+        let response = self.http.get(self.url(&format!("/prints/{print_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// `GET /props/{propId}`. The endpoint is documented by the community
+    /// OpenAPI specification and mirrors Java's generated `PropsApi` call.
+    pub async fn get_prop(&self, prop_id: &str) -> Result<serde_json::Value, VrChatError> {
+        let response = self.http.get(self.url(&format!("/props/{prop_id}"))).send().await?;
+        Self::parse_response(response).await
+    }
+
+    /// `GET /user/{userId}/inventory/{inventoryItemId}`, matching Java's
+    /// hand-written call used to identify spawned emoji inventory items.
+    pub async fn get_user_inventory_item(
+        &self,
+        user_id: &str,
+        inventory_item_id: &str,
+    ) -> Result<serde_json::Value, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/user/{user_id}/inventory/{inventory_item_id}")))
+            .send()
+            .await?;
+        Self::parse_response(response).await
+    }
+
     /// Port of `getWorld(String worldId)`: `GET /worlds/{worldId}`.
     pub async fn get_world(&self, world_id: &str) -> Result<crate::models::World, VrChatError> {
         self.get_world_cached(world_id, crate::entity_cache::ALWAYS_FETCH).await
@@ -2505,6 +2534,29 @@ mod tests {
         let world = client.get_world("wrld_1").await.unwrap();
         assert_eq!(world.name, "Test World");
         assert_eq!(world.capacity, Some(16));
+    }
+
+    #[tokio::test]
+    async fn print_prop_and_inventory_item_use_the_documented_paths() {
+        let server = MockServer::start().await;
+        for (request_path, body) in [
+            ("/prints/prnt_1", serde_json::json!({"id": "prnt_1", "ownerId": "usr_1"})),
+            ("/props/prop_1", serde_json::json!({"id": "prop_1", "authorId": "usr_2"})),
+            ("/user/usr_1/inventory/inv_1", serde_json::json!({"id": "inv_1", "itemType": "emoji"})),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(request_path))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        assert_eq!(client.get_print("prnt_1").await.unwrap()["ownerId"], "usr_1");
+        assert_eq!(client.get_prop("prop_1").await.unwrap()["authorId"], "usr_2");
+        assert_eq!(
+            client.get_user_inventory_item("usr_1", "inv_1").await.unwrap()["itemType"],
+            "emoji"
+        );
     }
 
     #[tokio::test]

@@ -60,6 +60,27 @@ pub trait AuditEmitter: Send + Sync {
         user_id: &str,
         display_name: &str,
         sticker_id: &str,
+        file_id: Option<&str>,
+    );
+    async fn emit_user_spawn_print(
+        &self,
+        timestamp: NaiveDateTime,
+        location: &str,
+        user_id: &str,
+        display_name: &str,
+        print_id: &str,
+        file_id: Option<&str>,
+        image_url: Option<&str>,
+    );
+    async fn emit_user_spawn_emoji(
+        &self,
+        timestamp: NaiveDateTime,
+        location: &str,
+        user_id: &str,
+        display_name: &str,
+        emoji_id: &str,
+        file_id: Option<&str>,
+        image_url: Option<&str>,
     );
     async fn emit_user_spawn_prop(
         &self,
@@ -68,6 +89,9 @@ pub trait AuditEmitter: Send + Sync {
         user_id: &str,
         display_name: &str,
         prop_id: &str,
+        author_id: Option<&str>,
+        author_name: Option<&str>,
+        image_url: Option<&str>,
     );
     async fn emit_user_video(
         &self,
@@ -107,8 +131,10 @@ impl AuditEmitter for NoopAuditEmitter {
     ) {
     }
     async fn emit_user_spawn_pedestal(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _c: &str, _i: &str) {}
-    async fn emit_user_spawn_sticker(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _s: &str) {}
-    async fn emit_user_spawn_prop(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _p: &str) {}
+    async fn emit_user_spawn_sticker(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _s: &str, _f: Option<&str>) {}
+    async fn emit_user_spawn_print(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _p: &str, _f: Option<&str>, _i: Option<&str>) {}
+    async fn emit_user_spawn_emoji(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _e: &str, _f: Option<&str>, _i: Option<&str>) {}
+    async fn emit_user_spawn_prop(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _p: &str, _ai: Option<&str>, _an: Option<&str>, _i: Option<&str>) {}
     async fn emit_user_video(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _url: &str, _title: &str) {}
 }
 
