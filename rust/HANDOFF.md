@@ -20,9 +20,19 @@ inside `rust/crates/*/resources/`. The one Java-named include,
 `crates/scarlet-discord/java_commands.txt`, is a committed text snapshot of
 the Java slash-command surface, not Java source.
 
-**Private repo. Nothing is pushed** — every commit lives on the local branch
-`claude/magical-brahmagupta-semov4`, 60+ ahead of origin, deliberately. Don't
-push without asking.
+**Private repo.** Work now lives on `main`; the old
+`claude/magical-brahmagupta-semov4` branch was merged into it and deleted on
+2026-10-01. Ask before pushing.
+
+**History was rewritten on 2026-10-01.** Commit `c533d3c` had accidentally
+committed 122 VRChat entity caches — 61 user profiles (display name,
+pronouns, age-verification status) and 61 group-membership files, 19 of them
+memberships marked `"memberVisibility": "hidden"`. `e5ff613` untracked them
+but the blobs stayed in history. `git filter-branch --index-filter` stripped
+`rust/caches` from the 160 unpushed commits; the tree at HEAD is byte-identical
+to before, `origin/main` is still an ancestor, and the blobs are unreachable.
+Never commit anything under `rust/caches/`, and check `git status` before
+`git add -A`.
 
 ## The one rule that matters
 
