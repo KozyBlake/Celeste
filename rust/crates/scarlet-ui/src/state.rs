@@ -37,6 +37,10 @@ pub struct UiStateInner {
     /// didn't. Shown in the status bar so a misrouted announcement is
     /// visible in the app instead of only in the log.
     pub tts_status: Option<String>,
+    /// The configured group's display name, resolved once in the
+    /// background. The window title shows it so a second monitor answers
+    /// "which group is this watching?" without clicking anything.
+    pub group_name: Option<String>,
     pub players: HashMap<String, ConnectedPlayer>,
     /// Display order, kept separate from the map so `fire_sort` can reorder
     /// without touching player data — Java's "resort the table model" step.
@@ -277,6 +281,14 @@ impl UiState {
     pub fn ordered_players(&self) -> Vec<ConnectedPlayer> {
         let inner = self.0.lock().unwrap();
         inner.player_order.iter().filter_map(|id| inner.players.get(id).cloned()).collect()
+    }
+
+    pub fn set_group_name(&self, name: Option<String>) {
+        self.0.lock().unwrap().group_name = name;
+    }
+
+    pub fn group_name(&self) -> Option<String> {
+        self.0.lock().unwrap().group_name.clone()
     }
 
     pub fn set_tts_status(&self, status: Option<String>) {

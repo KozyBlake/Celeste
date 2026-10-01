@@ -265,6 +265,7 @@ fn main() -> anyhow::Result<()> {
     runtime.spawn({
         let slot = shared.vrchat_client.clone();
         let ui_state = ui_state.clone();
+        let settings = settings.clone();
         async move {
             // How long a login is given before "signing in..." becomes
             // "not signed in", so a slow 2FA prompt doesn't read as failure.
@@ -285,10 +286,37 @@ fn main() -> anyhow::Result<()> {
                         };
                         tracing::info!("{status}");
                         ui_state.refresh_vrchat_api_status(status);
+
+                        // The window title names the group being watched.
+                        // Re-read the setting each pass rather than once at
+                        // startup, so switching groups retitles the window
+                        // without a restart; the lookup goes through the
+                        // day-old group cache, so repeating it costs
+                        // nothing after the first.
+                        let configured: Option<String> = settings
+                            .store
+                            .get_object(scarlet_vrchat::client::GROUP_ID_KEY);
+                        match configured.filter(|id| !id.trim().is_empty()) {
+                            Some(group_id) => {
+                                let name = client
+                                    .get_group_cached(
+                                        &group_id,
+                                        false,
+                                        scarlet_vrchat::entity_cache::within_1_day(),
+                                    )
+                                    .await
+                                    .ok()
+                                    .map(|group| group.name)
+                                    .filter(|name| !name.trim().is_empty());
+                                ui_state.set_group_name(name);
+                            }
+                            None => ui_state.set_group_name(None),
+                        }
                     }
                     (None, true) => {
                         signed_in = false;
                         ui_state.refresh_vrchat_api_status("VRChat: not signed in");
+                        ui_state.set_group_name(None);
                     }
                     (None, false) if started.elapsed() > GRACE => {
                         ui_state.refresh_vrchat_api_status("VRChat: not signed in");

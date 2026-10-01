@@ -794,16 +794,35 @@ impl ScarletApp {
             .stroke(egui::Stroke::new(1.0_f32, self.accent))
     }
 
+    /// The window title.
+    ///
+    /// Was "KozyBlake/Celeste <version> — Fork by KozyBlake — Windows &
+    /// Linux", which is Scarlet-era framing: it described the project's
+    /// relationship to its upstream rather than telling the operator
+    /// anything about what they are looking at.
+    ///
+    /// Now it names the group being watched, which on a second monitor is
+    /// the one question the title can usefully answer. The group comes from
+    /// the `vrchat_group_id` setting and is resolved at runtime, so
+    /// switching groups retitles the window on the next frame — nothing
+    /// here is fixed at build time. Before a group is configured, or while
+    /// its name is still resolving, it falls back to the name and version
+    /// alone. Staff mode keeps its marker either way.
     fn window_title(&self) -> String {
-        if self.staff_mode {
-            format!("{} (staff mode)", scarlet_core::identity::NAME)
-        } else {
+        let base = if self.staff_mode {
             format!(
-                "{} {} \u{2014} {}",
-                scarlet_core::identity::APP_NAME,
-                scarlet_core::identity::VERSION,
-                scarlet_core::identity::FORK_NOTE
+                "{} {} (staff mode)",
+                scarlet_core::identity::NAME,
+                scarlet_core::identity::VERSION
             )
+        } else {
+            format!("{} {}", scarlet_core::identity::NAME, scarlet_core::identity::VERSION)
+        };
+        match self.state.group_name() {
+            Some(group) if !group.trim().is_empty() => {
+                format!("{base} \u{2014} {group}")
+            }
+            _ => base,
         }
     }
 
@@ -3604,20 +3623,6 @@ impl eframe::App for ScarletApp {
 /// `runtime_handle` is used both by the setup wizard (to run the VRChat
 /// login/TOTP calls without blocking the UI thread) and, once setup
 /// resolves a Discord token, to spawn the Discord client itself.
-/// The window/taskbar icon.
-///
-/// Embedded rather than loaded from disk so a build that has been copied
-/// somewhere else still has it. A boot splash was considered and
-/// deliberately not added: this starts in well under a second, so a splash
-/// would be a delay rather than a progress indicator — the reason Java
-/// needed one (JVM start plus dependency loading) doesn't exist here.
-/// Port of `getOverrideBackgroundColor` in `ScarletUI.java:762-781`, minus
-/// the alternating stripe (egui's `TableBuilder::striped` already draws it)
-/// and the selection case (the port's table has no row selection).
-///
-/// Java's condition is deliberately narrow: amber only when the pronouns are
-/// flagged, the player is still present, and no advisory colour already
-/// applies — so the background never competes with a watched-entity colour.
 fn format_account_age((years, months, days): (i32, i32, i32)) -> String {
     let mut parts = Vec::new();
     if years != 0 { parts.push(format!("{years}y")); }
@@ -3732,6 +3737,39 @@ fn known_choices_for(id: &str) -> Option<Vec<(String, String)>> {
     }
 }
 
+/// The window and taskbar icon, read from `icon.png` in the data folder or
+/// beside the executable.
+///
+/// Loaded at runtime rather than embedded so replacing it does not mean
+/// rebuilding, and so no placeholder artwork has to be invented to keep the
+/// build compiling. Anything unreadable is ignored: a broken icon file is
+/// not a reason to fail to start.
+fn load_window_icon(data_dir: &std::path::Path) -> Option<egui::IconData> {
+    let beside_binary = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("icon.png")));
+    let candidates = [Some(data_dir.join("icon.png")), beside_binary];
+    for path in candidates.into_iter().flatten() {
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        match image::load_from_memory(&bytes) {
+            Ok(image) => {
+                let image = image.to_rgba8();
+                let (width, height) = image.dimensions();
+                tracing::info!("Using window icon {}", path.display());
+                return Some(egui::IconData {
+                    rgba: image.into_raw(),
+                    width,
+                    height,
+                });
+            }
+            Err(error) => {
+                tracing::warn!("Ignoring unreadable window icon {}: {error}", path.display());
+            }
+        }
+    }
+    None
+}
+
 fn settings_search_id() -> egui::Id {
     egui::Id::new("settings-search")
 }
@@ -3769,9 +3807,15 @@ pub fn run(
     let bounds = shared.settings.ui_bounds.get_or_null().filter(|bounds| {
         bounds.width > 0 && bounds.height > 0
     });
-    // Use the platform's neutral default until Celeste has replacement
-    // artwork; the bundled image belongs to the old Scarlet branding.
+    // Celeste has no artwork of its own yet -- the image that used to be
+    // bundled was Scarlet's -- so rather than ship a placeholder, the icon
+    // is read from disk at startup. Drop a PNG at `icon.png` in the data
+    // folder (or beside the binary) and it is picked up on the next launch,
+    // with no rebuild. Absent, the platform's neutral default is used.
     let mut viewport = egui::ViewportBuilder::default();
+    if let Some(icon) = load_window_icon(&data_dir) {
+        viewport = viewport.with_icon(icon);
+    }
     if let Some(bounds) = bounds {
         viewport = viewport
             .with_position([bounds.x as f32, bounds.y as f32])
