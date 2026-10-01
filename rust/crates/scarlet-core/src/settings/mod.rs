@@ -27,6 +27,7 @@
 pub mod backup_warning;
 pub mod enums;
 pub mod file_valued;
+pub mod help;
 pub mod prompt;
 pub mod registry;
 pub mod store;
@@ -1032,6 +1033,32 @@ fn detect_installed_tts_voices() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// Every registered setting needs a description, or the list goes back
+    /// to showing a bare label with nothing explaining it. Failing here
+    /// names the ids that were added without copy.
+    #[test]
+    fn every_setting_has_a_description() {
+        let dir = std::env::temp_dir().join(format!(
+            "celeste-settings-help-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = Settings::open(&dir);
+        let missing: Vec<String> = settings
+            .registry
+            .all()
+            .iter()
+            .map(|descriptor| descriptor.id().to_string())
+            .filter(|id| super::help::describe(id).is_none())
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(missing.is_empty(), "settings with no description: {missing:?}");
+    }
+
     use super::*;
 
     #[test]

@@ -2356,8 +2356,32 @@ impl ScarletApp {
                                 ui.vertical(|ui| {
                                     ui.set_width((ui.available_width() - CONTROL_WIDTH).max(120.0));
                                     ui.label(descriptor.name());
-                                    ui.label(egui::RichText::new(descriptor.id()).small().weak().monospace())
-                                        .on_hover_text("Use this id with /settings edit in Discord");
+                                    // The raw id used to be printed here.
+                                    // That tells you how the setting is
+                                    // stored — the one thing someone
+                                    // deciding whether to change it does
+                                    // not need — while leaving "what
+                                    // happens if I turn this on?"
+                                    // unanswered. The description answers
+                                    // it; the id stays on hover, where it
+                                    // is still useful for `/settings edit`.
+                                    let hover = format!(
+                                        "{}\nUse this id with /settings edit in Discord",
+                                        descriptor.id()
+                                    );
+                                    if let Some(description) =
+                                        scarlet_core::settings::help::describe(descriptor.id())
+                                    {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(description)
+                                                    .size(crate::theme::TEXT_SM)
+                                                    .color(crate::theme::TEXT_MUTED),
+                                            )
+                                            .wrap(),
+                                        )
+                                        .on_hover_text(hover);
+                                    }
                                 });
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     self.render_setting_control(ui, descriptor);
