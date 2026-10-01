@@ -44,3 +44,25 @@ rust/usr/
 rust/gaud/
 scarlet-rust-testing
 celeste-testing
+
+# Runtime data, when running with CELESTE_HOME pointed at rust/
+rust/live.json
+rust/global.json
+rust/registry.json
+rust/settings.json
+rust/discord_bot.json
+rust/staff_list.json
+rust/secret_staff_list.json
+rust/watched_*.json
+rust/good_pronoun.json
+rust/bad_pronoun.json
+rust/logs/
+rust/caches/
+rust/backups/
+rust/usr/
+rust/gaud/
+rust/ex/
+
+# Java-era build output
+target/
+home/
