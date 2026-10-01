@@ -48,7 +48,6 @@ pub struct UiStateInner {
     pending_updates: HashMap<String, Vec<PendingUpdate>>,
     /// The instance the local VRChat client is currently in, if any.
     pub instance: Option<InstanceState>,
-    pub announcement: Option<scarlet_core::meta::ScarletAnnouncement>,
     pub ui_scale: f32,
     pub cli_log: Vec<CliLine>,
     pub tts_enabled: bool,
@@ -269,10 +268,6 @@ impl UiState {
         self.0.lock().unwrap().instance = instance;
     }
 
-    pub fn show_announcement(&self, announcement: scarlet_core::meta::ScarletAnnouncement) {
-        self.0.lock().unwrap().announcement = Some(announcement);
-    }
-
     pub fn set_ui_scale(&self, scale: f32) {
         self.0.lock().unwrap().ui_scale = scale;
     }
@@ -301,10 +296,6 @@ impl UiState {
 
     pub fn connection_status(&self) -> String {
         self.0.lock().unwrap().connection_status.clone()
-    }
-
-    pub fn announcement(&self) -> Option<scarlet_core::meta::ScarletAnnouncement> {
-        self.0.lock().unwrap().announcement.clone()
     }
 
     /// Port of `updateStatusBar`'s counts: (present, left, total).
@@ -550,12 +541,11 @@ mod tests {
     }
 
     #[test]
-    fn status_and_announcement_round_trip() {
+    fn connection_status_round_trip() {
         let state = UiState::new();
         assert_eq!(state.connection_status(), "");
         state.refresh_vrchat_api_status("Connected");
         assert_eq!(state.connection_status(), "Connected");
-        assert!(state.announcement().is_none());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! [`state::UiState`] is the real, fully-ported, unit-tested part: the data
 //! model behind `IScarletUI`'s player-list contract
 //! (`playerJoin`/`playerUpdate`/`playerLeave`/`clearInstance`/`fireSort`/
-//! `hasActivePlayers`) plus connection-status and announcement display,
+//! `hasActivePlayers`) plus connection-status display,
 //! usable from any thread. [`platform::is_headless`] ports the
 //! headless-vs-graphical decision from `IScarletUI.create`. [`run`] opens
 //! the (currently minimal) graphical window; on a headless system, skip

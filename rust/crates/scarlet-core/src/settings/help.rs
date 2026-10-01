@@ -124,9 +124,6 @@ pub fn describe(id: &str) -> Option<&'static str> {
         "ui_left_player_dim_percent" => "How far to fade players who have left, so they stay readable without competing with the people still present.",
         "ui_accent_headers" => "Tints section headings with your accent colour.",
         "ui_confirm_group_invite" => "Asks before sending a group invite.",
-        "ui_alert_update" => "Tells you when a new version is available.",
-        "ui_alert_update_preview" => "Includes preview builds in that check.",
-        "ui_alert_announcement" => "Shows announcements from KozyBlake in the status bar.",
         "ui_show_during_load" => "Opens the window while Celeste is still starting, rather than when it is ready.",
         "ui_show_cli_tab" => "Shows the CLI tab.",
 

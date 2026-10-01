@@ -33,11 +33,6 @@ pub const SCARLET_VRCHAT_GROUP_ID: &str = "grp_eb2eb120-67bd-404e-9665-498f567cb
 
 pub const USER_AGENT_NAME: &str = "KozyBlake-Celeste";
 pub const LICENSE_URL: &str = "https://github.com/KozyBlake/ScarletRust?tab=MIT-1-ov-file";
-/// Single endpoint carrying both update-version metadata and the optional
-/// broadcast announcement (see `meta.json` at the repo root).
-pub const META_URL: &str =
-    "https://raw.githubusercontent.com/KozyBlake/ScarletRust/main/meta.json";
-
 pub const API_VERSION: &str = "api/1";
 pub const API_HOST_0: &str = "vrchat.com";
 pub const API_HOST_1: &str = "api.vrchat.com";

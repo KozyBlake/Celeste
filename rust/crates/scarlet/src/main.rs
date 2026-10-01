@@ -14,7 +14,9 @@
 //!    with no display, connect Discord headlessly.
 //!
 //! Not yet ported from `Scarlet.java`'s own startup: data-dir resolution
-//! beyond `SCARLET_HOME`, the executor pool, and updater exit-code handling.
+//! beyond `SCARLET_HOME` and the executor pool. The update check and its
+//! exit-code handling are deliberately dropped, not pending: Celeste has no
+//! release feed to check against.
 //! Application restart/self-relaunch is ported. See ../../PORTING.md.
 //!
 //! ## Why this isn't `#[tokio::main] async fn main()`

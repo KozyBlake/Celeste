@@ -82,13 +82,10 @@ pub struct Settings {
     pub encrypted: Arc<EncryptedPrefs>,
 
     pub last_run_version: RegistryStringValued<String>,
-    pub last_announcement_id: RegistryStringValued<String>,
     pub last_run_time: RegistryStringValued<DateTime<Utc>>,
     pub last_audit_query: RegistryStringValued<DateTime<Utc>>,
     pub last_instances_check: RegistryStringValued<DateTime<Utc>>,
     pub last_auth_refresh: RegistryStringValued<DateTime<Utc>>,
-    pub last_update_check: RegistryStringValued<DateTime<Utc>>,
-    pub last_announcement_check: RegistryStringValued<DateTime<Utc>>,
     pub next_poll_action: RegistryStringValued<DateTime<Utc>>,
     pub next_mod_summary: RegistryStringValued<DateTime<Utc>>,
     pub next_outstanding_mod: RegistryStringValued<DateTime<Utc>>,
@@ -104,9 +101,6 @@ pub struct Settings {
 
     // --- Scarlet.java: General/UI ---
     pub confirm_group_invite: Arc<FileValued<bool>>,
-    pub alert_for_updates: Arc<FileValued<bool>>,
-    pub alert_for_preview_updates: Arc<FileValued<bool>>,
-    pub alert_for_announcements: Arc<FileValued<bool>>,
     pub show_ui_during_load: Arc<FileValued<bool>>,
     pub show_cli_tab: Arc<FileValued<bool>>,
     pub ui_accent_headers: Arc<FileValued<bool>>,
@@ -244,13 +238,10 @@ impl Settings {
         Settings {
             data_dir: data_dir.to_path_buf(),
             last_run_version: registry::registry_string(registry_store.clone(), "lastRunVersion"),
-            last_announcement_id: registry::registry_string(registry_store.clone(), "lastAnnouncementId"),
             last_run_time: registry::registry_offset_date_time(registry_store.clone(), "lastRunTime"),
             last_audit_query: registry::registry_offset_date_time(registry_store.clone(), "lastAuditQuery"),
             last_instances_check: registry::registry_offset_date_time(registry_store.clone(), "lastInstancesCheck"),
             last_auth_refresh: registry::registry_offset_date_time(registry_store.clone(), "lastAuthRefresh"),
-            last_update_check: registry::registry_offset_date_time(registry_store.clone(), "lastUpdateCheck"),
-            last_announcement_check: registry::registry_offset_date_time(registry_store.clone(), "lastAnnouncementCheck"),
             next_poll_action: registry::registry_offset_date_time(registry_store.clone(), "nextPollAction"),
             next_mod_summary: registry::registry_offset_date_time(registry_store.clone(), "nextModSummary"),
             next_outstanding_mod: registry::registry_offset_date_time(registry_store.clone(), "nextOutstandingMod"),
@@ -296,19 +287,6 @@ impl Settings {
                 "Confirmation dialog for group invites",
                 SettingCategory::General,
                 false,
-            ),
-            alert_for_updates: registry.boolean("ui_alert_update", "Notify for updates", SettingCategory::General, true),
-            alert_for_preview_updates: registry.boolean(
-                "ui_alert_update_preview",
-                "Notify for preview updates",
-                SettingCategory::General,
-                true,
-            ),
-            alert_for_announcements: registry.boolean(
-                "ui_alert_announcement",
-                "Notify for KozyBlake announcements",
-                SettingCategory::General,
-                true,
             ),
             show_ui_during_load: registry.boolean(
                 "ui_show_during_load",

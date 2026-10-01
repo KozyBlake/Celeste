@@ -3580,9 +3580,6 @@ impl eframe::App for ScarletApp {
                         ui.colored_label(crate::theme::WARN, "Voice warning")
                             .on_hover_text(&problem);
                     }
-                    if let Some(announcement) = self.state.announcement() {
-                        ui.colored_label(egui::Color32::YELLOW, announcement.title.as_deref().unwrap_or("Celeste announcement"));
-                    }
                 });
             });
         });
