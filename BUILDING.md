@@ -1,114 +1,108 @@
-# Building Scarlet from source
+# Building Celeste from source
 
 ## Requirements
 
 | | |
 |---|---|
-| JDK | **21** (bytecode targets Java 8) |
-| Maven | 3.9 or newer |
-| Network | required — most dependencies come from Maven Central |
+| Rust | stable, 2021 edition (install via [rustup](https://rustup.rs)) |
+| C toolchain | a working `cc` and `pkg-config` |
+| OpenSSL | development headers (`openssl` on Arch, `libssl-dev` on Debian/Ubuntu) |
+| Network | required — dependencies come from crates.io |
 
-Verified against OpenJDK 21.0.12 and Apache Maven 3.9.16 on Linux.
+Nothing else. There is no JDK, no Maven, and no vendored native library to
+install first — that was Scarlet, and it is gone.
 
-No native toolchain is needed for a normal desktop build. The DAVE native
-libraries for Linux, Windows and macOS are pulled from Maven Central as
-prebuilt artifacts (`moe.kyokobot.libdave:natives-*:0.1.2`).
+The desktop UI loads its GL and X11/Wayland libraries at runtime rather than
+linking them, so the only shared objects the finished binary pulls in beyond
+libc are `libssl` and `libcrypto`. Any normal desktop install already has
+what it needs to run it.
 
 ## Build
 
-**The order matters.** `libdave-maven/` must be installed into your local
-Maven repository before the root project will resolve.
+```sh
+git clone <your-fork-url> Celeste
+cd Celeste/rust
+cargo build --release
+```
+
+The binary is `rust/target/release/scarlet`. (The crate names and the binary
+keep the `scarlet` spelling deliberately — only user-visible strings say
+Celeste. Renaming them would churn the whole workspace for no functional
+gain.)
+
+A cold build takes a few minutes; incremental builds are seconds.
+
+## Tests
 
 ```sh
-git clone <your-fork-url> Scarlet
-cd Scarlet
-
-# 1. build and install the vendored libdave-jvm modules
-cd libdave-maven
-mvn -B clean install
-cd ..
-
-# 2. build Scarlet
-mvn -B clean package
+cargo test --release --workspace
 ```
 
-Roughly 20-30 seconds for the root project on a modern machine.
+506 tests, all expected to pass.
 
-## Why libdave has to be built first
-
-Scarlet depends on four artifacts at version `1.0.0`:
-
-- `moe.kyokobot.libdave:libdave-jvm-api`
-- `moe.kyokobot.libdave:libdave-jvm-impl`
-- `moe.kyokobot.libdave:libdave-jvm-adapter-jda`
-- `moe.kyokobot.libdave:libdave-jvm-natives-android`
-
-**These are not published to any public Maven repository.** Their sources are
-vendored in `libdave-maven/`, and `mvn install` there places them in your
-local `~/.m2/repository` where the root build can find them.
-
-Skip that step and the build fails like this:
-
-```
-[ERROR] Failed to read artifact descriptor for
-        moe.kyokobot.libdave:libdave-jvm-adapter-jda:jar:1.0.0
-[ERROR]   Caused by: ... could not be resolved: ... from/to jitpack.io
-          (https://jitpack.io): status code: 401, reason phrase: Unauthorized (401)
-```
-
-**JitPack is not the problem here.** It is simply the last repository in the
-resolution order, and it answers `401 Unauthorized` — rather than `404` — for
-any artifact it does not host. So it takes the blame for an artifact that was
-never meant to come from the network at all. No JitPack account or token is
-required to build Scarlet.
-
-## Build outputs
-
-All in `target/`:
-
-| Artifact | Purpose |
-|---|---|
-| `scarlet-<version>.jar` | **the one you want** — shaded, desktop natives only |
-| `scarlet-<version>-debug.jar` | same, with debug logging enabled |
-| `scarlet-<version>-android.jar` | Android/Termux natives instead of desktop ones |
-| `original-scarlet-<version>.jar` | pre-shade jar; not runnable on its own |
-
-Run with:
+On a memory-constrained machine, building every test binary at once can get
+the job OOM-killed. Run it per package instead:
 
 ```sh
-java -jar target/scarlet-<version>.jar
+cargo test --release -p scarlet-core -p scarlet-ui -- --test-threads=2
+cargo test --release -p scarlet-discord -p scarlet-vrchat -p scarlet-events \
+                     -p scarlet-gif -p scarlet-dave -p scarlet -- --test-threads=2
 ```
 
-## Optional: compiling Android DAVE natives yourself
-
-The `-android` jar ships prebuilt `.so` files by default, so this is only
-needed if you want to rebuild them from source. Requires the Android NDK:
+### The one test worth knowing about
 
 ```sh
-export ANDROID_NDK_HOME=/path/to/android-ndk
-mvn -B clean package -Pandroid-dave-native
+cargo test -p scarlet-discord command_surface_matches_java
 ```
 
-A `termux-local-dave` profile also exists for supplying an
-already-compiled native via `-Dscarlet.localAndroidDaveNative=/path/to/libdave-jvm.so`.
+This compares the Discord commands Celeste actually registers against
+`crates/scarlet-discord/java_commands.txt`, a committed snapshot of
+Scarlet's full command inventory. It fails with a list naming exactly which
+commands went missing. 130 are ported and 31 are deliberately absent; see
+the README.
 
-## Troubleshooting
+If you rename a command, add the pair to `RENAMED_FROM_JAVA` in
+`crates/scarlet-discord/src/commands/mod.rs` — do not edit the snapshot,
+which is the record of what Scarlet had.
 
-**`401 Unauthorized` from jitpack.io** — you skipped the `libdave-maven`
-install. See above.
+## Workspace layout
 
-**Still failing after installing libdave** — Maven caches resolution failures
-and will not retry until they expire. Clear them:
+```
+rust/
+  crates/
+    scarlet-core/      settings, i18n, paths, data files, logging
+    scarlet-vrchat/    VRChat API client, entity cache, rate limiter
+    scarlet-discord/   bot, slash commands, components, voice/TTS
+    scarlet-ui/        egui desktop application
+    scarlet-events/    VRChat log tailer and event pipeline
+    scarlet-gif/       GIF encode/decode for animated emoji
+    scarlet-dave/      Discord end-to-end voice encryption
+    scarlet/           the binary
+  PORTING.md           decisions, deliberate deviations, scope
+  HANDOFF.md           working brief for the next session
+```
+
+## Running a development build
 
 ```sh
-find ~/.m2/repository/moe/kyokobot/libdave -name "*.lastUpdated" -delete
+cargo run --release
 ```
 
-**Verify libdave installed correctly:**
+`CELESTE_HOME` (or the legacy `SCARLET_HOME`) points the data folder
+somewhere else for one run, which is the easy way to test against a scratch
+configuration without touching a real install:
 
 ```sh
-ls ~/.m2/repository/moe/kyokobot/libdave/*/1.0.0/*.jar
+CELESTE_HOME=/tmp/celeste-scratch cargo run --release
 ```
 
-You should see four jars. If the directories contain only `.lastUpdated`
-files, the install did not happen.
+## Logging
+
+`RUST_LOG` controls verbosity through `tracing-subscriber`'s env filter:
+
+```sh
+RUST_LOG=debug cargo run --release
+RUST_LOG=scarlet_vrchat=trace,warn cargo run --release
+```
+
+Logs also go to the `logs/` folder inside the data directory.
