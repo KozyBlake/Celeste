@@ -3098,6 +3098,75 @@ impl ScarletApp {
                     task();
                 }
             }
+            // A list setting is not a line of text. It used to fall through
+            // to the single-line box below, which cannot contain a newline
+            // at all -- so the avatar databases showed as one URL in a
+            // field too narrow to read, and a multi-entry list could not be
+            // edited in the window.
+            SettingKind::StringArrayPattern { .. } => {
+                let current: Vec<String> = descriptor
+                    .get_as_string()
+                    .lines()
+                    .map(|line| line.trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                match known_choices_for(descriptor.id()) {
+                    // Settings whose values come from a known catalogue are
+                    // a choice between named things, not free text.
+                    Some(catalogue) => {
+                        let mut selected = current.clone();
+                        let total = catalogue.len();
+                        let summary = match selected.len() {
+                            0 => "None selected".to_string(),
+                            n => format!("{n} of {total} selected"),
+                        };
+                        egui::ComboBox::from_id_salt(descriptor.id())
+                            .selected_text(summary)
+                            .width(CONTROL_WIDTH - 24.0)
+                            .show_ui(ui, |ui| {
+                                for (label, value) in &catalogue {
+                                    let mut on = selected.iter().any(|item| item == value);
+                                    if ui.checkbox(&mut on, label).changed() {
+                                        if on {
+                                            selected.push(value.clone());
+                                        } else {
+                                            selected.retain(|item| item != value);
+                                        }
+                                        descriptor.set_from_string(&selected.join("\n"), "ui");
+                                    }
+                                }
+                            });
+                    }
+                    // Everything else is a genuinely free list, so give it
+                    // a box that can hold more than one line.
+                    None => {
+                        let id = descriptor.id().to_string();
+                        let widget_id = egui::Id::new(("setting-list", &id));
+                        let stored = descriptor.get_as_string();
+                        let focused = ui.memory(|memory| memory.has_focus(widget_id));
+                        let buf = self
+                            .settings_edit_buffers
+                            .entry(id.clone())
+                            .or_insert_with(|| stored.clone());
+                        if !focused && *buf != stored {
+                            *buf = stored.clone();
+                        }
+                        let response = ui.add(
+                            egui::TextEdit::multiline(buf)
+                                .id(widget_id)
+                                .desired_width(CONTROL_WIDTH - 12.0)
+                                .desired_rows(3)
+                                .hint_text("One per line"),
+                        );
+                        if response.lost_focus() && !descriptor.set_from_string(buf, "ui") {
+                            *buf = descriptor.get_as_string();
+                            self.state.append_cli_output(format!(
+                                "Setting {id}: value rejected (didn't validate)."
+                            ));
+                        }
+                    }
+                }
+            }
             _ => {
                 // Text-ish settings are edited in a buffer and committed,
                 // rather than writing on every keystroke, so a half-typed
@@ -3639,6 +3708,30 @@ fn copy_data_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Resul
 /// layout, and anything that changes the layout around it — here, a
 /// conditional button appearing as soon as the query is non-empty — silently
 /// becomes a *different widget* as far as focus is concerned.
+/// The named values a list setting can hold, when they come from a known
+/// catalogue rather than being free text. `(label, stored value)`.
+///
+/// Returning `None` means "this really is a free list" and the setting gets
+/// a multi-line editor instead.
+fn known_choices_for(id: &str) -> Option<Vec<(String, String)>> {
+    match id {
+        "custom_avatar_search_providers" => Some(
+            scarlet_discord::avatar_search::BUILTIN_PROVIDERS
+                .iter()
+                .map(|url| {
+                    let label = scarlet_discord::avatar_search::provider_name(url)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            scarlet_discord::avatar_search::provider_host(url).to_string()
+                        });
+                    (label, (*url).to_string())
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 fn settings_search_id() -> egui::Id {
     egui::Id::new("settings-search")
 }
@@ -3743,6 +3836,27 @@ fn spawn_unattended_vrchat_login(
 
 #[cfg(test)]
 mod tests {
+    /// The avatar databases are a choice between named services, so the
+    /// setting row offers them as such. Everything else is a genuinely
+    /// free list and gets a multi-line editor instead of a single-line box
+    /// that cannot hold a list at all.
+    #[test]
+    fn list_settings_with_a_catalogue_offer_named_choices() {
+        let catalogue = known_choices_for("custom_avatar_search_providers")
+            .expect("the avatar providers have a catalogue");
+        assert_eq!(
+            catalogue.len(),
+            scarlet_discord::avatar_search::BUILTIN_PROVIDERS.len()
+        );
+        for (label, value) in &catalogue {
+            assert!(!label.is_empty(), "every choice needs a name to pick it by");
+            assert!(!label.starts_with("http"), "a URL is not a name: {label}");
+            assert!(value.starts_with("http"), "the stored value is still the URL");
+        }
+        // A free list has no catalogue, so it must not be rendered as one.
+        assert!(known_choices_for("enforce_instances_world_list").is_none());
+    }
+
     /// The expression this replaced was
     /// `lost_focus() && enter_pressed() || lost_focus()`. Rust binds `&&`
     /// tighter than `||`, so it collapsed to `lost_focus()` and the Enter

@@ -107,7 +107,7 @@ pub fn describe(id: &str) -> Option<&'static str> {
 
         // ── Avatar search ────────────────────────────────────────────────
         "custom_avatar_search_providers_enabled" => "Searches your chosen avatar databases instead of the built-in set.",
-        "custom_avatar_search_providers" => "Which avatar databases to search. Pick them under Actions.",
+        "custom_avatar_search_providers" => "Which avatar databases to search.",
 
         // ── Evidence capture ─────────────────────────────────────────────
         "evidence_enabled" => "Enables evidence capture.",
