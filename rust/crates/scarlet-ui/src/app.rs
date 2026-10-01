@@ -1088,6 +1088,7 @@ impl ScarletApp {
     /// high-cardinality stores write through, while global.json/live.json
     /// retain Java's dirty-tracked behavior and require this explicit save.
     fn shutdown(&mut self) {
+        self.flush_pending_setting_edits();
         if let Some(settings) = self.settings.as_ref() {
             settings.store.save();
         }
@@ -1099,6 +1100,9 @@ impl ScarletApp {
         let show_cli = self.cli_tab_visible();
         // Java hides the tab and falls back to the first one rather than
         // leaving a selected-but-invisible tab behind.
+        // Same reason as the category switch: leaving the tab stops the
+        // fields being drawn, with no focus-loss event.
+        let leaving_settings = self.tab == Tab::Settings;
         if !show_cli && self.tab == Tab::Cli {
             self.tab = Tab::Instance;
         }
@@ -2247,6 +2251,12 @@ impl ScarletApp {
                         .stroke(egui::Stroke::NONE),
                 );
                 if response.clicked() {
+                    // Leaving the category destroys every text field in
+                    // it, and egui delivers no focus-loss event for a
+                    // widget that simply stops being drawn — so anything
+                    // typed and not yet committed would vanish. Write it
+                    // before navigating away.
+                    self.flush_pending_setting_edits();
                     Self::activate_settings_category(
                         &mut self.settings_category,
                         &mut self.settings_search,
@@ -2964,6 +2974,36 @@ impl ScarletApp {
     }
 
     /// The control for one setting, sized so the column lines up.
+    /// Commits any text setting whose buffer differs from what is stored.
+    ///
+    /// Called before anything that stops the settings list being drawn.
+    /// Without it, typing a value and then clicking a different category
+    /// (or leaving the tab, or closing the window) throws the value away
+    /// with no indication that it was not saved.
+    fn flush_pending_setting_edits(&mut self) {
+        let Some(settings) = self.settings.clone() else { return };
+        let mut rejected = Vec::new();
+        for descriptor in settings.registry.all() {
+            let Some(buffer) = self.settings_edit_buffers.get(descriptor.id()) else { continue };
+            let stored = descriptor.get_as_string();
+            if *buffer == stored {
+                continue;
+            }
+            if !descriptor.set_from_string(buffer, "ui") {
+                rejected.push(descriptor.id().to_string());
+            }
+        }
+        for id in rejected {
+            if let Some(descriptor) =
+                settings.registry.all().into_iter().find(|d| d.id() == id)
+            {
+                self.settings_edit_buffers.insert(id.clone(), descriptor.get_as_string());
+            }
+            self.state
+                .append_cli_output(format!("Setting {id}: value rejected (didn't validate)."));
+        }
+    }
+
     fn render_setting_control(&mut self, ui: &mut egui::Ui, descriptor: &std::sync::Arc<dyn SettingDescriptor>) {
         ui.set_width(CONTROL_WIDTH);
         match descriptor.kind() {
@@ -3034,21 +3074,50 @@ impl ScarletApp {
                 }
             }
             _ => {
-                // Text-ish settings commit on Enter or focus loss, so a
-                // half-typed value is never written, and the field shows
-                // whether the last commit validated.
+                // Text-ish settings are edited in a buffer and committed,
+                // rather than writing on every keystroke, so a half-typed
+                // value is never stored. Two things that has to get right,
+                // both of which it previously got wrong:
+                //
+                // 1. The buffer was created once with `or_insert_with` and
+                //    never resynced, so a value changed anywhere else --
+                //    `/settings edit` in Discord, a reset, a reload -- left
+                //    a stale string in the box that the next focus loss
+                //    would write straight back over the newer value.
+                // 2. It only committed on `lost_focus`. Clicking a
+                //    different settings category destroys the widget
+                //    without that ever being delivered, so anything typed
+                //    and not followed by a click *inside* the settings list
+                //    was silently discarded. That is the "settings don't
+                //    save sometimes" case.
                 let id = descriptor.id().to_string();
-                let buf = self.settings_edit_buffers.entry(id.clone()).or_insert_with(|| descriptor.get_as_string());
-                let response = ui.add(egui::TextEdit::singleline(buf).desired_width(CONTROL_WIDTH - 12.0));
-                let commit =
-                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || response.lost_focus();
-                if commit {
+                let widget_id = egui::Id::new(("setting-edit", &id));
+                let stored = descriptor.get_as_string();
+                let focused = ui.memory(|memory| memory.has_focus(widget_id));
+                let buf = self
+                    .settings_edit_buffers
+                    .entry(id.clone())
+                    .or_insert_with(|| stored.clone());
+                // While the field is idle it mirrors the store, so it can
+                // neither show nor write back something stale.
+                if !focused && *buf != stored {
+                    *buf = stored.clone();
+                }
+                let response = ui.add(
+                    egui::TextEdit::singleline(buf)
+                        .id(widget_id)
+                        .desired_width(CONTROL_WIDTH - 12.0),
+                );
+                let entered = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if commit_text_setting(response.lost_focus(), entered) {
                     let accepted = descriptor.set_from_string(buf, "ui");
                     if !accepted {
                         // Put the stored value back rather than leaving a
                         // rejected string sitting in the box looking saved.
                         *buf = descriptor.get_as_string();
-                        self.state.append_cli_output(format!("Setting {id}: value rejected (didn't validate)."));
+                        self.state.append_cli_output(format!(
+                            "Setting {id}: value rejected (didn't validate)."
+                        ));
                     }
                 }
             }
@@ -3532,6 +3601,17 @@ fn copy_data_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Resul
     Ok(copied)
 }
 
+/// Whether a text setting's buffer should be written to the store.
+///
+/// Split out so the rule is testable and so the dead expression it
+/// replaces cannot come back: it read
+/// `lost_focus() && enter_pressed() || lost_focus()`, which — since `&&`
+/// binds tighter than `||` — is just `lost_focus()`. The Enter branch had
+/// no effect at all.
+fn commit_text_setting(lost_focus: bool, enter_pressed: bool) -> bool {
+    lost_focus || enter_pressed
+}
+
 fn row_background(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Color32> {
     (player.pronouns_flagged && player.left.is_none() && player.text_color.is_none())
         .then(|| crate::theme::PRONOUNS_FLAGGED_FILL)
@@ -3628,6 +3708,18 @@ fn spawn_unattended_vrchat_login(
 
 #[cfg(test)]
 mod tests {
+    /// The expression this replaced was
+    /// `lost_focus() && enter_pressed() || lost_focus()`. Rust binds `&&`
+    /// tighter than `||`, so it collapsed to `lost_focus()` and the Enter
+    /// branch never ran.
+    #[test]
+    fn a_text_setting_commits_on_focus_loss_or_enter() {
+        assert!(commit_text_setting(true, false), "clicking away commits");
+        assert!(commit_text_setting(false, true), "pressing Enter commits");
+        assert!(commit_text_setting(true, true));
+        assert!(!commit_text_setting(false, false), "typing alone does not");
+    }
+
     /// Moving the data folder must carry the things that cannot be
     /// regenerated — the login, the settings, the lists — and must not
     /// drag tens of megabytes of old logs and caches along with them.
