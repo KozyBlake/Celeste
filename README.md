@@ -12,7 +12,6 @@ A self-hostable VRChat Group management utility with Discord integration.
 > **About this fork.** Scarlet (this fork) is maintained by **KozyBlake** and developed largely with AI assistance — a "vibe-coded" project. Features and fixes come from KozyBlake and community ideas, implemented and reasoned through with an AI pair, then reviewed and built by KozyBlake. On first launch Scarlet shows this notice and lets you close it if running AI-assisted software isn't for you. (KozyBlake maintains and is accountable for the project; the AI is a tool, not the maintainer.)
 
 - [VRChat Group](https://vrchat.com/home/group/grp_f12667c7-df5f-454f-9a34-5ed8c33112a1)
-- [Changelog](CHANGELOG.md)
 - [Settings](SETTINGS.md)
 - [Frequently Asked Questions](FAQ.md)
 - [Installation](#installation)
@@ -26,7 +25,7 @@ Scarlet is self-hosted, meaning you have complete control of your group's data.
 Your VRChat and Discord credentials are held only on your own machine — they are never sent to a third party, and no Scarlet-operated service ever receives them.  
 Since there is no automatic synchronization of data between groups running Scarlet, you don't have to worry about other groups seeing who your group has moderated or what groups you are tracking.
 
-Scarlet does talk to a small number of outside services — VRChat and Discord because that is the job, plus a handful of **optional** features (avatar search, mobile push, update checks) that are listed individually in [SECURITY.md](SECURITY.md#1-network-connections) along with how to turn each one off. No optional feature is enabled by default. One of them — the mobile companion's off-network relay — does ship pointing at a maintainer-run host, and Scarlet will not contact it until you have paired a phone and accepted an on-screen notice naming that host and what it receives; you can decline and keep using the companion over your own network, or point it at a server you run. If a build behaves differently from that list, treat the list as the claim and the build as the thing to check.
+Celeste talks to VRChat and Discord because that is the job. Beyond those, the only outbound connections come from **optional** features that are off by default: avatar-database search (to whichever VRCX-compatible providers you enable) and the mobile companion. The companion's off-network relay ships pointing at a maintainer-run host and is not contacted until you have paired a phone and accepted an on-screen notice naming that host and what it receives; you can decline and keep using the companion over your own network, or point it at a server you run. There is no update check and no telemetry — Celeste never phones home.
 
 ---
 

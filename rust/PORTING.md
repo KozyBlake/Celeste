@@ -330,11 +330,10 @@ Deliberately **not** renamed, each for a reason:
   the strings around it.
 - **GitHub and meta URLs, and `FORK_REPOSITORY`** — the repository really is
   still named Scarlet, and a renamed URL would simply 404.
-- **The Java source tree and its class names**, which remain the reference
-  implementation this port is checked against.
-- **CHANGELOG.md and the RELEASE_NOTES_* files**, which are a record of what
-  shipped under the old name. Rewriting them would make past releases claim
-  a name they never had.
+- **Java class names in comments and `// Port of ...` references**, which
+  point at the reference implementation this port is checked against. The
+  Java tree itself was deleted from the repo on 2026-10-01; the reference
+  copy lives outside it (see HANDOFF.md).
 - **Data file names** (`settings.json`, `discord_bot.json`, `watched_*.json`,
   ...) — drop-in compatibility with the Java build depends on them.
 
