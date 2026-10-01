@@ -27,6 +27,7 @@ pub mod secure_store;
 pub mod settings;
 pub mod staff_list;
 pub mod trust_rank;
+pub mod tts_voices;
 pub mod ui;
 pub mod unique_strings;
 pub mod versioned_file;

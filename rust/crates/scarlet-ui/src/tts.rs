@@ -20,11 +20,37 @@ enum Engine {
     Espeak(PathBuf),
     SpdSay(PathBuf),
     Flite(PathBuf),
+    /// SVOX Pico. Enumerated by `tts_voices` because Java offers it, so it
+    /// has to be speakable too — offering a voice that cannot be spoken is
+    /// worse than not offering it.
+    Pico(PathBuf),
     MacSay(PathBuf),
     PowerShell(PathBuf),
 }
 
 impl Engine {
+    /// The engine named by a `engine/voice` id, falling back to whatever
+    /// is installed when the id has no prefix (a setting saved before
+    /// prefixes existed) or names an engine that is not present.
+    ///
+    /// Without this the app picked one engine at startup and used it for
+    /// every voice, so choosing a Flite voice ran eSpeak with a voice name
+    /// eSpeak has never heard of.
+    fn for_voice(voice: &str) -> Option<Self> {
+        let engine = scarlet_core::tts_voices::VoiceId::parse(voice).engine;
+        let found = match engine.as_str() {
+            "espeak-ng" | "espeak" => find_on_path(&engine).map(Self::Espeak),
+            "flite" => find_on_path("flite").map(Self::Flite),
+            "pico2wave" => find_on_path("pico2wave").map(Self::Pico),
+            "say" => find_on_path("say").map(Self::MacSay),
+            "sapi" => find_on_path("pwsh")
+                .or_else(|| find_on_path("powershell"))
+                .map(Self::PowerShell),
+            _ => None,
+        };
+        found.or_else(Self::detect)
+    }
+
     fn detect() -> Option<Self> {
         if cfg!(target_os = "linux") {
             find_on_path("espeak-ng")
@@ -46,6 +72,7 @@ impl Engine {
     fn name(&self) -> &'static str {
         match self {
             Self::Espeak(_) => "eSpeak",
+            Self::Pico(_) => "Pico",
             Self::SpdSay(_) => "Speech Dispatcher",
             Self::Flite(_) => "Flite",
             Self::MacSay(_) => "macOS say",
@@ -69,11 +96,6 @@ impl Engine {
     /// engine play directly, as Java falls back to Java Sound.
     #[cfg(target_os = "linux")]
     fn play_via_player(&self, text: &str, voice: &str) -> Option<std::io::Result<Child>> {
-        let Self::Espeak(engine) = self else {
-            // Only eSpeak can render to a file; spd-say and flite are
-            // handed the text and do their own playback.
-            return None;
-        };
         let prefix = resolve_player_prefix()?;
         let wav = std::env::temp_dir().join(format!(
             "celeste-tts-{}-{}.wav",
@@ -83,14 +105,42 @@ impl Engine {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        let mut synth = Command::new(engine);
-        synth.arg("-w").arg(&wav);
-        if !voice.trim().is_empty() {
-            let voice = voice.rsplit(['/', ':']).next().unwrap_or(voice);
-            synth.args(["-v", voice]);
-        }
+        // The voice id carries its engine as a prefix; the engine only
+        // wants the name.
+        let name = scarlet_core::tts_voices::VoiceId::parse(voice).voice;
+        let name = name.trim();
+        // How each engine is asked to render to a file. spd-say is absent
+        // on purpose: it hands text to speech-dispatcher, which does its
+        // own playback and cannot write a wav for us.
+        let mut synth = match self {
+            Self::Espeak(engine) => {
+                let mut command = Command::new(engine);
+                command.arg("-w").arg(&wav);
+                if !name.is_empty() {
+                    command.args(["-v", name]);
+                }
+                command.arg(text);
+                command
+            }
+            Self::Flite(engine) => {
+                let mut command = Command::new(engine);
+                if !name.is_empty() {
+                    command.args(["-voice", name]);
+                }
+                command.args(["-t", text]).arg("-o").arg(&wav);
+                command
+            }
+            Self::Pico(engine) => {
+                let mut command = Command::new(engine);
+                if !name.is_empty() {
+                    command.args(["-l", name]);
+                }
+                command.arg("-w").arg(&wav).arg(text);
+                command
+            }
+            _ => return None,
+        };
         let synthesized = synth
-            .arg(text)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -155,6 +205,15 @@ impl Engine {
                     command.args(["-voice", voice]);
                 }
                 command.args(["-t", text]);
+                command
+            }
+            Self::Pico(path) => {
+                // pico2wave cannot play audio itself: it only writes a wav,
+                // so without the external player stage there is nothing to
+                // hear. `play_via_player` handles it above; reaching here
+                // means no player was found.
+                let mut command = Command::new(path);
+                command.args(["-w", "/dev/null"]).arg(text);
                 command
             }
             Self::MacSay(path) => {
@@ -350,7 +409,13 @@ fn worker(
         }
         let spawned = match request {
             Request::Speak { text, voice } => {
-                let Some(engine) = &engine else { continue };
+                // Pick the engine the chosen voice belongs to, not the one
+                // detected at startup: with a Flite voice selected and
+                // eSpeak also installed, the startup engine would run
+                // eSpeak with a voice name it has never heard of.
+                let Some(engine) = Engine::for_voice(&voice).or_else(|| engine.clone()) else {
+                    continue;
+                };
                 engine.spawn(&text, &voice)
             }
             Request::Audio { path } => spawn_audio_file(&path),
@@ -489,6 +554,38 @@ fn is_executable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A voice id names its engine, and the speak path must honour it.
+    /// Choosing a Flite voice while eSpeak is also installed previously
+    /// ran eSpeak with a Flite voice name.
+    #[test]
+    fn the_engine_follows_the_voice_rather_than_whatever_was_detected() {
+        // Only assert on engines actually present, so this is meaningful
+        // on a machine with none of them rather than vacuous or flaky.
+        if find_on_path("espeak-ng").is_some() {
+            assert!(
+                matches!(Engine::for_voice("espeak-ng/en-us"), Some(Engine::Espeak(_))),
+                "an espeak-ng voice must select eSpeak"
+            );
+        }
+        if find_on_path("flite").is_some() {
+            assert!(
+                matches!(Engine::for_voice("flite/slt"), Some(Engine::Flite(_))),
+                "a flite voice must select Flite"
+            );
+        }
+        // An unprefixed id is a setting saved before prefixes existed, and
+        // an unknown engine may simply not be installed; both fall back to
+        // whatever is available rather than refusing to speak.
+        assert_eq!(
+            Engine::for_voice("en-us").is_some(),
+            Engine::detect().is_some()
+        );
+        assert_eq!(
+            Engine::for_voice("nosuchengine/x").is_some(),
+            Engine::detect().is_some()
+        );
+    }
+
     /// Java lets `scarlet.tts.player` / `SCARLET_TTS_PLAYER` override the
     /// player, arguments included. Celeste's own variable wins, and Java's
     /// is still honoured so an existing launcher keeps working.

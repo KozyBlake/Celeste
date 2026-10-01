@@ -992,44 +992,16 @@ impl Settings {
 /// Enumerates voices from the platform engine used by the Rust desktop TTS
 /// service. Kept here so `FileValuedStringChoice` validates the same values
 /// the Settings UI offers instead of rejecting every non-empty voice.
+/// Every installed speech voice, as `engine/voice`.
+///
+/// Previously this asked only eSpeak, and returned on the first engine that
+/// answered — so a machine with eSpeak NG installed never saw Flite or
+/// Pico voices at all. [`scarlet_core::tts_voices`] ports Java's full
+/// discovery.
 pub fn installed_tts_voices() -> Vec<String> {
-    static VOICES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    VOICES.get_or_init(detect_installed_tts_voices).clone()
+    crate::tts_voices::installed()
 }
 
-fn detect_installed_tts_voices() -> Vec<String> {
-    #[cfg(target_os = "linux")]
-    {
-        for command in ["espeak-ng", "espeak"] {
-            if let Ok(output) = std::process::Command::new(command).arg("--voices").output() {
-                if output.status.success() {
-                    let mut voices: Vec<String> = String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .skip(1)
-                        // Same column Java's `awk 'NR>1 {print $2}'` uses:
-                        // stable engine voice/language ids such as `en-us`.
-                        .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
-                        .collect();
-                    voices.sort();
-                    voices.dedup();
-                    if !voices.is_empty() {
-                        return voices;
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = std::process::Command::new("say").args(["-v", "?"]).output() {
-            return String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(|line| line.split_whitespace().next().map(str::to_string))
-                .collect();
-        }
-    }
-    Vec::new()
-}
 
 #[cfg(test)]
 mod tests {
