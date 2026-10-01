@@ -33,6 +33,7 @@ use reqwest::{Client, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
 
+use crate::rate_limit::SendLimited;
 use crate::basic_auth::basic_auth_header;
 use crate::models::{CurrentUser, PaginatedGroupAuditLogEntryList};
 
@@ -110,6 +111,11 @@ pub struct VrChatClient {
     /// gets. See [`crate::entity_cache`] and
     /// [`VrChatClient::with_entity_caches`].
     caches: Option<Arc<crate::entity_cache::EntityCaches>>,
+    /// Java puts a single token bucket in the okhttp interceptor chain so
+    /// every VRChat call passes through it (`ScarletVRChat.java:273-284`).
+    /// reqwest has no interceptor chain, so each request opts in via
+    /// `send_limited`; the sweep below routes all of them.
+    limiter: Arc<crate::rate_limit::VrcRateLimiter>,
     /// The live cookie jar, kept so the session (VRChat's `auth` cookie and
     /// the `twoFactorAuth` cookie that follows a verified code) can be saved
     /// and restored across restarts — see [`VrChatClient::export_cookies`].
@@ -181,6 +187,7 @@ impl VrChatClient {
             // Java's caches are a static shared by every `ScarletVRChat`,
             // so a client picks them up rather than being handed them.
             caches: crate::entity_cache::shared(),
+            limiter: Arc::new(crate::rate_limit::VrcRateLimiter::default()),
             cookies,
         })
     }
@@ -251,7 +258,7 @@ impl VrChatClient {
     /// Re-checks the current (cookie-based) session, matching
     /// `AuthenticationApi.getCurrentUser` used after `verifyAuthToken`.
     pub async fn get_current_user(&self) -> Result<CurrentUser, VrChatError> {
-        let response = self.http.get(self.url("/auth/user")).send().await?;
+        let response = self.http.get(self.url("/auth/user")).send_limited(&self.limiter).await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -263,7 +270,7 @@ impl VrChatClient {
     /// Port of `AuthenticationApi.logout()` used by Java's CLI `logout`
     /// command. VRChat invalidates the current cookie-backed session.
     pub async fn logout(&self) -> Result<(), VrChatError> {
-        let response = self.http.put(self.url("/logout")).send().await?;
+        let response = self.http.put(self.url("/logout")).send_limited(&self.limiter).await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -276,7 +283,7 @@ impl VrChatClient {
     /// slightly incorrect local clock can still sign in (matching Java's
     /// `MiscellaneousApi.getSystemTime()`).
     pub async fn get_server_time(&self) -> Result<DateTime<Utc>, VrChatError> {
-        let response = self.http.get(self.url("/time")).send().await?;
+        let response = self.http.get(self.url("/time")).send_limited(&self.limiter).await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -508,7 +515,7 @@ impl VrChatClient {
             crate::entity_cache::CacheDecision::Miss => {}
         }
         let result = async {
-            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send_limited(&self.limiter).await?;
             Self::parse_response(response).await
         }
         .await;
@@ -521,7 +528,7 @@ impl VrChatClient {
     pub async fn get_user_fresh(&self, user_id: &str) -> Result<crate::models::User, VrChatError> {
         let cache = self.caches.as_ref().map(|caches| &caches.users);
         let result = async {
-            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send_limited(&self.limiter).await?;
             Self::parse_response(response).await
         }
         .await;
@@ -609,7 +616,7 @@ impl VrChatClient {
         }
         let result = async {
             let response =
-                self.http.get(self.url(&format!("/users/{user_id}/groups"))).send().await?;
+                self.http.get(self.url(&format!("/users/{user_id}/groups"))).send_limited(&self.limiter).await?;
             Self::parse_response(response).await
         }
         .await;
@@ -622,13 +629,13 @@ impl VrChatClient {
     /// the port's reduced `User` model: snapshots are historical records and
     /// must retain fields that Celeste does not otherwise inspect.
     pub async fn get_user_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/users/{user_id}"))).send().await?;
+        let response = self.http.get(self.url(&format!("/users/{user_id}"))).send_limited(&self.limiter).await?;
         Self::parse_response(response).await
     }
 
     /// Captures the unabridged group-membership array for an audit target.
     pub async fn get_user_groups_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/users/{user_id}/groups"))).send().await?;
+        let response = self.http.get(self.url(&format!("/users/{user_id}/groups"))).send_limited(&self.limiter).await?;
         Self::parse_response(response).await
     }
 
@@ -636,13 +643,13 @@ impl VrChatClient {
     /// returns JSON `null` when the user is not representing a group; keeping
     /// that value distinguishes a successful snapshot from a failed request.
     pub async fn get_user_represented_group_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/users/{user_id}/groups/represented"))).send().await?;
+        let response = self.http.get(self.url(&format!("/users/{user_id}/groups/represented"))).send_limited(&self.limiter).await?;
         Self::parse_response(response).await
     }
 
     /// Port of `getModelFile(String fileId)`: `GET /file/{fileId}`.
     pub async fn get_file(&self, file_id: &str) -> Result<crate::models::ModelFile, VrChatError> {
-        let response = self.http.get(self.url(&format!("/file/{file_id}"))).send().await?;
+        let response = self.http.get(self.url(&format!("/file/{file_id}"))).send_limited(&self.limiter).await?;
         Self::parse_response(response).await
     }
 
@@ -662,7 +669,7 @@ impl VrChatClient {
             "standard" => format!("/analysis/{}/{}/standard", file.id, file.version),
             _ => format!("/analysis/{}/{}", file.id, file.version),
         };
-        let response = self.http.get(self.url(&path)).send().await?;
+        let response = self.http.get(self.url(&path)).send_limited(&self.limiter).await?;
         Self::parse_response(response).await
     }
 
@@ -723,7 +730,7 @@ impl VrChatClient {
             if include_roles {
                 request = request.query(&[("includeRoles", "true")]);
             }
-            Self::parse_response(request.send().await?).await
+            Self::parse_response(request.send_limited(&self.limiter).await?).await
         }
         .await;
         crate::entity_cache::record(cache, group_id, &result);
@@ -1222,14 +1229,14 @@ impl VrChatClient {
     /// `GET /prints/{printId}`. Kept as JSON because Celeste only needs the
     /// owner and nested file/image fields for Discord audit decoration.
     pub async fn get_print(&self, print_id: &str) -> Result<serde_json::Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/prints/{print_id}"))).send().await?;
+        let response = self.http.get(self.url(&format!("/prints/{print_id}"))).send_limited(&self.limiter).await?;
         Self::parse_response(response).await
     }
 
     /// `GET /props/{propId}`. The endpoint is documented by the community
     /// OpenAPI specification and mirrors Java's generated `PropsApi` call.
     pub async fn get_prop(&self, prop_id: &str) -> Result<serde_json::Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/props/{prop_id}"))).send().await?;
+        let response = self.http.get(self.url(&format!("/props/{prop_id}"))).send_limited(&self.limiter).await?;
         Self::parse_response(response).await
     }
 
@@ -1268,7 +1275,7 @@ impl VrChatClient {
             crate::entity_cache::CacheDecision::Miss => {}
         }
         let result = async {
-            let response = self.http.get(self.url(&format!("/worlds/{world_id}"))).send().await?;
+            let response = self.http.get(self.url(&format!("/worlds/{world_id}"))).send_limited(&self.limiter).await?;
             Self::parse_response(response).await
         }
         .await;
@@ -1296,7 +1303,7 @@ impl VrChatClient {
             crate::entity_cache::CacheDecision::Miss => {}
         }
         let result = async {
-            let response = self.http.get(self.url(&format!("/avatars/{avatar_id}"))).send().await?;
+            let response = self.http.get(self.url(&format!("/avatars/{avatar_id}"))).send_limited(&self.limiter).await?;
             Self::parse_response(response).await
         }
         .await;
@@ -1447,7 +1454,7 @@ impl VrChatClient {
         if let Some(closed_at) = closed_at {
             request = request.query(&[("closedAt", closed_at.to_rfc3339())]);
         }
-        Self::parse_response(request.send().await?).await
+        Self::parse_response(request.send_limited(&self.limiter).await?).await
     }
 
     /// Port of `checkUserHasVRChatPermission(GroupMember, GroupPermissions)`

@@ -15,4 +15,5 @@ pub mod entity_cache;
 pub mod log_tail;
 pub mod launch;
 pub mod models;
+pub mod rate_limit;
 pub mod totp;
