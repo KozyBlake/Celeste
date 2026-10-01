@@ -24,6 +24,7 @@ pub mod data_dir_prompt;
 pub mod platform;
 pub mod setup;
 pub mod state;
+pub mod theme;
 pub mod tts;
 
 pub use app::run;

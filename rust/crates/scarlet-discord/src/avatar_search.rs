@@ -21,6 +21,44 @@ pub const BUILTIN_PROVIDERS: [&str; 5] = [
     "https://avtr.fumikoecho.net/api/integrations/avatars/vrcx",
 ];
 
+/// A readable name for each built-in provider, so the settings UI can offer
+/// them as named databases to pick from rather than a column of URLs to
+/// curate by hand. The name is the service's host, which is what a
+/// moderator comparing coverage would actually recognise — not a brand name
+/// invented here.
+///
+/// `None` for anything the user added themselves: a custom endpoint has no
+/// name we can honestly give it, so the UI shows the URL for those.
+pub fn provider_name(url: &str) -> Option<&'static str> {
+    let url = url.to_ascii_lowercase();
+    let host = |needle: &str| url.contains(needle);
+    if host("avtrdb.com") {
+        Some("avtrDB")
+    } else if host("nekosunevr.co.uk") {
+        Some("NekoSuneVR")
+    } else if host("vrcdb.com") {
+        Some("VRCDB")
+    } else if host("amelia.fun") {
+        Some("Amelia PAW")
+    } else if host("fumikoecho.net") {
+        Some("Fumiko Echo")
+    } else {
+        None
+    }
+}
+
+/// The host of `url`, for showing underneath a provider's name. Falls back
+/// to the whole string when it doesn't parse as a URL, which is better than
+/// showing nothing.
+pub fn provider_host(url: &str) -> &str {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AvatarPerformance {
     pub pc_rating: Option<String>,
@@ -459,6 +497,24 @@ mod tests {
         assert!(is_world_balancer("https://worldbalancer.com/search"));
         assert!(!is_world_balancer("https://api.avtrdb.com/v2/avatar/search/vrcx"));
         assert!(!BUILTIN_PROVIDERS.iter().any(|provider| is_world_balancer(provider)));
+    }
+
+    /// Every built-in provider must have a name, or the settings list
+    /// falls back to showing a raw URL for it — which is the thing the
+    /// named catalogue exists to avoid.
+    #[test]
+    fn every_builtin_provider_has_a_readable_name() {
+        for provider in BUILTIN_PROVIDERS {
+            assert!(
+                provider_name(provider).is_some(),
+                "built-in provider has no name: {provider}"
+            );
+            assert!(!provider_host(provider).is_empty());
+            assert!(!provider_host(provider).contains('/'));
+        }
+        // A user's own endpoint has no name we could honestly give it.
+        assert_eq!(provider_name("https://example.invalid/search"), None);
+        assert_eq!(provider_host("https://example.invalid/search"), "example.invalid");
     }
 
     #[tokio::test]

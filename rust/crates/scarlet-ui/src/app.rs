@@ -571,7 +571,8 @@ impl ScarletApp {
             .and_then(|settings| settings.store.get_object::<Vec<u8>>("ui_accent_color"))
             .filter(|rgb| rgb.len() == 3)
             .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
-            .unwrap_or_else(|| egui::Color32::from_rgb(38, 104, 170));
+            // Java's `Swing.DEFAULT_ACCENT` is crimson; the port had its own blue.
+            .unwrap_or(crate::theme::DEFAULT_ACCENT);
         let settings_notice = tts.engine_name().is_none().then(||
             "Local text-to-speech is unavailable because no supported speech engine was found. Install eSpeak NG/eSpeak, Speech Dispatcher, or Flite on Linux; use macOS 'say'; or ensure PowerShell is available on Windows. Discord voice TTS can still work when configured.".to_string()
         );
@@ -704,15 +705,15 @@ impl ScarletApp {
         let mut style = (*ctx.style()).clone();
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
         style.spacing.button_padding = egui::vec2(12.0, 7.0);
-        style.spacing.window_margin = egui::Margin::same(12.0);
-        style.visuals.panel_fill = egui::Color32::from_rgb(16, 19, 25);
-        style.visuals.window_fill = egui::Color32::from_rgb(22, 26, 34);
-        style.visuals.extreme_bg_color = egui::Color32::from_rgb(10, 13, 18);
-        style.visuals.faint_bg_color = egui::Color32::from_rgb(24, 29, 38);
+        style.spacing.window_margin = egui::Margin::same(crate::theme::PANEL_PAD);
+        style.visuals.panel_fill = crate::theme::INK;
+        style.visuals.window_fill = crate::theme::PANEL;
+        style.visuals.extreme_bg_color = crate::theme::WELL;
+        style.visuals.faint_bg_color = crate::theme::PANEL;
         style.visuals.selection.bg_fill = self.accent.gamma_multiply(0.62);
-        style.visuals.selection.stroke.color = egui::Color32::from_rgb(226, 239, 255);
-        style.visuals.window_rounding = egui::Rounding::same(9.0);
-        style.visuals.menu_rounding = egui::Rounding::same(7.0);
+        style.visuals.selection.stroke.color = crate::theme::TEXT;
+        style.visuals.window_rounding = egui::Rounding::same(crate::theme::RADIUS_PANEL);
+        style.visuals.menu_rounding = egui::Rounding::same(crate::theme::RADIUS_PANEL);
         for widget in [
             &mut style.visuals.widgets.noninteractive,
             &mut style.visuals.widgets.inactive,
@@ -720,10 +721,11 @@ impl ScarletApp {
             &mut style.visuals.widgets.active,
             &mut style.visuals.widgets.open,
         ] {
-            widget.rounding = egui::Rounding::same(7.0);
+            // Only things you can press are rounded; panels stay square.
+            widget.rounding = egui::Rounding::same(crate::theme::RADIUS_CONTROL);
         }
-        style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(30, 36, 46);
-        style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(42, 51, 65);
+        style.visuals.widgets.inactive.weak_bg_fill = crate::theme::RAISED;
+        style.visuals.widgets.hovered.weak_bg_fill = crate::theme::RULE_STRONG;
         style.visuals.widgets.active.weak_bg_fill = self.accent.gamma_multiply(0.72);
 
         // Setting the fills above without also setting the text and border
@@ -733,17 +735,17 @@ impl ScarletApp {
         // and the border kept a bright stock outline -- which is what made a
         // pressed or selected control look wrong rather than merely
         // different. A fill and the text on it have to be chosen together.
-        let text_default = egui::Color32::from_rgb(205, 213, 226);
-        let text_emphasis = egui::Color32::from_rgb(232, 240, 252);
-        let border_subtle = egui::Color32::from_rgb(44, 53, 67);
+        let text_default = crate::theme::TEXT;
+        let text_emphasis = crate::theme::TEXT;
+        let border_subtle = crate::theme::RULE;
         style.visuals.widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(168, 178, 193));
+            egui::Stroke::new(1.0_f32, crate::theme::TEXT_DIM);
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, border_subtle);
         style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, text_default);
         style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, border_subtle);
         style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, text_emphasis);
         style.visuals.widgets.hovered.bg_stroke =
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(66, 78, 96));
+            egui::Stroke::new(1.0_f32, crate::theme::RULE_STRONG);
         // On the blue, text has to be near-white to stay readable, and the
         // border has to be a lighter blue rather than a grey outline.
         style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, text_emphasis);
@@ -766,24 +768,24 @@ impl ScarletApp {
     /// ported screen from inventing its own shade, border and corner radius.
     fn card_frame() -> egui::Frame {
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(22, 27, 35))
+            .fill(crate::theme::PANEL)
             .stroke(egui::Stroke::new(
                 1.0_f32,
-                egui::Color32::from_rgb(45, 55, 69),
+                crate::theme::RULE,
             ))
-            .rounding(egui::Rounding::same(9.0))
-            .inner_margin(egui::Margin::same(12.0))
+            .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
+            .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD))
     }
 
     fn inset_frame() -> egui::Frame {
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(12, 15, 21))
+            .fill(crate::theme::WELL)
             .stroke(egui::Stroke::new(
                 1.0_f32,
-                egui::Color32::from_rgb(37, 45, 57),
+                crate::theme::RULE,
             ))
-            .rounding(egui::Rounding::same(7.0))
-            .inner_margin(egui::Margin::same(10.0))
+            .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
+            .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD))
     }
 
     fn primary_button(&self, label: impl Into<egui::WidgetText>) -> egui::Button<'_> {
@@ -859,7 +861,7 @@ impl ScarletApp {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(scarlet_core::identity::NAME).strong().size(18.0));
+                ui.label(egui::RichText::new(scarlet_core::identity::NAME).strong().size(crate::theme::TEXT_HEADING));
                 ui.label(
                     egui::RichText::new(format!("Version {}  |  Windows & Linux", scarlet_core::identity::VERSION))
                         .small()
@@ -870,14 +872,14 @@ impl ScarletApp {
                 let status = self.state.connection_status();
                 let signed_in = status.contains("signed in as");
                 let colour = if signed_in {
-                    egui::Color32::from_rgb(91, 196, 125)
+                    crate::theme::OK
                 } else {
-                    egui::Color32::from_rgb(232, 169, 76)
+                    crate::theme::WARN
                 };
                 let label = if status.is_empty() { "VRChat: connecting" } else { &status };
                 egui::Frame::none()
                     .fill(egui::Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), 28))
-                    .rounding(egui::Rounding::same(12.0))
+                    .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
                     .inner_margin(egui::Margin::symmetric(10.0, 5.0))
                     .show(ui, |ui| {
                         ui.colored_label(colour, label);
@@ -890,9 +892,9 @@ impl ScarletApp {
         ui.add_space(3.0);
         ui.horizontal_wrapped(|ui| {
             egui::Frame::none()
-                .fill(egui::Color32::from_rgb(12, 15, 21))
-                .rounding(egui::Rounding::same(8.0))
-                .inner_margin(egui::Margin::same(3.0))
+                .fill(crate::theme::WELL)
+                .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
+                .inner_margin(egui::Margin::same(crate::theme::GAP_TIGHT))
                 .show(ui, |ui| self.tab_bar(ui));
             ui.separator();
 
@@ -937,7 +939,7 @@ impl ScarletApp {
 
             let tts_on = self.state.tts_enabled();
             let voice_colour = if tts_on {
-                egui::Color32::from_rgb(91, 196, 125)
+                crate::theme::OK
             } else {
                 ui.visuals().weak_text_color()
             };
@@ -1111,7 +1113,7 @@ impl ScarletApp {
                 let text = if selected {
                     egui::RichText::new(label)
                         .strong()
-                        .color(egui::Color32::from_rgb(240, 246, 255))
+                        .color(crate::theme::TEXT)
                 } else {
                     egui::RichText::new(label)
                 };
@@ -1271,8 +1273,8 @@ impl ScarletApp {
             })
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(egui::RichText::new("CURRENT INSTANCE").small().color(egui::Color32::from_rgb(103, 170, 235)));
-                ui.label(egui::RichText::new(&instance_name).strong().size(18.0));
+                ui.label(egui::RichText::new("Current instance").small().color(crate::theme::INFO));
+                ui.label(egui::RichText::new(&instance_name).strong().size(crate::theme::TEXT_HEADING));
                 if !compact_height {
                     if let Some(instance) = &instance {
                     ui.add(egui::Label::new(egui::RichText::new(&instance.location).small().weak().monospace()).truncate())
@@ -1289,9 +1291,9 @@ impl ScarletApp {
                         ui.separator();
                         ui.label(egui::RichText::new(format!("Joined {}", instance.joined.format("%b %-d at %H:%M"))).small().weak());
                         ui.separator();
-                        ui.label(egui::RichText::new(format!("{present} present")).color(egui::Color32::from_rgb(91, 196, 125)));
+                        ui.label(egui::RichText::new(format!("{present} present")).color(crate::theme::OK));
                         if left > 0 {
-                            ui.label(egui::RichText::new(format!("{left} left")).color(egui::Color32::from_rgb(168, 174, 185)));
+                            ui.label(egui::RichText::new(format!("{left} left")).color(crate::theme::TEXT_MUTED));
                         }
                         ui.label(egui::RichText::new(format!("{total} total")).small().weak());
                         if !compact_height {
@@ -1331,14 +1333,14 @@ impl ScarletApp {
         ui.set_min_width(ui.available_width());
         ui.set_min_height((player_panel_height - 24.0).max(0.0));
         ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("Player details").strong().size(15.0));
+            ui.label(egui::RichText::new("Player details").strong().size(crate::theme::TEXT_HEADING));
             ui.separator();
             ui.label(egui::RichText::new(format!("{} visible columns", column_order.len())).small().weak());
         });
         ui.add_space(8.0);
         let table_panel_height = ui.available_height();
         Self::inset_frame()
-            .inner_margin(egui::Margin::same(6.0))
+            .inner_margin(egui::Margin::same(crate::theme::GAP))
             .show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.set_min_height((table_panel_height - 12.0).max(0.0));
@@ -1389,7 +1391,7 @@ impl ScarletApp {
                                         egui::Label::new(
                                             egui::RichText::new(format!("{}{marker}", column.label()))
                                                 .strong()
-                                                .color(egui::Color32::from_rgb(197, 205, 218)),
+                                                .color(crate::theme::TEXT_DIM),
                                         )
                                         .truncate()
                                         .sense(egui::Sense::click_and_drag()),
@@ -1528,20 +1530,20 @@ impl ScarletApp {
             match self.state.instance() {
                 Some(instance) => {
                     let where_ = instance.world_name.clone().unwrap_or_else(|| instance.location.clone());
-                    ui.label(egui::RichText::new("INSTANCE READY").small().color(egui::Color32::from_rgb(103, 170, 235)));
+                    ui.label(egui::RichText::new("Instance ready").small().color(crate::theme::INFO));
                     ui.add_space(6.0);
-                    ui.label(egui::RichText::new(where_).strong().size(22.0));
+                    ui.label(egui::RichText::new(where_).strong().size(crate::theme::TEXT_TITLE));
                     ui.add_space(6.0);
                     ui.add(egui::Label::new(egui::RichText::new(&instance.location).small().weak().monospace()).truncate())
                         .on_hover_text(&instance.location);
                     ui.add_space(14.0);
-                    ui.label(egui::RichText::new("Waiting for players").strong().size(15.0));
+                    ui.label(egui::RichText::new("Waiting for players").strong().size(crate::theme::TEXT_HEADING));
                     ui.label(egui::RichText::new("The roster and moderation details will appear automatically as people join.").weak());
                 }
                 None => {
-                    ui.label(egui::RichText::new("WAITING FOR VRCHAT").small().color(egui::Color32::from_rgb(232, 169, 76)));
+                    ui.label(egui::RichText::new("Waiting for VRChat").small().color(crate::theme::WARN));
                     ui.add_space(6.0);
-                    ui.label(egui::RichText::new("No instance detected").strong().size(22.0));
+                    ui.label(egui::RichText::new("No instance detected").strong().size(crate::theme::TEXT_TITLE));
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new(scarlet_core::i18n::tr("ui.playerDataWillAppear", &[])).weak());
                 }
@@ -1796,7 +1798,7 @@ impl ScarletApp {
                     });
                     if let Some(error) = &self.create_instance_error {
                         ui.add_space(8.0);
-                        ui.colored_label(egui::Color32::from_rgb(240, 95, 95), error);
+                        ui.colored_label(crate::theme::DANGER, error);
                     }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
@@ -2169,7 +2171,7 @@ impl ScarletApp {
         ];
         let find = |id: &str| descriptors.iter().find(|descriptor| descriptor.id() == id);
         Self::card_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("Event notifications").strong().size(15.0));
+            ui.label(egui::RichText::new("Event notifications").strong().size(crate::theme::TEXT_HEADING));
             ui.label(egui::RichText::new("Choose how each event should get your attention.").small().weak());
             ui.add_space(8.0);
             egui::Grid::new("notification_matrix")
@@ -2224,8 +2226,8 @@ impl ScarletApp {
             .exact_width(176.0)
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(19, 23, 30))
-                    .inner_margin(egui::Margin::same(10.0)),
+                    .fill(crate::theme::PANEL)
+                    .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
             .show_inside(ui, |ui| {
             ui.label(egui::RichText::new("SETTINGS").strong().small().weak());
@@ -2265,8 +2267,8 @@ impl ScarletApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(16, 19, 25))
-                    .inner_margin(egui::Margin::same(14.0)),
+                    .fill(crate::theme::INK)
+                    .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
             .show_inside(ui, |ui| {
             let category = self.settings_category;
@@ -2347,7 +2349,7 @@ impl ScarletApp {
                         end += 1;
                     }
                     Self::card_frame().show(ui, |ui| {
-                        ui.label(egui::RichText::new(group).strong().size(15.0));
+                        ui.label(egui::RichText::new(group).strong().size(crate::theme::TEXT_HEADING));
                         ui.add_space(5.0);
                         for (offset, descriptor) in rows[start..end].iter().enumerate() {
                             ui.horizontal(|ui| {
@@ -2387,7 +2389,7 @@ impl ScarletApp {
         }
         ui.add_space(2.0);
         Self::card_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("Actions").strong().size(15.0));
+            ui.label(egui::RichText::new("Actions").strong().size(crate::theme::TEXT_HEADING));
             ui.add_space(5.0);
             match category {
                 SettingCategory::General => {
@@ -2582,13 +2584,36 @@ impl ScarletApp {
                 ui.label("Choose the VRCX-compatible databases Celeste may query.");
                 ui.label(egui::RichText::new("World Balancer entries are intentionally ignored.").small().weak());
                 ui.add_space(6.0);
-                for choice in &mut self.avatar_provider_choices { ui.checkbox(&mut choice.enabled, &choice.url); }
+                // A database is a thing you recognise by name, not a URL
+                // you proof-read. Named services show their name with the
+                // host underneath; an endpoint the user added themselves has
+                // no name we can honestly give it, so it shows its URL.
+                for choice in &mut self.avatar_provider_choices {
+                    let name = scarlet_discord::avatar_search::provider_name(&choice.url);
+                    ui.horizontal(|ui| {
+                        let label = name.unwrap_or("Custom endpoint");
+                        ui.checkbox(&mut choice.enabled, label);
+                        let detail = match name {
+                            Some(_) => scarlet_discord::avatar_search::provider_host(&choice.url),
+                            None => choice.url.as_str(),
+                        };
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(detail)
+                                    .size(crate::theme::TEXT_SM)
+                                    .color(crate::theme::TEXT_MUTED),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&choice.url);
+                    });
+                }
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.avatar_provider_input).desired_width(430.0).hint_text("https://..."));
                     add = ui.button("Add").clicked();
                 });
-                if let Some(error) = &self.avatar_provider_error { ui.colored_label(egui::Color32::from_rgb(235, 120, 100), error); }
+                if let Some(error) = &self.avatar_provider_error { ui.colored_label(crate::theme::DANGER, error); }
                 ui.horizontal(|ui| {
                     restore = ui.button("Restore defaults").clicked();
                     save = ui.button("Save").clicked();
@@ -2950,7 +2975,7 @@ impl ScarletApp {
                         ui.label(
                             egui::RichText::new(&line.0)
                                 .monospace()
-                                .color(egui::Color32::from_rgb(198, 211, 226)),
+                                .color(crate::theme::TEXT_DIM),
                         );
                     }
                 });
@@ -3215,7 +3240,7 @@ impl eframe::App for ScarletApp {
         egui::TopBottomPanel::top("toolbar")
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(20, 24, 31))
+                    .fill(crate::theme::PANEL)
                     .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
             )
             .show(ctx, |ui| {
@@ -3225,7 +3250,7 @@ impl eframe::App for ScarletApp {
         egui::TopBottomPanel::bottom("status_bar")
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(20, 24, 31))
+                    .fill(crate::theme::PANEL)
                     .inner_margin(egui::Margin::symmetric(12.0, 6.0)),
             )
             .show(ctx, |ui| {
@@ -3261,7 +3286,7 @@ impl eframe::App for ScarletApp {
                 // sense: nothing plays and nothing is shown.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(problem) = self.state.tts_status() {
-                        ui.colored_label(egui::Color32::from_rgb(235, 165, 65), "Voice warning")
+                        ui.colored_label(crate::theme::WARN, "Voice warning")
                             .on_hover_text(&problem);
                     }
                     if let Some(announcement) = self.state.announcement() {
@@ -3283,8 +3308,8 @@ impl eframe::App for ScarletApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(16, 19, 25))
-                    .inner_margin(egui::Margin::same(12.0)),
+                    .fill(crate::theme::INK)
+                    .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
             .show(ctx, |ui| match self.tab {
             Tab::Instance => self.instance_tab(ui),
@@ -3371,7 +3396,7 @@ fn sort_players(players: &mut [scarlet_core::ui::ConnectedPlayer], sort: Option<
 
 fn row_background(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Color32> {
     (player.pronouns_flagged && player.left.is_none() && player.text_color.is_none())
-        .then(|| egui::Color32::from_rgb(80, 55, 10))
+        .then(|| crate::theme::PRONOUNS_FLAGGED_FILL)
 }
 
 /// Port of `getOverrideForegroundColor` in `ScarletUI.java:787-813`. The
@@ -3381,7 +3406,7 @@ fn row_foreground(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Co
     if let Some((r, g, b)) = player.text_color {
         return Some(egui::Color32::from_rgb(r, g, b));
     }
-    player.pronouns_flagged.then(|| egui::Color32::from_rgb(235, 190, 80))
+    player.pronouns_flagged.then(|| crate::theme::PRONOUNS_FLAGGED_TEXT)
 }
 
 pub fn run(
