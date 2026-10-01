@@ -67,7 +67,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         }
     }
 
-    lines.push("### Scarlet permissions:".to_string());
+    lines.push("### Celeste permissions:".to_string());
     let config = { ctx.data.read().await.get::<DiscordConfigKey>().cloned() };
     // Java intentionally reports which permission roles the invoker has,
     // not which roles the lookup target has (`event.getMember()`).

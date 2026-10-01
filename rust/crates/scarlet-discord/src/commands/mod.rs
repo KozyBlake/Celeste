@@ -673,7 +673,7 @@ fn permission_denial(
         // Ban/unban (`ScarletDiscordCommands.java:2290`), which is the only
         // family with a Discord-side override to point at.
         (Some(action), Some(override_permission)) => format!(
-            "You do not have permission to {action}.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/scarlet-discord-permissions type:Other name:{override_permission} value:Allow`)||"
+            "You do not have permission to {action}.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/celeste-discord-permissions type:Other name:{override_permission} value:Allow`)||"
         ),
         // `VrchatGroups.checkMemberAndSelfPerms` (`:2572`), which names the
         // exact permission an admin has to grant.
@@ -833,7 +833,7 @@ mod tests {
         );
         assert_eq!(
             message,
-            "You do not have permission to ban users.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/scarlet-discord-permissions type:Other name:groupex-bans-manage value:Allow`)||"
+            "You do not have permission to ban users.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/celeste-discord-permissions type:Other name:groupex-bans-manage value:Allow`)||"
         );
     }
 
@@ -971,12 +971,30 @@ mod command_surface_tests {
         }
     }
 
+    /// Commands Celeste renamed when the fork dropped the Scarlet name.
+    /// The *command* changed; the behaviour it has to match did not, so the
+    /// parity check maps the Java name onto the Celeste one rather than
+    /// reporting a missing command and an unexpected extra one.
+    const RENAMED_FROM_JAVA: &[(&str, &str)] =
+        &[("scarlet-discord-permissions", "celeste-discord-permissions"),
+          ("scarlet-version", "celeste-version")];
+
     fn java_command_leaves() -> std::collections::BTreeSet<String> {
         include_str!("../../java_commands.txt")
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(str::to_string)
+            .map(|line| {
+                for (java, celeste) in RENAMED_FROM_JAVA {
+                    if line == *java {
+                        return (*celeste).to_string();
+                    }
+                    if let Some(rest) = line.strip_prefix(&format!("{java} ")) {
+                        return format!("{celeste} {rest}");
+                    }
+                }
+                line.to_string()
+            })
             .collect()
     }
 
@@ -1074,9 +1092,9 @@ mod command_surface_tests {
     fn no_unexpected_commands_beyond_javas_surface() {
         let rust = rust_command_leaves();
         let java = java_command_leaves();
-        // Java's `/scarlet-version` is this build's `/celeste-version`
+        // Java's `/celeste-version` is this build's `/celeste-version`
         // after the rename; nothing else should be new.
-        const EXPECTED_ADDITIONS: &[&str] = &["celeste-version", "scarlet-version"];
+        const EXPECTED_ADDITIONS: &[&str] = &["celeste-version", "celeste-version"];
         let extra: Vec<&String> =
             rust.iter().filter(|leaf| !java.contains(*leaf) && !EXPECTED_ADDITIONS.contains(&leaf.as_str())).collect();
         assert!(extra.is_empty(), "commands registered that Java doesn't have: {extra:?}");

@@ -44,7 +44,7 @@ pub async fn run(ctx: &Context, command: &CommandInteraction) -> serenity::Resul
         return super::reply_ephemeral(
             ctx,
             command,
-            "The built-in Discord moderation commands are not enabled.\nEnable them under **Settings -> Discord** in Scarlet.",
+            "The built-in Discord moderation commands are not enabled.\nEnable them under **Settings -> Discord** in Celeste.",
         )
         .await;
     }

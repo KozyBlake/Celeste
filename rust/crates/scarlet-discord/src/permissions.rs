@@ -166,6 +166,17 @@ impl DiscordPermissions {
         output
     }
 
+    /// The name a permission used to be stored under, for entries written
+    /// before the fork dropped the Scarlet name. A grant an admin made
+    /// against the old command name must keep working after the rename —
+    /// silently losing it would hand someone a denial they have no way to
+    /// explain.
+    fn legacy_permission_name(permission: &str) -> Option<String> {
+        permission
+            .strip_prefix("celeste-")
+            .map(|rest| format!("scarlet-{rest}"))
+    }
+
     pub fn resolve(&self, kind: PermissionType, member: &Member, permission: &str) -> Option<bool> {
         if member
             .permissions
@@ -175,18 +186,22 @@ impl DiscordPermissions {
         }
         let sets = self.sets.lock().unwrap();
         let set = sets.get(&kind)?;
+        let legacy = Self::legacy_permission_name(permission);
+        let lookup = |values: &std::collections::HashMap<String, bool>| {
+            values
+                .get(permission)
+                .or_else(|| legacy.as_deref().and_then(|legacy| values.get(legacy)))
+                .or_else(|| values.get("*"))
+                .copied()
+        };
         let user = set.by_user.get(&member.user.id.to_string());
-        if let Some(value) =
-            user.and_then(|values| values.get(permission).or_else(|| values.get("*")))
-        {
-            return Some(*value);
+        if let Some(value) = user.and_then(lookup) {
+            return Some(value);
         }
         for role in &member.roles {
             let values = set.by_role.get(&role.to_string());
-            if let Some(value) =
-                values.and_then(|values| values.get(permission).or_else(|| values.get("*")))
-            {
-                return Some(*value);
+            if let Some(value) = values.and_then(lookup) {
+                return Some(value);
             }
         }
         None
@@ -360,7 +375,7 @@ mod tests {
             .set(
                 PermissionType::SlashCommand,
                 PermissionTarget::Role(role),
-                "scarlet-discord-permissions",
+                "celeste-discord-permissions",
                 Some(true),
             )
             .unwrap();
@@ -371,7 +386,7 @@ mod tests {
 
         assert!(permissions.check_slash(
             &member,
-            "scarlet-discord-permissions",
+            "celeste-discord-permissions",
             None,
             Some("set")
         ));

@@ -38,7 +38,7 @@ fn encode_query(value: &str) -> String {
 pub fn build_launch_uri(location: &str, secure_name: Option<&str>) -> String {
     // Keep Java's established ref value; VRChat may use it as an external
     // launch allow-list/telemetry identifier rather than visible branding.
-    let mut uri = format!("vrchat://launch?ref=KozyBlakeScarlet&id={location}");
+    let mut uri = format!("vrchat://launch?ref=KozyBlakeCeleste&id={location}");
     if let Some(name) = secure_name.map(str::trim).filter(|name| !name.is_empty()) {
         uri.push_str("&shortName=");
         uri.push_str(&encode_query(name));
@@ -153,11 +153,11 @@ mod tests {
     fn launch_uri_contains_and_encodes_the_secure_join_name() {
         assert_eq!(
             build_launch_uri("wrld_1:123~group(grp_1)", Some("secure name/+")),
-            "vrchat://launch?ref=KozyBlakeScarlet&id=wrld_1:123~group(grp_1)&shortName=secure%20name%2F%2B"
+            "vrchat://launch?ref=KozyBlakeCeleste&id=wrld_1:123~group(grp_1)&shortName=secure%20name%2F%2B"
         );
         assert_eq!(
             build_launch_uri("wrld_1:public", None),
-            "vrchat://launch?ref=KozyBlakeScarlet&id=wrld_1:public"
+            "vrchat://launch?ref=KozyBlakeCeleste&id=wrld_1:public"
         );
     }
 }

@@ -26,17 +26,17 @@ pub const FORK_NOTE: &str = "Fork by KozyBlake \u{2014} Windows & Linux";
 pub const DEV_DISCORD: &str = "Discord:@vinyarion/Vinyarion#0292/393412191547555841";
 pub const SCARLET_DISCORD_URL: &str = "https://discord.gg/CP3AyhypBF";
 
-pub const FORK_GITHUB_URL: &str = "https://github.com/KozyBlake/Scarlet";
+pub const FORK_GITHUB_URL: &str = "https://github.com/KozyBlake/ScarletRust";
 pub const GITHUB_URL: &str = FORK_GITHUB_URL;
 
 pub const SCARLET_VRCHAT_GROUP_ID: &str = "grp_eb2eb120-67bd-404e-9665-498f567cb56d";
 
 pub const USER_AGENT_NAME: &str = "KozyBlake-Celeste";
-pub const LICENSE_URL: &str = "https://github.com/KozyBlake/Scarlet?tab=MIT-1-ov-file";
+pub const LICENSE_URL: &str = "https://github.com/KozyBlake/ScarletRust?tab=MIT-1-ov-file";
 /// Single endpoint carrying both update-version metadata and the optional
 /// broadcast announcement (see `meta.json` at the repo root).
 pub const META_URL: &str =
-    "https://raw.githubusercontent.com/KozyBlake/Scarlet/main/meta.json";
+    "https://raw.githubusercontent.com/KozyBlake/ScarletRust/main/meta.json";
 
 pub const API_VERSION: &str = "api/1";
 pub const API_HOST_0: &str = "vrchat.com";

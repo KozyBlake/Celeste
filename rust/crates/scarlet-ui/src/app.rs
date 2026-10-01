@@ -919,7 +919,7 @@ impl ScarletApp {
             });
 
             ui.menu_button("Tools", |ui| {
-                if ui.button("Open data folder").on_hover_text("Open the KozyBlake/Scarlet data directory").clicked() {
+                if ui.button("Open data folder").on_hover_text("Open the KozyBlake/Celeste data directory").clicked() {
                     if let Err(err) = open::that(&self.data_dir) {
                         self.state.append_cli_output(format!("Could not open data folder: {err}"));
                     }
@@ -2424,6 +2424,42 @@ impl ScarletApp {
                     ui.label(egui::RichText::new("Edit either file, then reload it here. New player checks use the updated lists immediately.").small().weak());
                 }
                 SettingCategory::System => {
+                    // Where the data lives is the one setting you cannot
+                    // find from inside the app without being told, because
+                    // it is resolved before any settings file is read.
+                    ui.label("Data folder");
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(self.data_dir.display().to_string())
+                                .size(crate::theme::TEXT_SM)
+                                .color(crate::theme::TEXT_DIM),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(self.data_dir.display().to_string());
+                    ui.horizontal(|ui| {
+                        if ui.button("Open folder").clicked() {
+                            if let Err(error) = open::that(&self.data_dir) {
+                                self.state.append_cli_output(format!(
+                                    "Could not open the data folder: {error}"
+                                ));
+                            }
+                        }
+                        if ui.button("Move data folder...").clicked() {
+                            self.begin_move_data_dir();
+                        }
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "Settings, logins, staff lists and watched entities live here. \
+                             Moving copies them to the new folder and remembers it for next \
+                             launch; the old folder is left in place so you can check the \
+                             move worked before deleting it.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.add_space(8.0);
                     let cleanup_running = self.cache_cleanup_rx.is_some();
                     if ui
                         .add_enabled(!cleanup_running, egui::Button::new(if cleanup_running {
@@ -2730,7 +2766,7 @@ impl ScarletApp {
             egui::Window::new("Credits / About Celeste").default_width(650.0).default_height(420.0).open(&mut open).show(ctx, |ui| {
                 ui.heading(format!("Celeste {}", scarlet_core::identity::VERSION));
                 ui.label(scarlet_core::identity::FORK_NOTE);
-                ui.label("Rust continuation of the Scarlet VRChat moderation logger.");
+                ui.label("A VRChat group moderation logger.");
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for credit in &credits {
@@ -2746,6 +2782,55 @@ impl ScarletApp {
                 });
             });
             if !open { self.credits_open = false; }
+        }
+    }
+
+    /// Asks for a new data directory, copies the current one into it and
+    /// remembers the choice.
+    ///
+    /// Copy rather than move, and no deletion: the files being relocated
+    /// include the only copy of the user's VRChat session and Discord
+    /// token, some of the stores hold them open, and a half-finished move
+    /// of a live data directory is unrecoverable. Leaving the old folder
+    /// alone costs disk and nothing else — the user deletes it once the
+    /// new location has started cleanly.
+    fn begin_move_data_dir(&mut self) {
+        let Some(target) = rfd::FileDialog::new()
+            .set_title("Choose a folder for Celeste's data")
+            .set_directory(&self.data_dir)
+            .pick_folder()
+        else {
+            return;
+        };
+        if target == self.data_dir {
+            self.settings_notice =
+                Some("That is already the data folder; nothing was moved.".to_string());
+            return;
+        }
+        match copy_data_dir(&self.data_dir, &target) {
+            Ok(copied) => {
+                let remembered = scarlet_core::paths::remember_data_dir(&target);
+                let message = match remembered {
+                    Ok(()) => format!(
+                        "Copied {copied} item(s) to {}. Restart Celeste to use it. The old \
+                         folder is untouched at {} — delete it once the new one starts cleanly.",
+                        target.display(),
+                        self.data_dir.display()
+                    ),
+                    Err(error) => format!(
+                        "Copied {copied} item(s) to {}, but could not record it as the data \
+                         folder ({error}), so the next launch will use the old one.",
+                        target.display()
+                    ),
+                };
+                self.state.append_cli_output(&message);
+                self.settings_notice = Some(message);
+            }
+            Err(error) => {
+                let message = format!("Could not move the data folder: {error}");
+                self.state.append_cli_output(&message);
+                self.settings_notice = Some(message);
+            }
         }
     }
 
@@ -3394,6 +3479,35 @@ fn sort_players(players: &mut [scarlet_core::ui::ConnectedPlayer], sort: Option<
     });
 }
 
+/// Recursively copies a data directory, skipping the regenerable parts.
+/// Returns how many entries were copied.
+///
+/// `logs/` and `caches/` are deliberately not carried over: they are the
+/// bulk of the folder, they rebuild themselves, and copying tens of
+/// megabytes of old logs into a fresh location is not what "move my data"
+/// means.
+fn copy_data_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<usize> {
+    const SKIP: [&str; 3] = ["logs", "caches", "backups"];
+    std::fs::create_dir_all(to)?;
+    let mut copied = 0usize;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if SKIP.iter().any(|skip| name == std::ffi::OsStr::new(skip)) {
+            continue;
+        }
+        let source = entry.path();
+        let destination = to.join(&name);
+        if entry.file_type()?.is_dir() {
+            copied += copy_data_dir(&source, &destination)?;
+        } else {
+            std::fs::copy(&source, &destination)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
 fn row_background(player: &scarlet_core::ui::ConnectedPlayer) -> Option<egui::Color32> {
     (player.pronouns_flagged && player.left.is_none() && player.text_color.is_none())
         .then(|| crate::theme::PRONOUNS_FLAGGED_FILL)
@@ -3490,6 +3604,45 @@ fn spawn_unattended_vrchat_login(
 
 #[cfg(test)]
 mod tests {
+    /// Moving the data folder must carry the things that cannot be
+    /// regenerated — the login, the settings, the lists — and must not
+    /// drag tens of megabytes of old logs and caches along with them.
+    #[test]
+    fn moving_the_data_folder_copies_config_and_skips_regenerable_bulk() {
+        let root = std::env::temp_dir().join(format!(
+            "celeste-move-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let from = root.join("old");
+        let to = root.join("new");
+        std::fs::create_dir_all(from.join("logs")).unwrap();
+        std::fs::create_dir_all(from.join("caches")).unwrap();
+        std::fs::create_dir_all(from.join("usr")).unwrap();
+        std::fs::write(from.join("settings.json"), "{}").unwrap();
+        std::fs::write(from.join("secure-prefs.json"), "{}").unwrap();
+        std::fs::write(from.join("usr").join("usr_1.json"), "{}").unwrap();
+        std::fs::write(from.join("logs").join("celeste_log.txt"), "noise").unwrap();
+        std::fs::write(from.join("caches").join("junk.json"), "noise").unwrap();
+
+        let copied = copy_data_dir(&from, &to).unwrap();
+
+        assert!(to.join("settings.json").is_file(), "settings must come across");
+        assert!(to.join("secure-prefs.json").is_file(), "the login must come across");
+        assert!(to.join("usr").join("usr_1.json").is_file(), "per-user data must come across");
+        assert!(!to.join("logs").exists(), "logs regenerate; don't carry them");
+        assert!(!to.join("caches").exists(), "caches regenerate; don't carry them");
+        assert_eq!(copied, 3);
+        // The original is left intact: a half-finished move of a live data
+        // directory is unrecoverable.
+        assert!(from.join("settings.json").is_file());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// These two were computed in core and never read by the renderer, so
     /// watched users, groups and avatars didn't stand out at all — the
     /// advisory pipeline's whole visible output was missing.

@@ -1,4 +1,4 @@
-//! Port of Java's generated `/scarlet-discord-permissions` command.
+//! Port of Java's generated `/celeste-discord-permissions` command.
 
 use serenity::builder::{
     CreateAutocompleteResponse, CreateCommand, CreateCommandOption, CreateInteractionResponse,
@@ -12,7 +12,7 @@ use serenity::model::mention::Mentionable;
 use crate::data::DiscordPermissionsKey;
 use crate::permissions::{PermissionTarget, PermissionType};
 
-pub const NAME: &str = "scarlet-discord-permissions";
+pub const NAME: &str = "celeste-discord-permissions";
 
 pub fn register() -> CreateCommand {
     let target = || {

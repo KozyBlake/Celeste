@@ -244,7 +244,7 @@ impl TtsService {
         let worker_active = active.clone();
         let worker_shutdown = shutting_down.clone();
         std::thread::Builder::new()
-            .name("scarlet-tts".into())
+            .name("celeste-tts".into())
             .spawn(move || worker(receiver, engine, worker_active, worker_shutdown))
             .expect("spawn TTS worker");
         if let Some(name) = engine_name {

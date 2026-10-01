@@ -231,7 +231,7 @@ pub async fn run(
     super::defer(ctx, command).await?;
     let settings = { ctx.data.read().await.get::<SettingsKey>().cloned() };
     if !settings.is_some_and(|settings| settings.discord_kick_ban_enabled.get()) {
-        return super::reply_ephemeral(ctx, command, "The built-in Discord moderation commands are not enabled.\nEnable them under **Settings -> Discord** in Scarlet.").await;
+        return super::reply_ephemeral(ctx, command, "The built-in Discord moderation commands are not enabled.\nEnable them under **Settings -> Discord** in Celeste.").await;
     }
     let options = command.data.options();
     let target = options
