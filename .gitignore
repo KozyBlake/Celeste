@@ -66,3 +66,27 @@ rust/ex/
 # Java-era build output
 target/
 home/
+
+# Runtime data written when Celeste is run from the repository root
+/settings.json
+/registry.json
+/live.json
+/global.json
+/secure-prefs.json
+/global-prefs.key
+/discord_bot.json
+/staff_list.json
+/secret_staff_list.json
+/moderation_tags.json
+/good_pronoun.json
+/bad_pronoun.json
+/watched_*.json
+/backups/
+/caches/
+/logs/
+/usr/
+/gaud/
+/ex/
+
+# Hand-shipped test builds
+celeste-testing*
