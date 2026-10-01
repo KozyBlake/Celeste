@@ -7,10 +7,18 @@ decisions already made.
 ## What this project is
 
 A 1:1 port of Scarlet (Java VRChat moderation logger) to Rust, renamed
-**Celeste**. The Java source is the reference implementation and lives in
-this same repo at `src/main/java/net/sybyline/scarlet/`. Upstream Scarlet is
-archived and will not be updated; this fork is the continuation. The Java
-tree stays until the port is settled, then gets deleted.
+**Celeste**. Upstream Scarlet is archived and will not be updated; this fork
+is the continuation.
+
+The Java source is still the reference implementation, but as of 2026-10-01
+it is **no longer in this repo** - the tree was deleted and the repo is
+Rust-only. Blake keeps a copy at `~/Scarlet` on blakepc, and the archived
+upstream repo is still readable on GitHub. A build test confirmed the
+workspace compiles and passes with the Java tree absent: no `build.rs`, no
+path dependencies outside the workspace, and every `include_str!` resolving
+inside `rust/crates/*/resources/`. The one Java-named include,
+`crates/scarlet-discord/java_commands.txt`, is a committed text snapshot of
+the Java slash-command surface, not Java source.
 
 **Private repo. Nothing is pushed** — every commit lives on the local branch
 `claude/magical-brahmagupta-semov4`, 60+ ahead of origin, deliberately. Don't
@@ -47,9 +55,12 @@ site **and** in PORTING.md. Silent deviations are how a port rots.
   loses the user's data. `data.rs` has a test pinning the JSON keys after
   exactly that happened; add to it rather than trusting review.
 - **Crate/module/type names stay `scarlet_*`.** Only user-visible strings say
-  Celeste. Discord command names keep their Java spelling
-  (`/scarlet-discord-permissions`) so the registered surface still matches
-  `java_commands.txt` and existing permission setups keep working.
+  Celeste. Discord command names *were* renamed at the owner's request
+  (`/scarlet-discord-permissions` is now `/celeste-discord-permissions`,
+  `/scarlet-version` is now `/celeste-version`). `java_commands.txt` keeps the
+  Java spelling and `RENAMED_FROM_JAVA` in `commands/mod.rs` maps between the
+  two, so the parity test still compares like for like. Adding a rename means
+  adding a pair there, not editing the snapshot.
 - Commit after every chunk that compiles, with a message that says what was
   wrong, not what changed.
 
@@ -65,7 +76,9 @@ ported and 31 are deliberately excluded (the whole `schedule` family, report
 templates, `submit-evidence`, and `server-restart update-now`). The updater is
 an explicit owner decision: this private native build does not need one.
 
-`cargo test --workspace` should pass all 482 tests with no failures.
+`cargo test --workspace` should pass all 506 tests with no failures. (Run
+it per-package if the machine is memory-constrained; building every test
+binary at once can get the job OOM-killed.)
 
 ## Build and ship
 
@@ -338,3 +351,36 @@ The watchdog still probes `/auth/user`, saves rotated cookies, and performs
 unattended recovery after a real HTTP 401. It no longer destroys a healthy
 session merely because a timestamp is old. The informational refresh timestamp
 is advanced at most once per day after a successful authenticated probe.
+
+## Update 2026-10-01: TTS voices, announcements, and the Java deletion
+
+**TTS enumerated one engine, not all of them.**
+`settings::detect_installed_tts_voices` looped `["espeak-ng", "espeak"]` and
+returned from inside the loop on the first engine that answered, so no other
+synthesizer was ever consulted. Java's `LinuxCommandTtsProvider` registers
+flite, pico, espeak-ng and espeak, probes each, and keeps every engine that
+answers. New module `scarlet-core/src/tts_voices.rs` ports that: ids are
+`engine/voice`, `resolve_legacy` maps a pre-prefix saved voice onto its
+prefixed form, and Java's `[A-Za-z0-9_.+@-]+` token filter keeps prose out of
+the list. `scarlet-ui::tts::Engine::for_voice` now picks the engine the voice
+names instead of speaking everything through whichever one was detected at
+startup. **Pico and flite rendering is new, untested code** - verify a
+non-espeak voice actually speaks before trusting it.
+
+**The announcement/update-check feature is gone, not deferred.** Nothing ever
+read it: `identity::META_URL` was declared and never fetched,
+`UiState::show_announcement` had no callers outside its own test. Deleted
+`meta.rs`, `META_URL`, the state and status-bar plumbing, the registry keys
+`lastAnnouncementId`/`lastAnnouncementCheck`/`lastUpdateCheck`, the settings
+`ui_alert_update`/`ui_alert_update_preview`/`ui_alert_announcement`, their
+help text, and 17 i18n keys from both properties files. `meta.json` and
+`announcement-guard.yml` went with them. Don't re-port it from Java.
+
+**Repo cleanup.** Java-era CI (`build-scarlet.yml`, `build-android.yml`) and
+the unused root `BL_SFX_*.mp3` are deleted. `.gitignore` now covers runtime
+data written at the repo root, not just under `rust/` - before this,
+`secure-prefs.json` and `global-prefs.key` were one `git add -A` from being
+committed.
+
+Still the release gate, unchanged: hands-on testing against Blake's real
+Discord server and VRChat account.
