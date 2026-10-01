@@ -1,756 +1,160 @@
+# Celeste settings reference
 
-# Settings
+**This file is generated.** It is built from the settings registry by
+`crates/scarlet-core/src/settings/doc.rs`, and a test fails if it falls out
+of date. To regenerate after adding or changing a setting:
 
-All settings files for KozyBlake/Scarlet can be found in the directory `%LOCALAPPDATA%\KozyBlake\Scarlet`.
-When upgrading from the upstream default folder, KozyBlake/Scarlet asks before copying existing data into the KozyBlake/Scarlet folder and leaves the legacy folder in place for rollback.
-Some internal volatile data can be found in the Windows registry.
-These registry entries exist because of the use of classes in the [`java.util.prefs`](https://docs.oracle.com/javase/8/docs/api/java/util/prefs/package-summary.html) package.
-
-If it isn't obvious, all nominally sensitive values listed are ficticious.
-
-## file `logs/scarlet_log_0000-00-00_00-00-00.txt`
-
-Files containing the output of the application log.
-
-## file `caches/XXX/XXX_00000000-0000-0000-0000-000000000000.json`
-
-Files containing cached objects from the VRChat API
-
-## file `caches/XXX/known_404s.json`
-
-List of ids known to return a `HTTP 404 Not Found` from the VRChat API
-```json
-[
-    "XXX_00000000-0000-0000-0000-000000000000",
-    "XXX_11111111-1111-1111-1111-111111111111"
-]
+```sh
+cd rust && UPDATE_SETTINGS_MD=1 cargo test -p scarlet-core settings_md_is_current
 ```
 
-## file `discord_bot.json`
-
-Settings for the Discord bot account
-```json
-{
-    // The Discord bot token
-    "token": "",
-    // DEPRECATED: this value is read, but is no longer written. This value now persists in the encrypted store.
-    
-    // The Discord server snowflake id
-    "guildSf": "123456789123456789",
-
-    // Optional. The Discord channel snowflake id used for Scarlet's Discord-native moderation and join logs
-    "discordActionLogChannelSf": "123456789123456789",
-
-    // Discord account age alert threshold, in minutes. 0 disables alerts. Maximum is 525600 (365 days).
-    "discordAccountAgeAlertMinutes": 1440,
-
-    // Whether the bot posts the age-verification prompt in new Ticket Tool ticket channels
-    "ticketToolAutoResponseEnabled": true,
-
-    // Optional. Discord category snowflake id for Ticket Tool channels
-    "ticketToolCategorySf": "123456789123456789",
-
-    // Optional. Java regex matched against ticket channel names
-    "ticketToolChannelNameRegex": "(?i).*ticket.*",
-
-    // Optional. Discord role snowflake id to ping alongside the ticket opener
-    "ticketToolNotifyRoleSf": "1479385524786696242",
-
-    // Message the bot sends after pinging the inferred ticket opener
-    "ticketToolAgeVerificationMessage": "If your ticket is regarding age verification;\n\nYou have 2 options.\n\nTake a photo of your ID with everything but your birthday covered, with a piece of paper next to it with todays date, the server name, your Discord username, and your VRChat username.\n\nIf you're an NSFW content creator and have a verified Fansly account, you can write within your bio the server name. Once that is done, take a screenshot and also send the link of your profile here.",
-    
-    // Optional. The voice channel snowflake id
-    "audioChannelSf": "123456789123456789",
-    
-    // Optional. Path to store evidence submitted for certain audit events
-    "evidenceRoot": "C:/Users/Scarlet/Desktop/evidence",
-    
-    // Map of Scarlet-internal permission to Discord role snowflake id
-    "scarletPermission2roleSf": {
-        "event.set_tags": "123456789123456789",
-        "event.submit_evidence": "123456789123456789"
-    },
-    
-    // Map of auxiliary webhook internal ids to Discord webhook urls
-    "scarletAuxWh2webhookUrl ": {
-        "External Webhook One": "https://discord.com/api/webhooks/123456789123456789/IdzL4t3KvfQQ_CKYWd8Q2NM6Z7IaSOppoTTL4LS1Da_aMZ-eK1MbML-3ILnLjotWcDkp",
-        "External Webhook Two": "https://discord.com/api/webhooks/123456789123456789/irNaGekj1zzccv__Uy4oC7d2GczNDbilnfBtcc5qL41bZ0Ikw1SXoYc7-bJST-yPdUQB"
-    },
-    
-    // Map of audit entry event type to Discord channel snowflake id
-    "auditType2channelSf": {
-        "group.instance.kick": "123456789123456789",
-        "group.user.ban": "123456789123456789",
-        "group.instance.create": "123456789123456789"
-    },
-    
-    // Map of extended entry event type to Discord channel snowflake id
-    "auditTypeEx2channelSf": {
-        "groupex.instance.staff.join": "123456789123456789",
-        "groupex.instance.staff.leave": "123456789123456789",
-        "groupex.instance.vtk": "123456789123456789"
-    },
-    
-    // Map of audit entry event type to auxiliary webhook internal id(s)
-    "auditType2scarletAuxWh": {
-        "group.instance.kick": "External Webhook One",
-        "group.instance.create": [ "External Webhook One", "External Webhook Two" ]
-    },
-    
-    // Map of audit entry event type to Discord secret channel snowflake id
-    "auditType2secretChannelSf": {
-        "group.instance.kick": "123456789123456789",
-        "group.user.ban": "123456789123456789",
-        "group.instance.create": "123456789123456789"
-    },
-    
-    // Map of extended entry event type to Discord secret channel snowflake id
-    "auditTypeEx2secretChannelSf": {
-    },
-    
-    // Map of audit entry event type to hex RGB
-    "auditType2color": {
-        "group.instance.kick": "FF7F00",
-        "group.user.ban": "FF0000",
-        "group.instance.create": "00FF00"
-    }
-    
-    // Array of queued actions
-    "queuedActions": [
-        {
-            // The kind of action being taken
-            "action": "ban",
-            // The user who queued the action
-            "actorId": "usr_00000000-0000-0000-0000-000000000000",
-            // The target of the queued action
-            "targetId": "usr_11111111-1111-1111-1111-111111111111",
-            // The location of the queued action
-            "location": "wrld_00000000-0000-0000-0000-000000000000:00000~group(grp_00000000-0000-0000-0000-000000000000)~groupAccessType(plus)~region(us)"
-        }
-    ]
-}
-```
-
-## file `discord_perms.json`
-
-Permissions for Discord users and roles, where`"<PermissionType>"` is one of
-- `"SLASH_COMMAND"`
-- `"USER_COMMAND"`
-- `"BUTTON_PRESS"`
-- `"STRING_SELECT"`
-- `"ENTITY_SELECT"`
-- `"MODAL_SUBMIT"`
-- `"OTHER"`
-and where `"<PermissionName>"` depends on the type of the permission.
-For all commands, it is the command name, e.g., `vrchat-search`.
-For slash subcommand groups and subcommands, it is the full command name, with a space ` ` between each name component, e.g., `vrchat-search world`
-For slash command arguments, it is the full command name of its parent, as above, a space ` `, and the argument name, e.g., `vrchat-search world search-query`
-```json
-{
-    // Map of permission type to permission set
-    "<PermissionType>": {
-        "byUser": {
-            "123456789123456789": {
-                "<PermissionName>": true
-            }
-        },
-        "byRole": {
-            "123456789123456789": {
-                "<PermissionName>": false
-            }
-        }
-    },
-    ...
-}
-```
-
-## file `watched_XXX.json`
-
-Array of watched entities (groups, users, avatars)
-```json
-[
-    {
-        // The VRChat id
-        "id": "grp_00000000-0000-0000-0000-000000000000",
-        
-        // The category of activity, one of: "UNKNOWN", "MALICIOUS", "NUISANCE", "COMMUNITY", "AFFILIATED", or "OTHER"
-        "type": "NUISANCE",
-        
-        // Array of custom moderation tags associated with activity
-        "tags": [
-            "trolling"
-        ],
-        
-        // Order in whichentities are considered, lowest first
-        "priority": -100,
-        
-        // Whether action must be taken rapidly
-        "critical": true,
-        
-        // Whether TTS message is skipped
-        "silent": false,
-        
-        // Message announced in the voice channel via TTS
-        "message": "Anti-tupper group. Retaliate with documentation of custom tags."
-    }
-]
-```
-
-## file `event_schedule.json`
-
-Specification for scheduled events
-```json
-{
-    // Map of scheduled event ids to their specification
-    "eventSpecs": {
-        "<spec id>": {
-            "id": "<spec id>",
-            
-            // Whether the event should be scheduled
-            "active": true,
-            
-            // Whether a mirror event should be scheduled on Discord
-            "mirrorOnDiscord": true,
-            
-            // The maximum number of this event to have scheduled at once
-            "maxPending": 3,
-            
-            // The frequency with which an event is scheduled
-            "frequency": "EVERY_DAY",
-            
-            // The next date for which the event will be scheduled
-            "date": "2025-12-19",
-            
-            // The time, with offset from UTC, at which the event should occur
-            "time": "22:15:00-06:00",
-            
-            // The frequency with which an event is scheduled
-            "duration": "PT1H",
-            
-            // Certain template attributes of the event
-            "vrcCalendarEventParameters": {
-                // see <https://vrchat.community/reference/create-group-calendar-event>
-            },
-            
-            // Certain template attributes for event instances
-            "vrcInstanceParameters": {
-                // see <https://vrchat.community/reference/create-instance>
-            },
-            
-            // Map of upcoming dates to specifics about scheduled events
-            "pending": {
-                "2025-12-18": {
-                    
-                    // When an instance should be created for the event
-                    "needsCreate": "2025-12-18T22:14:30-06:00",
-                    
-                    // When the event is to begin
-                    "start": "2025-12-18T22:15:00-06:00",
-                    
-                    // When the event is to end
-                    "end": "2025-12-18T23:15:00-06:00",
-                    
-                    // When the instance should be closed
-                    "needsClose": "2025-12-18T23:15:30-06:00",
-                    
-                    // The owning group of the event
-                    "vrchatGroupId": "grp_00000000-0000-0000-0000-000000000000",
-                    
-                    // The id of the event
-                    "vrchatEventId": "cal_00000000-0000-0000-0000-000000000000",
-                    
-                    // The discord server in which a mirror event was posted
-                    "discordGuildSf": "1234567890123456789",
-                    
-                    // The snowflake of the mirror event
-                    "discordEventSf": "1234567890123456789"
-                }
-            }
-        }
-    }
-    
-    // An alternate Discord server snowflake id in which to post the Discord events
-    "alternateGuildSf": "123456789123456789"
-}
-```
-
-## file `moderation_tags.json`
-
-Array of custom moderation tags
-```json
-[
-    {
-        // The internal name of the tag
-        "value": "trolling",
-        
-        // The display name of the tag
-        "label": "Trolling",
-        
-        // The description text of the tag
-        "description": "Provocative or mocking behavior intended to antagonize someone"
-    },
-    {
-        "value": "dislikes_tupper",
-        "label": "Dislikes tupper",
-        "description": "The most severe of all offences"
-    }
-]
-```
-
-## file `staff_list.json`
-
-Array of VRChat userIds
-```json
-[
-    "usr_00000000-0000-0000-0000-000000000000",
-    "usr_11111111-1111-1111-1111-111111111111"
-]
-```
-
-## file `secret_staff_list.json`
-
-Array of VRChat userIds
-```json
-[
-    "usr_00000000-0000-0000-0000-000000000000",
-    "usr_11111111-1111-1111-1111-111111111111"
-]
-```
-
-## file `report_template.txt`
-
-Template for filling out the VRChat Help Desk report form
-```txt
-I am submitting a user report to be sent for {targetName} for {tags} in our group {groupCode}.
-{targetName} entered our {instanceType} instance at {targetJoined}.
-{targetName} was removed/left from our instance at {targetLeft}.
-{description}
-
-Thank you in advance,
-{actorName}
-```
-Parameters are as such:
-| Parameter | Description | Example value |
-| --- | --- | --- |
-| Group | | |
-| `{groupId}` | The group ID | `grp_00000000-0000-0000-0000-000000000000` |
-| `{groupName}` | The group name | `MyGroup` |
-| `{groupUrl}` | The group URL | `https://vrchat.com/home/group/grp_00000000-0000-0000-0000-000000000000` |
-| `{groupCode}` | The group short code | `GROUP.0000` |
-| `{groupCodeUrl}` | The group URL via short code | `https://vrc.group/GROUP.0000` |
-| Location | | |
-| `{worldId}` | The world ID | `wrld_00000000-0000-0000-0000-000000000000` |
-| `{worldName}` | The world name | `WorldName` |
-| `{worldUrl}` | The world URL  | `https://vrchat.com/home/world/wrld_00000000-0000-0000-0000-000000000000` |
-| `{location}` | The entire location string | `wrld_00000000-0000-0000-0000-000000000000:00000~group(grp_00000000-0000-0000-0000-00000000000)~groupAccessType(public)~region(us)` |
-| `{instanceType}` | A formatted representation of the instance type | `18+ Group Public` |
-| Actor | | |
-| `{actorId}` | The actor user ID | `usr_00000000-0000-0000-0000-000000000000` |
-| `{actorName}` | The actor user display name | `DisplayName` |
-| `{actorUrl}` | The actor user URL | `https://vrchat.com/home/user/usr_00000000-0000-0000-0000-000000000000` |
-| Target | | |
-| `{targetId}` | The target user ID | `usr_00000000-0000-0000-0000-000000000000` |
-| `{targetName}` | The target user display name | `DisplayName` |
-| `{targetUrl}` | The target user URL | `https://vrchat.com/home/user/usr_00000000-0000-0000-0000-000000000000` |
-| Target ext. | | |
-| `{targetJoined}` | The formatted time the target joined the relevant instance | `2025-03-04 05:06:07 UTC` |
-| `{targetLeft}` | The formatted time the target left the relevant instance | `2025-03-04 05:06:07 UTC` |
-| Audit | | |
-| `{tags}` | The custom moderation tags | `Trolling, Harassing, and Insufferable Attitude` |
-| `{description}` | The custom moderation description | |
-| `{auditId}` | The audit ID | `gaud_00000000-0000-0000-0000-000000000000` |
-| Misc | | |
-| `{appName}` | The name of this application | `Scarlet` |
-| `{appVersion}` | The version of this application | `0.4.10` |
-
-## file `settings.json`
-
-General settings for Scarlet:
-```json
-{
-    // The username used to authenticate with VRChat
-    "vrc_username": "DefinitelyNOTtupper",
-    // DEPRECATED: this value is read, but is no longer written. This value now persists in the encrypted store.
-    
-    // The password used to authenticate with VRChat
-    "vrc_password": "password_cute_robot",
-    // DEPRECATED: this value is read, but is no longer written. This value now persists in the encrypted store.
-    
-    // Optional. The TOTP secret used to two-factor authenticate with VRChat
-    "vrc_secret": "abcd efgh ijkl mnop qrst uvxx yz23 4567",
-    // DEPRECATED: this value is read, but is no longer written. This value now persists in the encrypted store.
-    
-    // The VRChat groupId of the relevant group
-    "vrchat_group_id": "grp_00000000-0000-0000-0000-000000000000",
-
-    // Whether members are automatically invited to a VRChat group after they verify/link
-    "auto_invite_group_on_verify": true,
-
-    // Discord role snowflake that makes a linked member eligible for the auto-invite
-    "verified_role_snowflake": "123456789123456789",
-
-    // Optional Discord role snowflake required before Scarlet prompts a member to link their VRChat account
-    "members_role_snowflake": "123456789123456789",
-
-    // Optional VRChat group id to auto-invite verified members to.
-    // Leave unset/default to use "vrchat_group_id". Scarlet's VRChat account must be a member
-    // of the chosen group and must have permission to invite members.
-    "auto_invite_group_id": "grp_00000000-0000-0000-0000-000000000000",
-    
-    // Whether the generated report link appends a footer containing the Group ID, Audit ID, and Scarlet version
-    "vrchat_report_template_footer": "username@example.com",
-    
-    // Whether to announce watched groups with TTS
-    "tts_announce_watched_groups": true,
-    
-    // The voice in which TTS speaks.
-    // On Linux, command-line engines are prefixed, e.g. "flite/slt", "pico2wave/en-US", "festival/default", or "espeak-ng/en".
-    // Extra Linux engines can be installed from Settings -> Text-to-Speech -> Install Linux TTS voices.
-    "tts_voice_name": "Microsoft Zira Desktop",
-    
-    // Whether to output TTS to the default system audio device
-    "tts_use_default_audio_device": false,
-    
-    // Whether to announce watched users with TTS
-    "tts_announce_watched_users": true,
-    
-    // Whether to announce watched groups with TTS
-    "tts_announce_watched_groups": true,
-    
-    // Whether to announce watched avatars with TTS
-    "tts_announce_watched_avatars": true,
-    
-    // Whether to announce new players with TTS
-    "tts_announce_new_players": true,
-
-    // Whether watched-user advisories appear in the Instance table.
-    // When false, the matching join-time TTS callout is also suppressed.
-    "advisory_show_watched_users": true,
-
-    // Whether watched-group advisories appear in the Instance table.
-    // When false, the matching join-time TTS callout is also suppressed.
-    "advisory_show_watched_groups": true,
-
-    // Whether watched-avatar advisories appear in the Instance table.
-    // When false, the matching avatar TTS callout is also suppressed.
-    "advisory_show_watched_avatars": true,
-
-    // Whether new-account advisories appear in the Instance table.
-    // When false, the matching join-time TTS callout is also suppressed.
-    "advisory_show_new_players": true,
-
-    // Whether mixed-character-name advisories appear in the Instance table.
-    // When false, the matching join-time TTS cue is also suppressed.
-    "advisory_show_mixed_character_names": true,
-
-    // Whether vote-to-kick advisory audio is enabled.
-    // When false, the matching vote-to-kick TTS callout is suppressed.
-    "advisory_show_votes_to_kick": true,
-
-    // Whether suspicious-pronoun advisories appear in the Instance table.
-    // When false, the matching join-time TTS callout and row highlight are also suppressed.
-    "advisory_show_suspicious_pronouns": true,
-
-    // Whether to play a cue and announce when a joined user's display name mixes letter scripts
-    "tts_announce_mixed_character_names": true,
-
-    // Master switch for suspicious-pronoun detection. When false, Scarlet does not flag pronoun fields
-    // at all: no Advisory entry, no TTS announcement, no mobile alert, and no player-list highlight
-    "tts_flag_suspicious_pronouns": true,
-
-    // Whether to speak a TTS line when a pronoun field is flagged
-    // (only applies when "tts_flag_suspicious_pronouns" above is enabled)
-    "tts_announce_suspicious_pronouns": true,
-    
-    // Threshold for what account age qualifies as a 'new' player for the above (in days, 1 to 365, default 30)
-    "tts_announce_players_newer_than_days": 30,
-    
-    // Whether to show a popup if a new version is availiable
-    "ui_alert_update": true,
-    
-    // Whether still to show the above popup if a new preview version is availiable
-    "ui_alert_update_preview": true,
-    
-    // Whether the UI becomes visible immediately or after loading is complete
-    "ui_show_during_load": false,
-    
-    // Whether the CLI tab is shown in the main window (toggle live via the View menu)
-    "ui_show_cli_tab": true,
-
-    // The time, in seconds, between successive polls for audit events (10-300 inclusive)
-    "audit_polling_interval": 60,
-
-    // After Scarlet has been offline, how many days of missed audit log it catches up on (1-90 inclusive).
-    // Anything older is skipped with a warning in the log, so a long-idle install doesn't spend hours
-    // replaying months of old events before live moderation posts resume.
-    "audit_catchup_max_days": 14,
-    
-    // Whether to only list staff with activity on a Moderation Summary
-    "moderation_summary_only_activity": false,
-    
-    // Whether to issue a ping to the Discord user whose associated VRChat user issues an Instance Warn
-    "discord_ping_instance_warn": false,
-    
-    // Whether to issue a ping to the Discord user whose associated VRChat user issues an Instance Kick
-    "discord_ping_instance_kick": false,
-    
-    // Whether to issue a ping to the Discord user whose associated VRChat user issues a Member Remove
-    "discord_ping_member_remove": true,
-    
-    // Whether to issue a ping to the Discord user whose associated VRChat user issues a User Ban
-    "discord_ping_user_ban": true,
-    
-    // Whether to issue a ping to the Discord user whose associated VRChat user issues a User Unban
-    "discord_ping_user_unban": false,
-    
-    // Whether to launch a new VRChat Client instance on an Instance Create
-    "vrchat_client_launch_on_instance_create": false,
-    
-    // Whether evidence submission is enabled
-    "evidence_enabled": false,
-    
-    // Whether to use custom VRCX-compatible avatar search providers
-    "custom_avatar_search_providers_enabled": false,
-    
-    // Array of VRCX-compatible avatar search providers
-    "custom_avatar_search_providers": [
-        "https://website/vrcx_search.php"
-    ]
-}
-```
-
-## file `pending_moderation_actions.json`
-
-Saved pending moderation actions:
-```json
-{
-    // Map of "{auditEntryType}:{targetUserId}" to actorUserIds
-    "group.user.ban:usr_00000000-0000-0000-0000-000000000000": "usr_11111111-1111-1111-1111-111111111111"
-}
-```
-
-## file `store.bin`
-
-DEPRECATED: this value is read, but is no longer written. This value now persists in the encrypted store.
-Saved cookies for authentication with VRChat, one cookie per line:
-```txt
-auth=authcookie_00000000-0000-0000-0000-000000000000; expires=Sun, 31 Feb 2069 12:34:56 GMT; path=/; httponly
-twoFactorAuth=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ2RjhPd3NDRVRvIiwibWFjQWRkcmVzcyI6IjU2OjUyOjQzOjY4OjYxOjc0IiwidGltZXN0YW1wIjozMTI5NTYxMjk2MDAwLCJ2ZXJzaW9uIjoxLCJpYXQiOjMxMjk1NjEyOTYsImV4cCI6MzEyOTU2MTI5NiwiYXVkIjoiVlJDaGF0VHdvRmFjdG9yQXV0aCIsImlzcyI6IlZSQ2hhdCJ9.fdmmkOhjs0fas7DjizP_374ZNRuUpZcTPLVnx2vbfAk; expires=Sun, 31 Feb 2069 12:34:56 GMT; path=/; httponly
-```
-
-## file `data/global.json`
-
-Saved global user information:
-```json
-{
-    // Map of Discord user snowflake ids to VRChat userIds
-    "userSnowflake2userId": {
-        "123456789123456789": "usr_00000000-0000-0000-0000-000000000000"
-    }
-}
-```
-
-## file `data/live.json`
-
-Current live instance information:
-```json
-{
-    // Map of VRChat locations of live group instances to VRChat group audit entry ids
-    "location2AuditEntryId": {
-        "wrld_00000000-0000-0000-0000-000000000000:00000~group(grp_00000000-0000-0000-0000-000000000000)~groupAccessType(plus)~region(us)": "gaud_00000000-0000-0000-0000-000000000000"
-    },
-    
-    // Map of VRChat locations of live group instances to Discord messages
-    "location2instanceEmbedMessage": {
-        "wrld_00000000-0000-0000-0000-000000000000:00000~group(grp_00000000-0000-0000-0000-000000000000)~groupAccessType(plus)~region(us)": {
-            "guildSnowflake": "123456789123456789",
-            "channelSnowflake": "123456789123456789",
-            "messageSnowflake": "123456789123456789"
-        }
-    }
-}
-```
-
-## file `data/usr/usr_00000000-0000-0000-0000-000000000000`
-
-User specific information:
-```json
-{
-    // Discord user snowflake id
-    "userSnowflake": "123456789123456789",
-    
-    // Array of group audit entry ids targeting this user
-    "auditEntryIds": [
-        "gaud_00000000-0000-0000-0000-000000000000"
-    ],
-    
-    // Array of submissions of evidence
-    "evidenceSubmissions": [
-        {
-            // Audit entry id this evidence targets
-            "auditEntryId": "gaud_00000000-0000-0000-0000-000000000000",
-            
-            // Discord snowflake id of the submitting user
-            "submitterSnowflake": "123456789123456789",
-            
-            // Discord display name of the submitting user
-            "submitterDisplayName": "ProbablyNotTupper",
-            
-            // When the file was submitted
-            "submissionTime": "2069-02-31T12:34:56.789Z",
-            
-            // The name of the file
-            "fileName": "screenshot.png",
-            
-            // The url of the attachment when uploaded
-            "url": "https://cdn.discordapp.com/attachments/123456789123456789/123456789123456789/screenshot.png",
-            
-            // The proxy url of the attachment when uploaded
-            "proxyUrl": "https://media.discordapp.net/attachments/123456789123456789/123456789123456789/screenshot.png"
-        }
-    ]
-}
-```
-
-## file `data/gaud/gaud_00000000-0000-0000-0000-000000000000`
-
-Group audit log event information:
-```json
-{
-    // Discord server snowflake id
-    "guildSnowflake": "123456789123456789",
-    
-    // Discord channel snowflake id
-    "channelSnowflake": "123456789123456789",
-    
-    // Discord message snowflake id (This message has the embed)
-    "messageSnowflake": "123456789123456789",
-    
-    // Discord thread snowflake id
-    "threadSnowflake": "123456789123456789",
-    
-    // Discord channel snowflake id (This message has the interactions)
-    "auxMessageSnowflake": "123456789123456789",
-    
-    // The saved entry itself
-    "entry": {
-        // <GroupAuditLogEntry Object>, See return data of Groups API:
-        // https://vrchatapi.github.io/docs/api/#get-/groups/-groupId-/auditLogs
-    },
-    
-    // Array of custom moderation tags
-    "entryTags": [
-        "trolling"
-    ],
-    
-    // Array of submissions of evidence
-    "entryDescription": "Myriad Cirnos fill the sky",
-    
-    // User id of the actor who used automation/assistance to effect this event
-    "auxActorId": "usr_00000000-0000-0000-0000-000000000000",
-    
-    // Display name of the actor who used automation/assistance to effect this event
-    "auxActorDisplayName": "Somebody",
-    
-    // Audit entry id of the event that directly and necessarily caused this event
-    "parentEventId": "gaud_00000000-0000-0000-0000-000000000000",
-}
-```
-
-## file `data/ex/00000000-0000-0000-0000-000000000000`
-
-Extended audit event information:
-```json
-{
-    // Extended event id
-    "id": "00000000-0000-0000-0000-000000000000",
-    
-    // Extended event type
-    "typeEx": "groupex.instance.vtk",
-    
-    // Actor id
-    "actorId": "vrc_admin",
-    
-    // Actor display name
-    "actorDisplayName": "VRChat Admin",
-    
-    // Target id
-    "targetId": "usr_00000000-0000-0000-0000-000000000000",
-    
-    // When this extended event occurred
-    "timestamp": "2069-02-31T12:34:56.789Z",
-    
-    // Data
-    "data": {
-    }
-}
-```
-
-## file `./scarlet.version`
-
-Contains th version of Scarlet to be run:
-```txt
-0.4.11-rc2
-```
-
-## file `./scarlet.version.target`
-
-Contains the version of Scarlet to which to update (you can "update" backwards if necessary):
-```txt
-0.4.11-rc3
-```
-
-## file `./scarlet.home`
-
-If present, specifies the directory in which to place the application's files:
-```txt
-C:\path\to\custom\data\dir
-```
-
-## file `./scarlet.home.java`
-
-If present, specifies the root directory of the Java installation to use:
-```txt
-C:\path\to\jdk
-```
-
-## file `./java.options`
-
-If present, prepends listed JVM options to the invoked command:
-```txt
--Xms8G
--XX:+AggressiveOpts
--XX:+UnlockExperimentalVMOptions
--XX:+UnlockDiagnosticVMOptions
--XX:+AggressiveUnboxing
--XX:+AllowParallelDefineClass
--XX:+OptoBundling
--XX:+OptoScheduling
--XX:+UseFastAccessorMethods
--XX:+UseFastEmptyMethods
--XX:+ParallelRefProcEnabled
-```
-
-## registry
-
-Volatile data:
-```reg
-[HKEY_CURRENT_USER\Software\JavaSoft\Prefs\net\sybyline\scarlet\grp_00000000-0000-0000-0000-000000000000]
-; The version of Scarlet that had been run previously
-"last/Run/Version"="0.4.9-rc2"
-; The last time Scarlet queried the audit log
-"last/Audit/Query"="2069-02-31/T12:34:56.789/Z"
-; The last time Scarlet refreshed VRChat authentication
-"last/Auth/Refresh"="2069-02-31/T12:34:56.789/Z"
-; The last time Scarlet checked for updates
-"last/Update/Check"="2069-02-31/T12:34:56.789/Z"
-; The bounds of the UI window (x,y,width,height)
-"ui/Bounds"="979,603,846,400"
-```
-As the Windows implementation of the `java.util.prefs` package uses the Windows registry, which is case-insensitive, `/` characters are used to "escape" uppercase characters to avoid clashes.
-
-### Encrypted Store
-
-Particular sensitive values are no longer stored in plain text, but instead are encrypted and stored in prefs.
-You may specify the password used to encrypt/decrypt by either setting the environment variable `SCARLET_GLOBAL_PW` or the Java system property `scarlet.global.pw`.
-It is highly recommended that you use a custom password instead of the default.
+Edit the description in `settings/help.rs`, not this file.
+
+## Where settings live
+
+| | |
+|---|---|
+| Linux | `$XDG_DATA_HOME/KozyBlake/Celeste/settings.json`, or `~/.local/share/KozyBlake/Celeste/settings.json` |
+| Windows | `%LOCALAPPDATA%\KozyBlake\Celeste\settings.json` |
+
+Celeste also discovers the legacy `KozyBlake/Scarlet` locations and adopts an
+existing install rather than starting empty. `CELESTE_HOME` (or the legacy
+`SCARLET_HOME`) overrides the folder for one run, and **Settings → System**
+moves it permanently.
+
+Everything below is editable in the desktop app under its category heading,
+or from Discord with `/settings edit`.
+
+## General
+
+| Setting | Id | Type | What it does |
+|---|---|---|---|
+| Colour section headers with accent | `ui_accent_headers` | boolean (default `false`) | Tints section headings with your accent colour. |
+| Confirmation dialog for group invites | `ui_confirm_group_invite` | boolean (default `false`) | Asks before sending a group invite. |
+| Desktop UI language (restart to apply) | `ui_language` | one of a list discovered at runtime | Language for the desktop window. Takes effect after a restart. |
+| Dim players who left (%) | `ui_left_player_dim_percent` | integer `0`–`80` (default `35`) | How far to fade players who have left, so they stay readable without competing with the people still present. |
+| Show CLI tab | `ui_show_cli_tab` | boolean (default `true`) | Shows the CLI tab. |
+| Show UI during load | `ui_show_during_load` | boolean (default `false`) | Opens the window while Celeste is still starting, rather than when it is ready. |
+
+## Moderation
+
+| Setting | Id | Type | What it does |
+|---|---|---|---|
+| Attempt avatar image match | `attempt_avatar_image_match` | boolean (default `false`) | Identifies a player's avatar by matching its image when the name alone is ambiguous. Costs extra API calls. |
+| Instances: enforce 18+ | `enforce_instances_18_plus` | one of `DISABLED`, `ENABLED_ONLY_18_PLUS`, `ENABLED_NEVER_18_PLUS` (default `DISABLED`) | Closes group instances that are not age-gated to 18+. |
+| Instances: enforce world list | `enforce_instances_world_list` | list of text, each matching `wr?ld_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` | World ids group instances are allowed to use, one per line. |
+| Instances: enforce worlds | `enforce_instances_worlds` | one of `DISABLED`, `ENABLED_WHITELIST`, `ENABLED_BLACKLIST` (default `DISABLED`) | Closes group instances opened in a world that is not on the list below. |
+| Evidence: trigger capture hotkey on kick/ban | `evidence_capture_enabled` | boolean (default `false`) | Presses the capture hotkey automatically after a moderation action. |
+| Evidence: capture hotkey (e.g. CTRL+SHIFT+F9) for OBS/Medal | `evidence_capture_hotkey` | text | The key combination to press. |
+| Evidence submission | `evidence_enabled` | boolean (default `false`) | Enables evidence capture. |
+| Evidence file path format | `evidence_file_path_format` | text matching `.+` | Where captures are saved, and how they are named. |
+| Heuristic Kick Count | `heuristicKickCount` | integer `1`–`10` (default `3`) | How many instance kicks a player can collect within the period below before Celeste flags them for a ban. |
+| Heuristic Period (days) | `heuristicPeriodDays` | integer `1`–`30` (default `3`) | How far back, in days, those kicks are counted. |
+| Moderation log: include history from the past N days (0 = all time) | `moderation_log_lookback_days` | integer `0`–`3650` (default `0`) | How far back /moderation-log reads a user's history, in days. |
+| Outstanding Period (days) | `outstandingPeriodDays` | integer `1`–`30` (default `3`) | How far back /outstanding-moderation looks for events still missing tags or a description. |
+| Discord: show timed-ban buttons on moderation posts | `timed_bans_enabled` | boolean (default `true`) | Shows the timed-ban buttons on moderation threads, which ban for a fixed period and lift automatically. |
+| Training mode (enable the event simulator) | `training_mode_enabled` | boolean (default `false`) | Routes simulated moderation events to the training channel instead of the real log. |
+
+## Notifications
+
+| Setting | Id | Type | What it does |
+|---|---|---|---|
+| Advisory: flag Nuisance trust rank | `advisory_flag_nuisance_rank` | boolean (default `true`) | Flags players VRChat has marked as a probable nuisance. |
+| Advisory: flag Visitor trust rank | `advisory_flag_visitor_rank` | boolean (default `false`) | Flags players still on Visitor rank. |
+| Advisory: mixed-character names | `advisory_show_mixed_character_names` | boolean (default `true`) | Flags display names that mix scripts, a common way to impersonate another member. |
+| Advisory: new players | `advisory_show_new_players` | boolean (default `true`) | Flags accounts younger than the age set below. |
+| Advisory: suspicious pronouns | `advisory_show_suspicious_pronouns` | boolean (default `true`) | Flags pronoun fields matching your bad-pronoun list. |
+| Advisory: votes-to-kick | `advisory_show_votes_to_kick` | boolean (default `true`) | Flags players the instance has started a vote-kick against. |
+| Advisory: watched avatars | `advisory_show_watched_avatars` | boolean (default `true`) | Flags players wearing a watched avatar. |
+| Advisory: watched groups | `advisory_show_watched_groups` | boolean (default `true`) | Flags players who represent a watched group when they join. |
+| Advisory: watched users | `advisory_show_watched_users` | boolean (default `true`) | Flags players on your watched-users list when they join. |
+| Announce when a verified member is auto-invited (staff log channel + the user's ticket) | `announce_verify_complete` | boolean (default `true`) | Posts a message when someone finishes linking their account. |
+| Mobile minimum severity | `mobile_min_severity` | one of `INFO`, `WATCH`, `WARNING`, `CRITICAL` (default `WATCH`) | Lowest severity worth sending to a phone. |
+| Mobile: mixed-character names | `mobile_notify_mixed_character_names` | boolean (default `false`) | Pushes one for a mixed-script display name. |
+| Mobile: moderation | `mobile_notify_moderation` | boolean (default `true`) | Pushes one when a moderation action is logged. |
+| Mobile: new players | `mobile_notify_new_players` | boolean (default `false`) | Pushes one when a new account joins. |
+| Mobile: staff joins/leaves | `mobile_notify_staff` | boolean (default `false`) | Pushes one when a staff member joins. |
+| Mobile: suspicious pronouns | `mobile_notify_suspicious_pronouns` | boolean (default `true`) | Pushes one for a flagged pronoun field. |
+| Mobile: votes-to-kick | `mobile_notify_votes_to_kick` | boolean (default `true`) | Pushes one when a vote-kick starts. |
+| Mobile: watched avatars | `mobile_notify_watched_avatars` | boolean (default `true`) | Pushes one when someone wearing a watched avatar joins. |
+| Mobile: watched groups | `mobile_notify_watched_groups` | boolean (default `true`) | Pushes one when someone representing a watched group joins. |
+| Mobile: watched users | `mobile_notify_watched_users` | boolean (default `true`) | Pushes a notification when a watched user joins. |
+| Desktop notifications | `notify_desktop_enabled` | boolean (default `false`) | Allows desktop notifications at all. The toggles below choose which events raise one. |
+| Toast: mixed-character names | `toast_notify_mixed_character_names` | boolean (default `false`) | Raises one for a mixed-script display name. |
+| Toast: moderation | `toast_notify_moderation` | boolean (default `true`) | Raises one when a moderation action is logged. |
+| Toast: new players | `toast_notify_new_players` | boolean (default `false`) | Raises one when a new account joins. |
+| Toast: staff joins/leaves | `toast_notify_staff` | boolean (default `false`) | Raises one when someone on your staff list joins. |
+| Toast: suspicious pronouns | `toast_notify_suspicious_pronouns` | boolean (default `true`) | Raises one for a flagged pronoun field. |
+| Toast: votes-to-kick | `toast_notify_votes_to_kick` | boolean (default `true`) | Raises one when a vote-kick starts. |
+| Toast: watched avatars | `toast_notify_watched_avatars` | boolean (default `true`) | Raises one when someone wearing a watched avatar joins. |
+| Toast: watched groups | `toast_notify_watched_groups` | boolean (default `true`) | Raises one when someone representing a watched group joins. |
+| Toast: watched users | `toast_notify_watched_users` | boolean (default `true`) | Raises a desktop notification when a watched user joins. |
+| TTS: Announce mixed-character names | `tts_announce_mixed_character_names` | boolean (default `true`) | Speaks a warning for display names that mix scripts. |
+| TTS: Announce new players | `tts_announce_new_players` | boolean (default `true`) | Speaks a warning when an account younger than the age below joins. |
+| TTS: announce Nuisance rank (with alarm chime) | `tts_announce_nuisance_rank` | boolean (default `true`) | Speaks a warning when a probable-nuisance player joins. |
+| TTS: Announce players newer than (days) | `tts_announce_players_newer_than_days` | integer `1`–`365` (default `30`) | How new an account has to be, in days, to count as a new player. |
+| TTS: Announce suspicious pronouns | `tts_announce_suspicious_pronouns` | boolean (default `true`) | Speaks a warning when a pronoun field matches your bad-pronoun list. |
+| TTS: announce Visitor rank | `tts_announce_visitor_rank` | boolean (default `false`) | Speaks a warning when a Visitor-rank player joins. |
+| TTS: Announce Votes-to-Kick | `tts_announce_votes_to_kick` | boolean (default `true`) | Speaks a warning when a vote-kick starts. |
+| TTS: Announce watched avatars | `tts_announce_watched_avatars` | boolean (default `true`) | Speaks a warning when someone wearing a watched avatar joins. |
+| TTS: Announce watched groups | `tts_announce_watched_groups` | boolean (default `true`) | Speaks a warning when someone representing a watched group joins. |
+| TTS: Announce watched users | `tts_announce_watched_users` | boolean (default `true`) | Speaks a warning when a watched user joins. |
+| TTS: Flag suspicious pronouns | `tts_flag_suspicious_pronouns` | boolean (default `true`) | Reads the pronoun itself aloud as part of the warning, rather than only saying one was flagged. |
+| TTS: Use default system audio device | `tts_use_default_audio_device` | boolean (default `false`) | Speaks through this computer's audio output. Turn off to speak into the configured Discord voice channel instead. |
+| TTS: Voice name | `tts_voice_name` | one of a list discovered at runtime | Which installed system voice to speak with. Leave empty for the default. |
+
+## Discord
+
+| Setting | Id | Type | What it does |
+|---|---|---|---|
+| Discord: Bundle Instance Kicks with causing User Ban | `discord_bundle_instance_kick_with_user_ban` | boolean (default `true`) | Posts an instance kick inside the ban thread it caused, rather than as its own entry. |
+| Enable built-in Discord moderation commands | `discord_kick_ban_enabled` | boolean (default `false`) | Enables /discord-kick and /discord-ban for moderating the Discord server itself. |
+| Discord moderation prompt shown | `discord_kick_ban_prompted` | boolean (default `false`) | Remembers that you have been asked about the Discord moderation commands. |
+| Discord: Ping on Instance Kick | `discord_ping_instance_kick` | boolean (default `false`) | Mentions them when an instance kick is logged. |
+| Discord: Ping on Instance Warn | `discord_ping_instance_warn` | boolean (default `false`) | Mentions the acting moderator when an instance warning is logged. |
+| Discord: Ping on Member Remove | `discord_ping_member_remove` | boolean (default `true`) | Mentions them when a member is removed from the group. |
+| Discord: Ping on outstanding Instance Kick | `discord_ping_outstanding_instance_kick` | boolean (default `true`) | Mentions them again if a kick is still untagged and undescribed. |
+| Discord: Ping on outstanding Instance Warn | `discord_ping_outstanding_instance_warn` | boolean (default `false`) | Mentions them again if a warning is still untagged and undescribed. |
+| Discord: Ping on outstanding Member Remove | `discord_ping_outstanding_member_remove` | boolean (default `false`) | Mentions them again if a removal is still untagged and undescribed. |
+| Discord: Ping on outstanding User Ban | `discord_ping_outstanding_user_ban` | boolean (default `true`) | Mentions them again if a ban is still untagged and undescribed. |
+| Discord: Ping on outstanding User Unban | `discord_ping_outstanding_user_unban` | boolean (default `false`) | Mentions them again if an unban is still untagged and undescribed. |
+| Discord: Ping on User Ban | `discord_ping_user_ban` | boolean (default `true`) | Mentions them when a user is banned. |
+| Discord: Ping on User Unban | `discord_ping_user_unban` | boolean (default `false`) | Mentions them when a user is unbanned. |
+| Discord role snowflake that members must have before being prompted to link their VRChat account | `members_role_snowflake` | text matching `\d{1,20}` | Role given to someone confirmed as a group member. |
+| Moderation summary: only list staff with activity | `moderation_summary_only_activity` | boolean (default `true`) | Limits the moderation summary to periods that actually had activity. |
+| Discord role snowflake that triggers VRChat group auto-invite | `verified_role_snowflake` | text matching `\d{1,20}` | Role given to someone who links their VRChat account. |
+
+## Integrations
+
+| Setting | Id | Type | What it does |
+|---|---|---|---|
+| Translation API key, or a MyMemory email to raise the free limit (optional) | `advisory_translate_api_key` | text | API key for that translation server, if it needs one. |
+| Advisory translation endpoint (optional; blank uses the free built-in service) | `advisory_translate_endpoint` | text | LibreTranslate server used to translate advisory text. Leave empty to skip translation. |
+| After being offline, catch up on at most this many days of audit log (1-90) | `audit_catchup_max_days` | integer `1`–`90` (default `14`) | How much backlog to work through on startup, in days, after Celeste has been closed for a while. |
+| Audit polling interval seconds (10-300 inclusive) | `audit_polling_interval` | integer `10`–`300` (default `60`) | How often to poll VRChat for new group audit events, in seconds. |
+| Auto-close the bot's own instance this many minutes after everyone else leaves (0 = off) | `auto_close_bot_instance_minutes` | integer `0`–`1440` (default `0`) | Closes Celeste's own instance after this many minutes with nobody else in it. Zero leaves it open. |
+| VRChat group ID to auto-invite verified members to | `auto_invite_group_id` | text matching `grp_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` | Which group that invite is for. |
+| Auto-invite to VRChat group when the verified role is added | `auto_invite_group_on_verify` | boolean (default `true`) | Sends a VRChat group invite once someone links their account. |
+| VRCX-compatible avatar search providers | `custom_avatar_search_providers` | list of text, each matching `https?://.+` | Which avatar databases to search. |
+| Use custom avatar search providers | `custom_avatar_search_providers_enabled` | boolean (default `false`) | Searches your chosen avatar databases instead of the built-in set. |
+| Instance follow: fast detect interval (seconds, 0=off) | `instance_follow_fast_poll_seconds` | integer `0`–`300` (default `30`) | How often to check for newly created group instances, in seconds. |
+| Message shown when a member can't be auto-verified and needs manual verification (blank to disable) | `link_vrchat_manual_verify_message` | text | Message shown to someone who has to verify manually. |
+| Mobile companion | `mobile_enabled` | boolean (default `false`) | Enables the mobile companion. |
+| Mobile FCM service account JSON | `mobile_fcm_service_account` | text | Service account used to send push notifications. |
+| Mobile relay endpoint (optional, https) | `mobile_relay_endpoint` | text matching `https://.+` | Relay server the companion connects through. |
+| VRChat Client: Launch on Instance Create | `vrchat_client_launch_on_instance_create` | boolean (default `false`) | Launches VRChat into a group instance as soon as one is created. |
+| VRChat Help Desk report email | `vrchat_report_email` | text matching `.+@.+` | Address VRChat replies to when you file a report. |
+| Append footer to template | `vrchat_report_template_footer` | boolean (default `true`) | Text appended to the bottom of every generated report. |
+
+## System
+
+| Setting | Id | Type | What it does |
+|---|---|---|---|
+| Delete files older than (days) | `cache_cleanup_days` | integer `1`–`30` (default `7`) | How old a file has to be before cleanup removes it, in days. |
+| Auto-delete old cached files | `cache_cleanup_enabled` | boolean (default `true`) | Deletes old caches, logs and temporary audio on a schedule. |
+| Discord setup wizard has run | `discord_setup_prompted` | boolean (default `false`) | Remembers that you have been offered Discord setup. |
+| Acknowledged the "vibe-coded project" notice | `vibecoded_notice_acknowledged` | boolean (default `false`) | Remembers that you have read the first-run notice. |
+
+---
+
+100 settings in 6 categories.

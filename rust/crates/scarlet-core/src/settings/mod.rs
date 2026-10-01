@@ -27,6 +27,7 @@
 pub mod backup_warning;
 pub mod enums;
 pub mod file_valued;
+pub mod doc;
 pub mod help;
 pub mod prompt;
 pub mod registry;
