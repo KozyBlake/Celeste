@@ -1132,6 +1132,13 @@ impl ScarletApp {
                         .stroke(egui::Stroke::NONE),
                 );
                 if response.clicked() {
+                    if leaving_settings && tab != Tab::Settings {
+                        // Leaving the tab stops the settings fields being
+                        // drawn, and egui delivers no focus-loss event for
+                        // a widget that simply stops existing -- so a
+                        // half-typed value would be discarded.
+                        self.flush_pending_setting_edits();
+                    }
                     self.tab = tab;
                 }
             }
@@ -2286,14 +2293,32 @@ impl ScarletApp {
             ui.horizontal(|ui| {
                 ui.heading(category.label());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !self.settings_search.is_empty() && ui.button("Clear").on_hover_text("Clear search").clicked() {
-                        self.settings_search.clear();
-                    }
+                    // The field needs a stable id of its own. egui derives
+                    // one from the widget's position in the layout
+                    // otherwise, and the "Clear" button below is
+                    // conditional: typing the first character makes it
+                    // appear, which shifts the field, which changes its
+                    // derived id — so egui saw a different widget and took
+                    // the keyboard focus away after exactly one keystroke.
+                    //
+                    // Drawn before the button as well, so that in this
+                    // right-to-left layout the field keeps the same
+                    // position whether or not the button is there, and
+                    // doesn't jump sideways as you type.
                     ui.add(
                         egui::TextEdit::singleline(&mut self.settings_search)
+                            .id(settings_search_id())
                             .desired_width(220.0)
                             .hint_text("Search all settings"),
                     );
+                    if !self.settings_search.is_empty()
+                        && ui.button("Clear").on_hover_text("Clear search").clicked()
+                    {
+                        self.settings_search.clear();
+                        // Hand focus back rather than leaving the caret
+                        // nowhere after the button disappears.
+                        ui.memory_mut(|memory| memory.request_focus(settings_search_id()));
+                    }
                 });
             });
             ui.separator();
@@ -3608,6 +3633,16 @@ fn copy_data_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Resul
 /// `lost_focus() && enter_pressed() || lost_focus()`, which — since `&&`
 /// binds tighter than `||` — is just `lost_focus()`. The Enter branch had
 /// no effect at all.
+/// A stable id for the settings search field.
+///
+/// Without one, egui derives the id from where the widget lands in the
+/// layout, and anything that changes the layout around it — here, a
+/// conditional button appearing as soon as the query is non-empty — silently
+/// becomes a *different widget* as far as focus is concerned.
+fn settings_search_id() -> egui::Id {
+    egui::Id::new("settings-search")
+}
+
 fn commit_text_setting(lost_focus: bool, enter_pressed: bool) -> bool {
     lost_focus || enter_pressed
 }
