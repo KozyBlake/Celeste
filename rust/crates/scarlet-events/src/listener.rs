@@ -167,6 +167,16 @@ struct CheckOutcome {
     age_verification_status: Option<String>,
 }
 
+/// How stale a cached profile may be and still answer a join check.
+///
+/// Five minutes: long enough that a rejoin, or a whole instance being caught
+/// up from the log preamble, costs one lookup rather than one per join;
+/// short enough that a trust-rank change lands within a few minutes. Java's
+/// equivalent window is unbounded — see the call site.
+fn join_check_max_age() -> i64 {
+    scarlet_vrchat::entity_cache::now_millis() - 5 * 60 * 1000
+}
+
 impl CheckOutcome {
     fn new() -> Self {
         CheckOutcome {
@@ -855,10 +865,37 @@ impl ScarletEventListener {
         }
 
         let user = match self.vrchat().await {
-            Some(client) => match client.get_user(user_id).await {
+            // Java's `getUser(userId)` is nominally ALWAYS_FETCH, but its
+            // cache returns a too-old in-memory entry anyway — the LRU hit
+            // ignores minEpoch (see `json_cache.rs`) — so in practice Java
+            // fetches a given player's profile *once* and serves the rest of
+            // the session from memory. This port deliberately fixed that
+            // bug, which made ALWAYS_FETCH honest and, as a side effect,
+            // turned the join path — the hottest path there is — into one
+            // live API call per join.
+            //
+            // Re-fetching a profile every time the same person walks back in
+            // buys nothing: trust rank and date-joined don't change minute
+            // to minute. A short max-age restores Java's effective behaviour
+            // without its unbounded staleness, and keeps a busy instance
+            // from spending its rate limit on profiles it already has.
+            Some(client) => match client
+                .get_user_cached(user_id, join_check_max_age())
+                .await
+            {
                 Ok(user) => Some(user),
                 Err(err) => {
-                    tracing::debug!("Could not look up {user_id} for join checks: {err}");
+                    // This was `debug!`, so a failed lookup was invisible at
+                    // any normal log level — while the visible result is a
+                    // player whose trust rank reads "Unknown" and whose
+                    // account age is blank, with nothing anywhere saying
+                    // why. If VRChat is rate-limiting, or the session has
+                    // expired, or the id is negative-cached, this is the
+                    // line that says so.
+                    tracing::warn!(
+                        "Could not look up {user_id} for join checks, so their trust rank, \
+                         account age and pronouns will be blank: {err}"
+                    );
                     None
                 }
             },
