@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="images/sybyline_scarlet.png?raw=true" alt="Celeste logo" width="300" height="300"/>
-
 # Celeste
 
 A self-hostable VRChat group management utility with Discord integration.
@@ -360,3 +358,20 @@ Package names differ between distributions; the table covers the two most common
 macOS uses the built-in `say`; Windows uses SAPI voices via PowerShell.
 
 If no engine is installed, Celeste opens an explanatory warning instead of a voice list.
+
+---
+
+## Credits and licence
+
+Celeste is MIT licensed, and the licence it inherits is Scarlet's. Scarlet was
+written by **Vinyarion** of the **Sybyline Network**, who holds the copyright
+in `LICENSE`; that notice stays, and so does the credits list the app shows
+under Help. This is a rewrite of their work, not a replacement of their
+authorship.
+
+Scarlet's logo is **not** included here and is not Celeste's. It belonged to
+that project and was never mine to carry over. Celeste currently has no logo
+of its own.
+
+The Discord setup screenshots in `images/` are crops of Discord's own
+developer dashboard.
