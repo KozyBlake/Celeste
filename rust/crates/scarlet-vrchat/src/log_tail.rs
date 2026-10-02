@@ -235,6 +235,35 @@ pub enum LogEventKind {
     PlayerSpawnProp { user_id: String, prop_id: String },
     ApiRequest { index: i32, method: String, url: String },
     VideoLoad { display_name: String, url: String, title: String },
+    /// `[ModerationManager] <display name> has been kicked`: a kick that
+    /// actually took effect in the instance this client is in.
+    ///
+    /// **Not in Java.** `ScarletVRChatLogs.handleEntry` matches only the
+    /// vote-kick under `[ModerationManager]` and drops this line, so
+    /// Scarlet never saw these either.
+    ///
+    /// This is the only local trace of a kick performed by someone whose
+    /// authority is VRChat-side rather than a group role: no group audit
+    /// entry is written for it, and the target otherwise just appears in
+    /// `OnPlayerLeft` like anyone who left on their own.
+    ///
+    /// The line names no actor. Celeste can report that a kick happened
+    /// and to whom, never by whom — guessing an actor from whoever was
+    /// nearby would be a fabricated moderation record.
+    PlayerKicked { display_name: String },
+    /// A `[ModerationManager]` line whose shape this parser does not know.
+    ///
+    /// Not a parsed event — an instrument. The only moderation line
+    /// Celeste recognises is the vote-kick, so a moderation action taken
+    /// by someone with VRChat-side privileges leaves no trace it can act
+    /// on: it is not a group-role action, so the group audit log never
+    /// records it, and locally the target simply appears to leave.
+    ///
+    /// The prefix allowlist already passes every `[ModerationManager]`
+    /// line through, so anything VRChat does write was reaching the parser
+    /// and being discarded unseen. Surfacing the text is what lets the
+    /// shape be identified and parsed properly instead of guessed at.
+    UnrecognizedModeration { text: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -363,7 +392,12 @@ pub fn parse_entry_text(text: &str) -> Option<LogEventKind> {
                 });
             }
         }
-        return None;
+        if let Some(display_name) = after_mm.strip_suffix(" has been kicked") {
+            if !display_name.is_empty() {
+                return Some(LogEventKind::PlayerKicked { display_name: display_name.to_string() });
+            }
+        }
+        return Some(LogEventKind::UnrecognizedModeration { text: after_mm.to_string() });
     }
 
     if let Some(after) = text.strip_prefix("[SharingManager] User ") {
@@ -1121,5 +1155,52 @@ mod tests {
         std::fs::write(&path, "line one\nline two\npartial-no-newline-yet, now finished\n").unwrap();
         let more = read_new_lines(&path, &mut position).unwrap();
         assert_eq!(more, vec!["partial-no-newline-yet, now finished".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod moderation_line_tests {
+    use super::*;
+
+    /// Modelled on a real line, with an invented display name: the real
+    /// one belongs to a third party and does not belong in this history.
+    ///
+    /// The detail worth keeping is the shape. Names on these lines carry
+    /// a one-dot leader (U+2024) where a period would go — homoglyph
+    /// names are exactly the kind that get kicked — so the parser must
+    /// not assume ASCII or split on '.'.
+    #[test]
+    fn a_kick_that_took_effect_is_parsed() {
+        assert_eq!(
+            parse_entry_text("[ModerationManager] example\u{2024}0000 aaaa has been kicked"),
+            Some(LogEventKind::PlayerKicked { display_name: "example\u{2024}0000 aaaa".to_string() })
+        );
+    }
+
+    #[test]
+    fn the_vote_kick_shape_still_wins() {
+        assert!(matches!(
+            parse_entry_text("[ModerationManager] A vote kick has been initiated against Someone, do you agree?"),
+            Some(LogEventKind::VtkInit { .. })
+        ));
+    }
+
+    /// Anything else under this prefix is surfaced rather than dropped, so
+    /// the next unknown shape is reported instead of silently discarded —
+    /// which is how the kick line went unnoticed in Java and here.
+    #[test]
+    fn an_unknown_moderation_shape_is_reported_not_dropped() {
+        assert_eq!(
+            parse_entry_text("[ModerationManager] something entirely new happened"),
+            Some(LogEventKind::UnrecognizedModeration { text: "something entirely new happened".to_string() })
+        );
+    }
+
+    #[test]
+    fn a_bare_suffix_is_not_a_kick_of_nobody() {
+        assert!(matches!(
+            parse_entry_text("[ModerationManager]  has been kicked"),
+            Some(LogEventKind::UnrecognizedModeration { .. })
+        ));
     }
 }

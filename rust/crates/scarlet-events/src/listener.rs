@@ -143,6 +143,8 @@ pub struct ScarletEventListener {
     /// One-shot, so a full instance doesn't repeat the warning per player.
     warned_no_vrchat_session: bool,
     seen_api_log_lines: bool,
+    /// Distinct `[ModerationManager]` shapes already reported this run.
+    seen_moderation_shapes: std::collections::HashSet<String>,
     live_avatar_switches_without_api_log: u32,
     warned_missing_api_logging: bool,
 
@@ -220,6 +222,7 @@ impl ScarletEventListener {
             is_same_as_previous_instance: false,
             warned_no_vrchat_session: false,
             seen_api_log_lines: false,
+            seen_moderation_shapes: std::collections::HashSet::new(),
             live_avatar_switches_without_api_log: 0,
             warned_missing_api_logging: false,
             // Java: `new Pacer(500L)`.
@@ -341,6 +344,12 @@ impl ScarletEventListener {
             }
             LogEventKind::VideoLoad { display_name, url, title } => {
                 self.log_video_load(preamble, timestamp, display_name, url, title).await
+            }
+            LogEventKind::PlayerKicked { display_name } => {
+                self.log_player_kicked(preamble, timestamp, display_name)
+            }
+            LogEventKind::UnrecognizedModeration { text } => {
+                self.log_unrecognized_moderation(preamble, &text)
             }
         }
     }
@@ -1124,6 +1133,59 @@ impl ScarletEventListener {
                 .then_with(|| a.group.silent.cmp(&b.group.silent))
         });
         watched
+    }
+
+    /// A kick that took effect in this instance.
+    ///
+    /// **Not in Java**, which parses only the vote-kick line. This is the
+    /// only local evidence of a kick by someone acting with VRChat-side
+    /// authority instead of a group role: no `group.instance.kick` audit
+    /// entry is written for it, so the audit poller cannot see it, and
+    /// the target otherwise looks like they simply left.
+    ///
+    /// VRChat names no actor on this line, so the record says who was
+    /// kicked and never by whom. Inferring an actor would be inventing a
+    /// moderation record, which is worse than an incomplete one.
+    fn log_player_kicked(&mut self, preamble: bool, timestamp: NaiveDateTime, display_name: String) {
+        if preamble {
+            return;
+        }
+        let user_id = self.display_name_to_user_id.get(&display_name).cloned();
+        match &user_id {
+            Some(user_id) => tracing::info!(
+                "Kicked from the instance: {display_name} ({user_id}) at {timestamp} - VRChat does not name who kicked them"
+            ),
+            None => tracing::info!(
+                "Kicked from the instance: {display_name} (user id unknown) at {timestamp} - VRChat does not name who kicked them"
+            ),
+        }
+        self.deps.ui.append_cli_output(&match &user_id {
+            Some(user_id) => format!("{display_name} ({user_id}) was kicked from the instance; VRChat does not record who did it."),
+            None => format!("{display_name} was kicked from the instance; VRChat does not record who did it."),
+        });
+    }
+
+    /// Reports a `[ModerationManager]` line Celeste cannot parse — once
+    /// per distinct shape, so a line repeated all session says it once.
+    ///
+    /// Moderation taken by someone with VRChat-side privileges rather than
+    /// a group role produces no group audit entry, and locally the target
+    /// just appears to leave, so there is nothing to log. If VRChat does
+    /// write something, it arrives here. Shapes are keyed on the first few
+    /// words, because the rest carries display names that differ every
+    /// time.
+    fn log_unrecognized_moderation(&mut self, preamble: bool, text: &str) {
+        if preamble {
+            return; // replaying old logs; don't re-report what was seen before
+        }
+        let shape: String = text.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
+        if !self.seen_moderation_shapes.insert(shape.clone()) {
+            return;
+        }
+        tracing::warn!(
+            "Unrecognized VRChat moderation line (Celeste cannot attribute this action): {text}"
+        );
+        self.deps.ui.append_cli_output(&format!("Unparsed moderation event from VRChat: {text}"));
     }
 
     /// Port of `log_vtkInit`.
