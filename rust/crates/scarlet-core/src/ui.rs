@@ -44,6 +44,23 @@ pub struct AvatarBundleInfo {
     pub file_name: Option<String>,
     /// VRChat's own wording: "Excellent"/"Good"/"Medium"/"Poor"/"VeryPoor".
     pub performance_rating: Option<String>,
+    /// `usr_...` of the account that uploaded this asset bundle, from the
+    /// file record's `ownerId`.
+    ///
+    /// Celeste already fetched this field and dropped it. It matters for
+    /// reporting: VRChat no longer exposes another player's `avtr_` id, so
+    /// for an avatar you merely saw there is no avatar id to report. The
+    /// bundle's owner is the identifier that survives — and it names an
+    /// account rather than an asset.
+    pub owner_id: Option<String>,
+    /// `avtr_...`, when it is genuinely known.
+    ///
+    /// Only the avatar-database fallback can supply this: it searched by
+    /// name and got back a catalogued avatar. The exact path (VRChat's own
+    /// `[API] .../analysis/file_...` line) carries no avatar id at all, so
+    /// this stays `None` there. Never guessed — an avatar id on a report
+    /// has to be right.
+    pub avatar_id: Option<String>,
 }
 
 /// Port of the data half of `ScarletUI.ConnectedPlayer`.

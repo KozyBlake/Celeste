@@ -409,6 +409,9 @@ pub struct AvatarStatsView {
     avatar_name: Option<String>,
     info: Option<scarlet_core::ui::AvatarBundleInfo>,
     note: Option<String>,
+    /// Pre-rendered report block, built when the window opens so the
+    /// button is a clipboard write and nothing else.
+    evidence: Option<String>,
 }
 
 struct PendingCacheCleanup {
@@ -1212,11 +1215,14 @@ impl ScarletApp {
             }
             ColumnId::AvatarStats => {
                 if Self::table_button(ui, "View").clicked() {
+                    let location = self.state.instance().map(|instance| instance.location);
                     self.avatar_stats_open = Some(AvatarStatsView {
                         player_name: player.name.clone(),
                         avatar_name: player.avatar_name.clone(),
                         info: player.avatar_info.clone(),
                         note: player.avatar_info_note.clone(),
+                        evidence: scarlet_core::report_evidence::has_avatar_evidence(player)
+                            .then(|| scarlet_core::report_evidence::render(player, location.as_deref())),
                     });
                 }
             }
@@ -1618,6 +1624,22 @@ impl ScarletApp {
                                 ui.add(egui::Label::new(name).truncate()).on_hover_text(name);
                                 ui.end_row();
                             }
+                            // The account that published the bundle. For an
+                            // avatar you only saw, this is the identifier
+                            // that still exists: VRChat does not expose
+                            // another player's avtr_ id.
+                            if let Some(owner_id) = &info.owner_id {
+                                ui.label("Uploaded by");
+                                ui.add(egui::Label::new(egui::RichText::new(owner_id).monospace()).truncate())
+                                    .on_hover_text(owner_id);
+                                ui.end_row();
+                            }
+                            if let Some(avatar_id) = &info.avatar_id {
+                                ui.label("Avatar ID");
+                                ui.add(egui::Label::new(egui::RichText::new(avatar_id).monospace()).truncate())
+                                    .on_hover_text(avatar_id);
+                                ui.end_row();
+                            }
                         }
                         None => {
                             ui.label("Performance");
@@ -1626,6 +1648,27 @@ impl ScarletApp {
                         }
                     }
                 });
+
+                if let Some(evidence) = &view.evidence {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    if ui
+                        .button("Copy report evidence")
+                        .on_hover_text(
+                            "Copies this player, the instance, and the asset bundle Celeste saw them \
+                             wearing - including the account that uploaded it - ready to paste into a \
+                             VRChat report.",
+                        )
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(evidence.clone());
+                        self.state.append_cli_output(&format!(
+                            "Copied avatar report evidence for {}.",
+                            view.player_name
+                        ));
+                    }
+                }
 
                 if let Some(note) = &view.note {
                     ui.add_space(8.0);

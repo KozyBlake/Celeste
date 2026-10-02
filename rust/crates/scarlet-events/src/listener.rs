@@ -1405,6 +1405,9 @@ impl ScarletEventListener {
             file_id: Some(versioned.id.clone()),
             file_name: Some(name),
             performance_rating: Some(performance.clone()),
+            owner_id: file.owner_id.clone(),
+            // The exact path has no avatar id to offer; see the field docs.
+            avatar_id: None,
         };
 
         let wearers: Vec<String> =
@@ -1503,6 +1506,10 @@ impl ScarletEventListener {
                 file_id: Some(versioned.id.clone()),
                 file_name: Some(avatar_display_name.to_string()),
                 performance_rating: Some(performance),
+                // This path matched a catalogued avatar by name, so the
+                // author and the avatar id are both real here.
+                owner_id: avatar.author_id.clone(),
+                avatar_id: Some(candidate.id.clone()),
             };
             self.display_name_to_avatar_bundle_info.insert(display_name.to_string(), info.clone());
             let initial_preamble = !self.is_tailer_live;
