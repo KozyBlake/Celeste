@@ -293,3 +293,123 @@ mod tests {
         assert!(!is_simple_voice_token(""));
     }
 }
+
+/// The command that renders `text` to a WAV at `output` using the engine
+/// named by `voice`.
+///
+/// Returned as (program, args) rather than a built `Command` so both the
+/// desktop path (`std::process::Command`) and the Discord path
+/// (`tokio::process::Command`) can use it.
+///
+/// This exists because they had drifted. The desktop path learned to route
+/// each voice to the engine its id names; the Discord path stayed
+/// espeak-only and merely stripped the prefix off, so picking a Flite
+/// voice ran `espeak -v slt`, which fails and writes nothing — surfacing
+/// as "the speech synthesizer wrote no audio file". Two renderers for one
+/// voice list is the bug; this is the one renderer.
+///
+/// `None` when the engine named by `voice` is not installed. Callers fall
+/// back to whatever engine they can find.
+pub fn render_command(voice: &str, text: &str, output: &std::path::Path) -> Option<(std::path::PathBuf, Vec<std::ffi::OsString>)> {
+    use std::ffi::OsString;
+
+    let parsed = VoiceId::parse(voice);
+    let name = parsed.voice.trim().to_string();
+    let out: OsString = output.as_os_str().to_os_string();
+    let arg = |s: &str| OsString::from(s);
+
+    let (program, args): (std::path::PathBuf, Vec<OsString>) = match parsed.engine.as_str() {
+        "espeak-ng" | "espeak" => {
+            let program = which(&parsed.engine)?;
+            let mut args = vec![arg("-w"), out];
+            if !name.is_empty() {
+                args.push(arg("-v"));
+                args.push(arg(&name));
+            }
+            args.push(arg(text));
+            (program, args)
+        }
+        "flite" => {
+            let program = which("flite")?;
+            let mut args = Vec::new();
+            if !name.is_empty() {
+                args.push(arg("-voice"));
+                args.push(arg(&name));
+            }
+            args.extend([arg("-t"), arg(text), arg("-o"), out]);
+            (program, args)
+        }
+        "pico2wave" => {
+            let program = which("pico2wave")?;
+            let mut args = Vec::new();
+            if !name.is_empty() {
+                args.push(arg("-l"));
+                args.push(arg(&name));
+            }
+            args.extend([arg("-w"), out, arg(text)]);
+            (program, args)
+        }
+        "say" => {
+            let program = which("say")?;
+            let mut args = vec![arg("--data-format=LEI16@22050"), arg("-o"), out];
+            if !name.is_empty() {
+                args.push(arg("-v"));
+                args.push(arg(&name));
+            }
+            args.push(arg(text));
+            (program, args)
+        }
+        _ => return None,
+    };
+    Some((program, args))
+}
+
+#[cfg(test)]
+mod render_command_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn strings(args: &[std::ffi::OsString]) -> Vec<String> {
+        args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    /// The bug this guards: the Discord path stripped `flite/` off and ran
+    /// the remaining name through eSpeak, which fails and writes no file.
+    /// A flite voice must produce a flite command, with flite's own flags.
+    #[test]
+    fn a_flite_voice_renders_with_flite_not_espeak() {
+        let Some((program, args)) = render_command("flite/slt", "hello", Path::new("/tmp/x.wav")) else {
+            return; // flite isn't installed here; nothing to assert
+        };
+        assert!(program.to_string_lossy().contains("flite"));
+        let args = strings(&args);
+        assert!(args.contains(&"-voice".to_string()), "flite names its flag -voice: {args:?}");
+        assert!(args.contains(&"slt".to_string()));
+        assert!(!args.contains(&"-v".to_string()), "that is eSpeak's flag, not flite's");
+    }
+
+    #[test]
+    fn an_espeak_voice_renders_with_espeak_flags() {
+        let Some((program, args)) = render_command("espeak-ng/en-us", "hello", Path::new("/tmp/x.wav")) else {
+            return;
+        };
+        assert!(program.to_string_lossy().contains("espeak"));
+        let args = strings(&args);
+        assert_eq!(args[0], "-w");
+        assert!(args.contains(&"-v".to_string()));
+        assert!(args.contains(&"en-us".to_string()));
+        assert_eq!(args.last().unwrap(), "hello");
+    }
+
+    #[test]
+    fn an_unknown_engine_has_no_command() {
+        assert!(render_command("madeup/voice", "hello", Path::new("/tmp/x.wav")).is_none());
+    }
+
+    /// A legacy id saved before engine prefixes existed has no engine, so
+    /// there is no command to build for it; the caller falls back.
+    #[test]
+    fn a_bare_voice_name_is_not_guessed_at() {
+        assert!(render_command("en-us", "hello", Path::new("/tmp/x.wav")).is_none());
+    }
+}

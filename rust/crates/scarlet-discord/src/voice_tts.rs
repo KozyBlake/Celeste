@@ -241,22 +241,35 @@ impl EventHandler for DeleteAudioFile {
 }
 
 async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Result<()> {
+    // One renderer, shared with the desktop path. These two had drifted:
+    // this one was eSpeak-only and simply stripped the engine prefix off
+    // the voice id, so a Flite voice became `espeak -v slt`, which fails
+    // and writes nothing - the "wrote no audio file" error in the log.
+    if let Some((program, args)) = scarlet_core::tts_voices::render_command(voice, text, output) {
+        let status = tokio::process::Command::new(&program).args(&args).status().await?;
+        anyhow::ensure!(status.success(), "{} exited with {status}", program.display());
+        return Ok(());
+    }
+
+    // The voice named no installed engine (an id saved before engine
+    // prefixes existed, or an engine since uninstalled). Fall back to
+    // whatever this machine does have, rather than dropping the
+    // announcement.
     #[cfg(target_os = "linux")]
     {
         let executable = find_on_path("espeak-ng")
             .or_else(|| find_on_path("espeak"))
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Discord TTS needs eSpeak NG on Linux and neither `espeak-ng` nor \
-                     `espeak` is on PATH (on Arch: `pacman -S espeak-ng`)"
+                    "Discord TTS needs a speech synthesizer on Linux and none was found on PATH \
+                     (eSpeak NG, Flite or Pico; on Arch: `pacman -S espeak-ng`)"
                 )
             })?;
         let mut command = tokio::process::Command::new(executable);
         command.arg("-w").arg(output);
-        if !voice.trim().is_empty() {
-            command
-                .arg("-v")
-                .arg(voice.rsplit(['/', ':']).next().unwrap_or(voice));
+        let name = scarlet_core::tts_voices::VoiceId::parse(voice).voice;
+        if !name.trim().is_empty() {
+            command.arg("-v").arg(name.trim());
         }
         let status = command.arg(text).status().await?;
         anyhow::ensure!(status.success(), "eSpeak exited with {status}");
@@ -272,25 +285,10 @@ async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Resul
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .arg(output)
             .arg(text)
-            .arg(voice)
+            .arg(scarlet_core::tts_voices::VoiceId::parse(voice).voice)
             .status()
             .await?;
         anyhow::ensure!(status.success(), "PowerShell TTS exited with {status}");
-        return Ok(());
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let executable = find_on_path("say")
-            .ok_or_else(|| anyhow::anyhow!("Discord TTS requires `say` on macOS"))?;
-        let mut command = tokio::process::Command::new(executable);
-        command
-            .args(["--data-format=LEI16@22050", "-o"])
-            .arg(output);
-        if !voice.trim().is_empty() {
-            command.args(["-v", voice]);
-        }
-        let status = command.arg(text).status().await?;
-        anyhow::ensure!(status.success(), "say exited with {status}");
         return Ok(());
     }
     #[allow(unreachable_code)]

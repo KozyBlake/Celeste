@@ -98,11 +98,53 @@ pub struct GroupAuditLogEntry {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PaginatedGroupAuditLogEntryList {
+    /// Parsed entry-by-entry: see [`lenient_audit_entries`].
+    #[serde(deserialize_with = "lenient_audit_entries")]
     pub results: Vec<GroupAuditLogEntry>,
     #[serde(rename = "totalCount")]
     pub total_count: i64,
     #[serde(rename = "hasNext")]
     pub has_next: bool,
+}
+
+/// Deserializes the audit page one entry at a time, keeping the entries
+/// that parse and skipping the ones that do not.
+///
+/// A strict `Vec<GroupAuditLogEntry>` fails the *whole page* when a single
+/// entry has an unexpected shape, and the poller does not advance its
+/// cursor on failure — so one odd entry stops every moderation post
+/// indefinitely, not just its own. That happened: VRChat began returning
+/// entries with no `createdAt`, and the owner's log shows 35 consecutive
+/// `missing field 'createdAt'` failures with the cursor frozen behind them.
+///
+/// Dropping an entry is not free — it could be a real moderation event —
+/// so each one is logged at `warn` with whatever identifying fields can be
+/// recovered from the raw JSON, and the raw entry at `debug`. A poller that
+/// reports 99% of events loudly beats one that reports none silently.
+fn lenient_audit_entries<'de, D>(deserializer: D) -> Result<Vec<GroupAuditLogEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    let mut entries = Vec::with_capacity(raw.len());
+    for value in raw {
+        match serde_json::from_value::<GroupAuditLogEntry>(value.clone()) {
+            Ok(entry) => entries.push(entry),
+            Err(error) => {
+                let field = |name: &str| {
+                    value.get(name).and_then(serde_json::Value::as_str).unwrap_or("?").to_string()
+                };
+                tracing::warn!(
+                    id = field("id"),
+                    event_type = field("eventType"),
+                    %error,
+                    "Skipping an unreadable group audit entry; the rest of the page is still processed"
+                );
+                tracing::debug!("Unreadable audit entry was: {value}");
+            }
+        }
+    }
+    Ok(entries)
 }
 
 /// Hand-picked subset of `io.github.vrchatapi.model.Group`, field names and
@@ -418,4 +460,80 @@ pub struct UnityPackage {
     pub platform: Option<String>,
     #[serde(rename = "unityVersion")]
     pub unity_version: Option<String>,
+}
+
+#[cfg(test)]
+mod audit_page_tests {
+    use super::*;
+
+    /// The outage this guards. VRChat returned an audit entry with no
+    /// `createdAt`; the strict page type failed to deserialize, the poller
+    /// treated the whole poll as failed, and because it does not advance
+    /// its cursor on failure it re-fetched the same page forever. 35
+    /// consecutive failures in one session, and no moderation posts for
+    /// any of the events behind it.
+    #[test]
+    fn one_unreadable_entry_does_not_lose_the_rest_of_the_page() {
+        let json = serde_json::json!({
+            "results": [
+                {
+                    "id": "gaud_good_1",
+                    "groupId": "grp_1",
+                    "createdAt": "2026-10-02T20:00:00.000Z",
+                    "eventType": "group.member.join"
+                },
+                {
+                    // No createdAt: exactly what broke the live poller.
+                    "id": "gaud_bad",
+                    "groupId": "grp_1",
+                    "eventType": "group.member.leave"
+                },
+                {
+                    "id": "gaud_good_2",
+                    "groupId": "grp_1",
+                    "createdAt": "2026-10-02T20:05:00.000Z",
+                    "eventType": "group.user.ban"
+                }
+            ],
+            "totalCount": 3,
+            "hasNext": false
+        });
+
+        let page: PaginatedGroupAuditLogEntryList = serde_json::from_value(json).expect("the page still parses");
+        let ids: Vec<&str> = page.results.iter().map(|entry| entry.id.as_str()).collect();
+        assert_eq!(ids, vec!["gaud_good_1", "gaud_good_2"]);
+        // totalCount is VRChat's own count and is reported as sent, so a
+        // skipped entry stays visible as a discrepancy rather than being
+        // quietly reconciled away.
+        assert_eq!(page.total_count, 3);
+    }
+
+    #[test]
+    fn a_page_of_only_unreadable_entries_is_empty_rather_than_an_error() {
+        let json = serde_json::json!({
+            "results": [{"id": "gaud_bad", "groupId": "grp_1", "eventType": "x"}],
+            "totalCount": 1,
+            "hasNext": false
+        });
+        let page: PaginatedGroupAuditLogEntryList = serde_json::from_value(json).unwrap();
+        assert!(page.results.is_empty());
+    }
+
+    #[test]
+    fn a_fully_valid_page_is_unaffected() {
+        let json = serde_json::json!({
+            "results": [{
+                "id": "gaud_1", "groupId": "grp_1",
+                "createdAt": "2026-10-02T20:00:00.000Z",
+                "eventType": "group.member.join",
+                "actorId": "usr_1", "actorDisplayName": "Someone",
+                "targetId": "usr_2", "description": "joined"
+            }],
+            "totalCount": 1, "hasNext": true
+        });
+        let page: PaginatedGroupAuditLogEntryList = serde_json::from_value(json).unwrap();
+        assert_eq!(page.results.len(), 1);
+        assert_eq!(page.results[0].actor_display_name.as_deref(), Some("Someone"));
+        assert!(page.has_next);
+    }
 }
