@@ -103,6 +103,20 @@ pub struct WatchedGroup {
     pub notes_original: Option<String>,
     #[serde(rename = "translatedLang", default)]
     pub translated_lang: Option<String>,
+    /// The group's name the last time VRChat reported it, learned from the
+    /// membership lookups that already happen when someone is flagged.
+    ///
+    /// A watched entry is keyed by `grp_` id and carries no name of its
+    /// own, so a group that renames keeps being detected while every human
+    /// reference to it silently goes stale — a moderator checks the profile
+    /// for the name in their own `message`, sees a different group, and
+    /// concludes the flag was wrong. Recording what VRChat currently calls
+    /// it is what makes a rename visible.
+    ///
+    /// Additive and camelCase, so a `watched_groups.json` shared with the
+    /// Java build round-trips: Gson ignores keys it does not know.
+    #[serde(rename = "lastSeenName", default)]
+    pub last_seen_name: Option<String>,
 }
 
 impl WatchedGroup {
@@ -119,6 +133,7 @@ impl WatchedGroup {
             message_original: None,
             notes_original: None,
             translated_lang: None,
+            last_seen_name: None,
         }
     }
 }
@@ -278,6 +293,41 @@ impl WatchedGroups {
         removed
     }
 
+    /// Records what VRChat currently calls this group, and reports a
+    /// rename.
+    ///
+    /// Returns `Some(previous_name)` only when a *different* name was
+    /// already stored — that is a rename worth telling someone about.
+    /// First sighting returns `None`: there is nothing to compare against
+    /// yet, and reporting every entry as "renamed" the first time Celeste
+    /// sees it would be noise that trains people to ignore the signal.
+    ///
+    /// Saves only when something changed, because this runs on every flag.
+    pub fn record_seen_name(&self, group_id: &str, name: &str) -> Option<String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let previous = {
+            let mut groups = self.groups.lock().unwrap();
+            let Some(group) = groups.get_mut(group_id) else { return None };
+            match group.last_seen_name.as_deref() {
+                Some(stored) if stored == name => return None, // unchanged; no write
+                Some(stored) => {
+                    let stored = stored.to_string();
+                    group.last_seen_name = Some(name.to_string());
+                    Some(stored)
+                }
+                None => {
+                    group.last_seen_name = Some(name.to_string());
+                    None
+                }
+            }
+        };
+        self.save();
+        previous
+    }
+
     /// Mutates the watched group in place via `f`, then saves -- the shape
     /// every `set-*`/`add-tag`/`remove-tag` subcommand needs (look up,
     /// check/compare, mutate, save), matching Java's "get the reference,
@@ -311,6 +361,59 @@ fn legacy_type(value: &str) -> WatchedGroupType {
 
 #[cfg(test)]
 mod tests {
+    /// The confusion this guards: "Black Squad" renamed itself, the watched
+    /// entry stores only a grp_ id, and a moderator checking the profile
+    /// saw a different group name and concluded the flag was wrong. The
+    /// first sighting is not a rename; the second, different one is.
+    #[test]
+    fn records_the_current_name_and_reports_only_a_real_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        groups.add_watched_group(WatchedGroup::new("grp_1"));
+
+        assert_eq!(groups.record_seen_name("grp_1", "Black Squad"), None, "first sighting is not a rename");
+        assert_eq!(groups.get_watched_group("grp_1").unwrap().last_seen_name.as_deref(), Some("Black Squad"));
+
+        assert_eq!(groups.record_seen_name("grp_1", "Black Squad"), None, "same name twice is not a rename");
+
+        assert_eq!(
+            groups.record_seen_name("grp_1", "masmavia").as_deref(),
+            Some("Black Squad"),
+            "a different name is a rename, and reports what it was called before"
+        );
+        assert_eq!(groups.get_watched_group("grp_1").unwrap().last_seen_name.as_deref(), Some("masmavia"));
+    }
+
+    #[test]
+    fn ignores_blank_names_and_unknown_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        groups.add_watched_group(WatchedGroup::new("grp_1"));
+        assert_eq!(groups.record_seen_name("grp_1", "   "), None);
+        assert!(groups.get_watched_group("grp_1").unwrap().last_seen_name.is_none());
+        assert_eq!(groups.record_seen_name("grp_missing", "Whatever"), None);
+    }
+
+    /// A watched_groups.json shared with the Java build must round-trip:
+    /// the new key is additive, and an entry written without it loads.
+    #[test]
+    fn last_seen_name_round_trips_and_is_optional() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("watched_groups.json"),
+            br#"[{"id":"grp_1","type":"MALICIOUS","message":"Kick On Site"}]"#,
+        )
+        .unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        assert!(groups.get_watched_group("grp_1").unwrap().last_seen_name.is_none());
+
+        groups.record_seen_name("grp_1", "masmavia");
+        let reopened = WatchedGroups::open(dir.path(), "watched_groups.json");
+        assert_eq!(reopened.get_watched_group("grp_1").unwrap().last_seen_name.as_deref(), Some("masmavia"));
+        let raw = std::fs::read_to_string(dir.path().join("watched_groups.json")).unwrap();
+        assert!(raw.contains("lastSeenName"), "camelCase key, for Java compatibility");
+    }
+
     use super::*;
 
     #[test]

@@ -926,17 +926,20 @@ impl ScarletEventListener {
         // watched group would keep getting flagged on every rejoin. Re-check
         // against fresh membership for an actual rejoin of an
         // already-flagged user.
-        if !preamble && rejoined_instance && watched_groups.iter().any(|group| !group.silent) {
+        if !preamble && rejoined_instance && watched_groups.iter().any(|hit| !hit.group.silent) {
             watched_groups = self.watched_groups_of(user_id, true).await;
         }
         if !watched_groups.is_empty() {
             let show_groups = self.deps.settings.advisory_show_watched_groups.get();
-            if let Some(first) = watched_groups.iter().find(|group| !group.silent) {
+            if let Some(first) = watched_groups.iter().find(|hit| !hit.group.silent) {
                 if !preamble && show_groups && self.deps.settings.announce_watched_groups.get() {
+                    // Spoken callouts keep the moderator's own wording only:
+                    // rename and visibility notes are for reading, not for
+                    // lengthening every TTS line.
                     let messages: Vec<String> = watched_groups
                         .iter()
-                        .filter(|group| !group.silent)
-                        .filter_map(|group| group.message.clone())
+                        .filter(|hit| !hit.group.silent)
+                        .filter_map(|hit| hit.group.message.clone())
                         .filter(|message| !message.trim().is_empty())
                         .collect();
                     let clause = match messages.len() {
@@ -946,14 +949,14 @@ impl ScarletEventListener {
                     };
                     tts_parts.push(end_dot(&clause));
                 }
-                outcome.priority = first.priority;
+                outcome.priority = first.group.priority;
             }
             if show_groups {
-                for group in &watched_groups {
-                    add_advisory(&mut advisories, group.message.as_deref());
+                for hit in &watched_groups {
+                    add_advisory(&mut advisories, watched_group_advisory(hit).as_deref());
                 }
             }
-            outcome.text_color = watched_groups.iter().find_map(|group| group.r#type.text_color());
+            outcome.text_color = watched_groups.iter().find_map(|hit| hit.group.r#type.text_color());
         }
 
         if let Some(user) = &user {
@@ -1057,6 +1060,13 @@ impl ScarletEventListener {
 
     /// Port of `watchedGroupsOf`.
     ///
+    /// One watched-group match, with the two facts that live on the
+    /// *membership* rather than on the watched entry: what VRChat currently
+    /// calls the group, and whether this user has hidden their membership.
+    ///
+    /// Both arrive in the same `/users/{id}/groups` response that produces
+    /// the match, so carrying them costs nothing extra.
+
     /// Java additionally repeats the lookup under each configured alternate
     /// VRChat account, so a membership hidden from the main account can
     /// still be seen. Alt accounts aren't ported (see PORTING.md), so this
@@ -1065,7 +1075,7 @@ impl ScarletEventListener {
         &self,
         user_id: &str,
         force_fresh: bool,
-    ) -> Vec<scarlet_core::watched_groups::WatchedGroup> {
+    ) -> Vec<WatchedGroupHit> {
         let _ = force_fresh; // no membership cache here yet; every call is fresh
         let Some(client) = self.vrchat().await else { return Vec::new() };
         let groups = match client.get_user_groups(user_id).await {
@@ -1075,13 +1085,43 @@ impl ScarletEventListener {
                 return Vec::new();
             }
         };
-        let mut watched: Vec<_> = groups
-            .into_iter()
-            .filter_map(|group| group.group_id)
-            .filter_map(|group_id| self.deps.watched_groups.get_watched_group(&group_id))
-            .collect();
+        let mut watched: Vec<WatchedGroupHit> = Vec::new();
+        for membership in groups {
+            let Some(group_id) = membership.group_id.clone() else { continue };
+            let Some(group) = self.deps.watched_groups.get_watched_group(&group_id) else { continue };
+
+            // Learn the current name from the response we already have. A
+            // watched entry is keyed by id and holds no name, so without
+            // this a rename is undetectable by anyone reading the list.
+            let renamed_from = membership
+                .name
+                .as_deref()
+                .and_then(|name| self.deps.watched_groups.record_seen_name(&group_id, name));
+            if let Some(previous) = &renamed_from {
+                tracing::warn!(
+                    group_id,
+                    previous = previous.as_str(),
+                    current = membership.name.as_deref().unwrap_or(""),
+                    "Watched group has been renamed"
+                );
+            }
+
+            watched.push(WatchedGroupHit {
+                group,
+                current_name: membership.name.clone(),
+                renamed_from,
+                hidden: membership
+                    .member_visibility
+                    .as_deref()
+                    .is_some_and(|visibility| visibility.eq_ignore_ascii_case("hidden")),
+            });
+        }
         watched.sort_by(|a, b| {
-            a.priority.cmp(&b.priority).then_with(|| a.critical.cmp(&b.critical)).then_with(|| a.silent.cmp(&b.silent))
+            a.group
+                .priority
+                .cmp(&b.group.priority)
+                .then_with(|| a.group.critical.cmp(&b.group.critical))
+                .then_with(|| a.group.silent.cmp(&b.group.silent))
         });
         watched
     }
@@ -1635,6 +1675,53 @@ fn end_dot(value: &str) -> String {
 }
 
 /// Port of `addAdvisory`.
+/// One watched-group match plus the membership facts behind it.
+#[derive(Debug, Clone)]
+pub struct WatchedGroupHit {
+    pub group: scarlet_core::watched_groups::WatchedGroup,
+    /// What VRChat currently calls the group, when it said.
+    pub current_name: Option<String>,
+    /// The name Celeste had recorded before, when this lookup found a
+    /// different one.
+    pub renamed_from: Option<String>,
+    /// This user has hidden this membership from their profile.
+    pub hidden: bool,
+}
+
+/// The advisory line for one watched-group hit.
+///
+/// The watched entry's own `message` is whatever the moderator typed when
+/// they added the group, often naming it. That text cannot know the group
+/// renamed, and it cannot know this particular membership is hidden — so
+/// a moderator who checks the profile finds nothing and reasonably
+/// concludes the flag misfired. This appends the two facts that explain
+/// what they are looking at.
+pub fn watched_group_advisory(hit: &WatchedGroupHit) -> Option<String> {
+    let message = hit.group.message.as_deref().map(str::trim).filter(|m| !m.is_empty());
+    let mut parts: Vec<String> = Vec::new();
+
+    if let (Some(previous), Some(current)) = (hit.renamed_from.as_deref(), hit.current_name.as_deref()) {
+        parts.push(format!("now \"{current}\" (was \"{previous}\")"));
+    } else if let Some(current) = hit.current_name.as_deref() {
+        // Only worth saying when the moderator's own text doesn't already
+        // name it; repeating the name they just read is noise.
+        let already_named = message.is_some_and(|m| m.to_lowercase().contains(&current.to_lowercase()));
+        if !already_named {
+            parts.push(format!("group \"{current}\""));
+        }
+    }
+    if hit.hidden {
+        parts.push("membership hidden on their profile".to_string());
+    }
+
+    match (message, parts.is_empty()) {
+        (Some(message), true) => Some(message.to_string()),
+        (Some(message), false) => Some(format!("{message} [{}]", parts.join("; "))),
+        (None, true) => None,
+        (None, false) => Some(parts.join("; ")),
+    }
+}
+
 fn add_advisory(advisories: &mut Vec<String>, advisory: Option<&str>) {
     let Some(advisory) = advisory else { return };
     let trimmed = advisory.trim();
@@ -2227,5 +2314,63 @@ mod tests {
             period_between(NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
             (0, 0, 0)
         );
+    }
+}
+
+#[cfg(test)]
+mod watched_group_advisory_tests {
+    use super::{watched_group_advisory, WatchedGroupHit};
+    use scarlet_core::watched_groups::WatchedGroup;
+
+    fn hit(message: Option<&str>, current: Option<&str>, renamed_from: Option<&str>, hidden: bool) -> WatchedGroupHit {
+        let mut group = WatchedGroup::new("grp_1");
+        group.message = message.map(str::to_string);
+        WatchedGroupHit {
+            group,
+            current_name: current.map(str::to_string),
+            renamed_from: renamed_from.map(str::to_string),
+            hidden,
+        }
+    }
+
+    /// The real case: the entry says "Black Squad is a Crasher Group", the
+    /// group now calls itself masmavia, and a moderator who checks the
+    /// profile sees no Black Squad and doubts a correct flag.
+    #[test]
+    fn a_rename_is_stated_with_both_names() {
+        let advisory =
+            watched_group_advisory(&hit(Some("Kick On Site. Black Squad is a Crasher Group"), Some("masmavia"), Some("Black Squad"), false))
+                .unwrap();
+        assert!(advisory.contains("Kick On Site. Black Squad is a Crasher Group"));
+        assert!(advisory.contains("now \"masmavia\""));
+        assert!(advisory.contains("was \"Black Squad\""));
+    }
+
+    #[test]
+    fn a_hidden_membership_says_so() {
+        let advisory = watched_group_advisory(&hit(Some("Kick On Site"), Some("Some Group"), None, true)).unwrap();
+        assert!(advisory.contains("membership hidden on their profile"));
+    }
+
+    /// Repeating a name the moderator's own message already contains is
+    /// noise on every single flag.
+    #[test]
+    fn does_not_echo_a_name_the_message_already_carries() {
+        let advisory = watched_group_advisory(&hit(Some("Kick On Site. Black Squad is a Crasher Group"), Some("Black Squad"), None, false)).unwrap();
+        assert_eq!(advisory, "Kick On Site. Black Squad is a Crasher Group");
+    }
+
+    #[test]
+    fn an_entry_with_no_message_still_advises_when_there_is_something_to_say() {
+        assert_eq!(watched_group_advisory(&hit(None, None, None, false)), None);
+        let advisory = watched_group_advisory(&hit(None, Some("masmavia"), Some("Black Squad"), false)).unwrap();
+        assert!(advisory.starts_with("now \"masmavia\""));
+    }
+
+    #[test]
+    fn both_facts_appear_together() {
+        let advisory = watched_group_advisory(&hit(Some("Kick On Site"), Some("masmavia"), Some("Black Squad"), true)).unwrap();
+        assert!(advisory.contains("now \"masmavia\""));
+        assert!(advisory.contains("membership hidden"));
     }
 }
