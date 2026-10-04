@@ -34,6 +34,13 @@ pub struct AvatarLoad {
     pub display_name: String,
     pub user_id: Option<String>,
     pub avatar_name: Option<String>,
+    /// Who uploaded the avatar, from the asset-bundle unpack line. The
+    /// wearer and the author are usually different people, and for a
+    /// report it is the author that matters.
+    pub avatar_author: Option<String>,
+    /// The asset bundle VRChat was unpacking, when it is known. This is
+    /// the identifier that survives VRChat no longer exposing avatar ids.
+    pub bundle_file_id: Option<String>,
     pub at: NaiveDateTime,
 }
 
@@ -84,6 +91,31 @@ impl CrashWatch {
         self.last_avatar_load = Some(load);
     }
 
+    /// Attach the author from an unpack line to the load already
+    /// recorded, when they describe the same avatar.
+    ///
+    /// The unpack arrives a beat after the switch, so this is a late
+    /// enrichment rather than a separate event. Matching on the avatar
+    /// name keeps an unrelated avatar unpacking in the background from
+    /// attributing itself to the wrong person.
+    pub fn record_avatar_author(&mut self, preamble: bool, avatar_name: &str, author: Option<&str>) {
+        if preamble {
+            return;
+        }
+        let Some(load) = self.last_avatar_load.as_mut() else { return };
+        if load.avatar_name.as_deref() == Some(avatar_name) {
+            load.avatar_author = author.map(str::to_string);
+        }
+    }
+
+    /// Attach the asset bundle id once the analysis lookup identifies it.
+    pub fn record_bundle_file_id(&mut self, display_name: &str, file_id: &str) {
+        let Some(load) = self.last_avatar_load.as_mut() else { return };
+        if load.display_name == display_name {
+            load.bundle_file_id = Some(file_id.to_string());
+        }
+    }
+
     /// Called when this session's log is replaced by a new one, i.e. the
     /// session is over. `Some` means it ended badly.
     pub fn finish(&self) -> Option<CrashReport> {
@@ -111,6 +143,8 @@ mod tests {
             display_name: name.to_string(),
             user_id: Some("usr_1".into()),
             avatar_name: Some("Some Avatar".into()),
+            avatar_author: None,
+            bundle_file_id: None,
             at: at(),
         }
     }
@@ -175,5 +209,55 @@ mod tests {
         watch.record_avatar_load(false, load("First"));
         watch.record_avatar_load(false, load("Second"));
         assert_eq!(watch.finish().unwrap().last_avatar_load.unwrap().display_name, "Second");
+    }
+}
+
+#[cfg(test)]
+mod enrichment_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn watch_with_load() -> CrashWatch {
+        let mut watch = CrashWatch::new();
+        watch.went_live();
+        watch.record_avatar_load(
+            false,
+            AvatarLoad {
+                display_name: "Wearer".into(),
+                user_id: Some("usr_1".into()),
+                avatar_name: Some("Crasher Avatar".into()),
+                avatar_author: None,
+                bundle_file_id: None,
+                at: NaiveDate::from_ymd_opt(2026, 10, 4).unwrap().and_hms_opt(12, 47, 56).unwrap(),
+            },
+        );
+        watch
+    }
+
+    #[test]
+    fn the_author_is_attached_when_the_avatar_matches() {
+        let mut watch = watch_with_load();
+        watch.record_avatar_author(false, "Crasher Avatar", Some("Uploader"));
+        let load = watch.finish().unwrap().last_avatar_load.unwrap();
+        assert_eq!(load.avatar_author.as_deref(), Some("Uploader"));
+    }
+
+    /// Another avatar finishing its download in the background must not
+    /// rewrite the suspect's author.
+    #[test]
+    fn an_unrelated_unpack_does_not_attach_itself() {
+        let mut watch = watch_with_load();
+        watch.record_avatar_author(false, "Someone Elses Avatar", Some("Wrong Person"));
+        let load = watch.finish().unwrap().last_avatar_load.unwrap();
+        assert_eq!(load.avatar_author, None);
+    }
+
+    #[test]
+    fn the_bundle_id_is_attached_for_the_matching_wearer() {
+        let mut watch = watch_with_load();
+        watch.record_bundle_file_id("Someone Else", "file_wrong");
+        watch.record_bundle_file_id("Wearer", "file_right");
+        let load = watch.finish().unwrap().last_avatar_load.unwrap();
+        assert_eq!(load.bundle_file_id.as_deref(), Some("file_right"));
     }
 }

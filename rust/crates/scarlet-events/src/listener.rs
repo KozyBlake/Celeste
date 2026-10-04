@@ -370,6 +370,9 @@ impl ScarletEventListener {
             LogEventKind::VideoLoad { display_name, url, title } => {
                 self.log_video_load(preamble, timestamp, display_name, url, title).await
             }
+            LogEventKind::AvatarUnpacked { avatar_name, author_name } => {
+                self.crash_watch.record_avatar_author(preamble, &avatar_name, author_name.as_deref());
+            }
             LogEventKind::PlayerKicked { display_name } => {
                 self.log_player_kicked(preamble, timestamp, display_name)
             }
@@ -615,6 +618,8 @@ impl ScarletEventListener {
                 display_name: display_name.clone(),
                 user_id: self.display_name_to_user_id.get(&display_name).cloned(),
                 avatar_name: Some(avatar_display_name.clone()),
+                avatar_author: None,
+                bundle_file_id: None,
                 at: timestamp,
             },
         );
@@ -1563,6 +1568,8 @@ impl ScarletEventListener {
             }
             tracing::info!("{display_name}'s chosen avatar {avatar_name} is {performance}");
             self.display_name_to_avatar_bundle_info.insert(display_name.clone(), info.clone());
+            // The same bundle id is the reportable evidence for a crash.
+            self.crash_watch.record_bundle_file_id(&display_name, &versioned.id);
             let initial_preamble = !self.is_tailer_live;
             let info = info.clone();
             self.deps.ui.player_update(initial_preamble, &user_id, &mut |player| {

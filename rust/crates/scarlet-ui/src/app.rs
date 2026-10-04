@@ -1740,6 +1740,20 @@ impl ScarletApp {
                                 ui.add(egui::Label::new(avatar).truncate()).on_hover_text(avatar);
                                 ui.end_row();
                             }
+                            // The wearer is who you kick; the author is
+                            // who you report. They are usually different.
+                            if let Some(author) = &load.avatar_author {
+                                ui.label("Avatar uploaded by");
+                                ui.add(egui::Label::new(egui::RichText::new(author).strong()).truncate())
+                                    .on_hover_text(author);
+                                ui.end_row();
+                            }
+                            if let Some(file_id) = &load.bundle_file_id {
+                                ui.label("Asset bundle");
+                                ui.add(egui::Label::new(egui::RichText::new(file_id).monospace()).truncate())
+                                    .on_hover_text(file_id);
+                                ui.end_row();
+                            }
                             ui.label("Loaded at");
                             ui.label(load.at.format("%Y-%m-%d %H:%M:%S").to_string());
                             ui.end_row();
@@ -1756,6 +1770,35 @@ impl ScarletApp {
                     }
                 }
                 ui.add_space(crate::theme::GAP);
+                if let Some(load) = &report.last_avatar_load {
+                    if ui
+                        .button("Copy crash details")
+                        .on_hover_text("Copy this report, ready to paste into a VRChat report.")
+                        .clicked()
+                    {
+                        let mut text = String::from("VRChat client crash\n");
+                        text.push_str(&format!("Last avatar load: {}\n", load.display_name));
+                        if let Some(user_id) = &load.user_id {
+                            text.push_str(&format!("User ID: {user_id}\n"));
+                        }
+                        if let Some(avatar) = &load.avatar_name {
+                            text.push_str(&format!("Avatar: {avatar}\n"));
+                        }
+                        if let Some(author) = &load.avatar_author {
+                            text.push_str(&format!("Avatar uploaded by: {author}\n"));
+                        }
+                        if let Some(file_id) = &load.bundle_file_id {
+                            text.push_str(&format!("Asset bundle file ID: {file_id}\n"));
+                        }
+                        if let Some(location) = &report.location {
+                            text.push_str(&format!("Instance: {location}\n"));
+                        }
+                        text.push_str(&format!("Loaded at (local): {}\n", load.at.format("%Y-%m-%d %H:%M:%S")));
+                        ui.ctx().copy_text(text);
+                        self.state.append_cli_output("Copied the crash report to the clipboard.");
+                    }
+                    ui.add_space(crate::theme::GAP_TIGHT);
+                }
                 ui.separator();
                 ui.add_space(crate::theme::GAP_TIGHT);
                 ui.label(

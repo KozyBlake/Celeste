@@ -235,6 +235,13 @@ pub enum LogEventKind {
     PlayerSpawnProp { user_id: String, prop_id: String },
     ApiRequest { index: i32, method: String, url: String },
     VideoLoad { display_name: String, url: String, title: String },
+    /// `[AssetBundleDownloadManager] [N] Unpacking Avatar (<name> by <author>)`
+    ///
+    /// **Not in Java.** The last thing a client manages before a crasher
+    /// avatar takes it down, and the only log line that names the
+    /// avatar's *author* — `Switching X to avatar Y` gives the wearer and
+    /// the avatar's name, never who uploaded it.
+    AvatarUnpacked { avatar_name: String, author_name: Option<String> },
     /// `[ModerationManager] <display name> has been kicked`: a kick that
     /// actually took effect in the instance this client is in.
     ///
@@ -375,6 +382,28 @@ pub fn parse_entry_text(text: &str) -> Option<LogEventKind> {
                     method: after_sending[..sep1].to_string(),
                     url: after_sending[sep1 + " request to ".len()..].to_string(),
                 });
+            }
+        }
+        return None;
+    }
+
+    if let Some(after) = text.strip_prefix("[AssetBundleDownloadManager] ") {
+        // "[461] Unpacking Avatar (D.S.C Fallback by 72kontop)"
+        if let Some(open_paren) = after.find("] Unpacking Avatar (") {
+            let inner = &after[open_paren + "] Unpacking Avatar (".len()..];
+            if let Some(inner) = inner.strip_suffix(')') {
+                // Avatar names contain " by " often enough that the last
+                // occurrence is the separator, not the first.
+                let (avatar_name, author_name) = match inner.rfind(" by ") {
+                    Some(at) => (&inner[..at], Some(inner[at + 4..].to_string())),
+                    None => (inner, None),
+                };
+                if !avatar_name.is_empty() {
+                    return Some(LogEventKind::AvatarUnpacked {
+                        avatar_name: avatar_name.to_string(),
+                        author_name,
+                    });
+                }
             }
         }
         return None;
@@ -655,6 +684,7 @@ fn might_contain_event(line: &str) -> bool {
         "[Behaviour] OnPlayerLeft ",
         "[Behaviour] Switching ",
         "[API] [",
+        "[AssetBundleDownloadManager] ",
         "[ModerationManager] ",
         "[SharingManager] User ",
         "[StickersManager] User ",
@@ -1202,5 +1232,55 @@ mod moderation_line_tests {
             parse_entry_text("[ModerationManager]  has been kicked"),
             Some(LogEventKind::UnrecognizedModeration { .. })
         ));
+    }
+}
+
+#[cfg(test)]
+mod avatar_unpack_tests {
+    use super::*;
+
+    /// The real line from the crash the owner captured. The avatar name
+    /// carries a one-dot leader (U+2024), and here the wearer happens to
+    /// be the author — usually they differ, which is the whole point of
+    /// reading this line as well as the switch.
+    #[test]
+    fn the_unpack_line_yields_the_avatar_and_its_author() {
+        assert_eq!(
+            parse_entry_text(
+                "[AssetBundleDownloadManager] [461] Unpacking Avatar (D\u{2024}S\u{2024}C Fallback by 72kontop)"
+            ),
+            Some(LogEventKind::AvatarUnpacked {
+                avatar_name: "D\u{2024}S\u{2024}C Fallback".to_string(),
+                author_name: Some("72kontop".to_string()),
+            })
+        );
+    }
+
+    /// " by " inside an avatar's own name must not steal the author.
+    #[test]
+    fn the_last_by_separates_the_author() {
+        assert_eq!(
+            parse_entry_text("[AssetBundleDownloadManager] [1] Unpacking Avatar (Stand by Me by Someone)"),
+            Some(LogEventKind::AvatarUnpacked {
+                avatar_name: "Stand by Me".to_string(),
+                author_name: Some("Someone".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn an_unattributed_avatar_still_parses() {
+        assert_eq!(
+            parse_entry_text("[AssetBundleDownloadManager] [2] Unpacking Avatar (Nameless)"),
+            Some(LogEventKind::AvatarUnpacked { avatar_name: "Nameless".to_string(), author_name: None })
+        );
+    }
+
+    /// The manager writes a great deal of unrelated chatter; none of it
+    /// should become an event.
+    #[test]
+    fn other_download_manager_lines_are_ignored() {
+        assert_eq!(parse_entry_text("[AssetBundleDownloadManager] Starting download of Avatar @ 0 MB, 0 still queued."), None);
+        assert_eq!(parse_entry_text("[AssetBundleDownloadManager] Asset bundle cache cleared successfully"), None);
     }
 }
