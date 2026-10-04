@@ -18,6 +18,15 @@ pub struct DiscordVoiceTts {
 enum VoiceRequest {
     Speak { text: String, voice: String },
     Audio { bytes: &'static [u8], name: &'static str },
+    /// Drop whatever is speaking in Discord voice and move to the next
+    /// queued clip.
+    ///
+    /// The desktop Skip button only ever killed the *local* audio player.
+    /// With `tts_use_default_audio_device` off, announcements are rendered
+    /// into Discord instead and nothing local is playing — so Skip killed
+    /// nothing, reported nothing, and the announcement carried on. That is
+    /// the reported "it doesn't skip, it just continues".
+    Skip,
 }
 
 #[derive(Default)]
@@ -64,6 +73,16 @@ impl DiscordVoiceTts {
                 // missing voice channel looked exactly like a working
                 // config that simply never spoke. Say why, once per
                 // distinct reason, and remember it for the status bar.
+                // Skip needs the call, not the configured channel, and
+                // must not be dropped by the config checks below.
+                if matches!(request, VoiceRequest::Skip) {
+                    if let Some(guild_id) = crate::data::configured_guild_id(&settings, &config) {
+                        if let Some(call) = manager.get(GuildId::new(guild_id)) {
+                            let _ = call.lock().await.queue().skip();
+                        }
+                    }
+                    continue;
+                }
                 let guild_id = crate::data::configured_guild_id(&settings, &config);
                 let Some(guild_id) = guild_id else {
                     report(
@@ -84,6 +103,7 @@ impl DiscordVoiceTts {
                     continue;
                 };
                 let result = match request {
+                    VoiceRequest::Skip => unreachable!("handled above"),
                     VoiceRequest::Speak { text, voice } => {
                         synthesize_and_queue(manager.clone(), guild_id, channel_id, text, voice).await
                     }
@@ -118,6 +138,12 @@ impl DiscordVoiceTts {
             text: text.to_string(),
             voice: voice.to_string(),
         });
+    }
+
+    /// Stop the clip currently playing in Discord voice; the queue
+    /// carries on with the next one.
+    pub fn skip(&self) {
+        let _ = self.sender.send(VoiceRequest::Skip);
     }
 
     /// Queue a bundled WAV before a spoken warning. The worker and

@@ -973,7 +973,13 @@ impl ScarletApp {
                 self.tts.set_paused(tts_on);
             }
             if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
-                self.state.append_cli_output(if self.tts.skip() { "Skipped the current TTS announcement." } else { "No TTS announcement is currently playing." });
+                // Routed, not local-only: with announcements going to
+                // Discord there is nothing playing on this machine to kill.
+                self.state.append_cli_output(if self.tts_route.skip() {
+                    "Skipped the current TTS announcement."
+                } else {
+                    "No TTS announcement is currently playing."
+                });
             }
             ui.separator();
 
@@ -1691,6 +1697,78 @@ impl ScarletApp {
             });
         if !open {
             self.avatar_stats_open = None;
+        }
+    }
+
+    /// Shown when a VRChat session ended without shutting down cleanly.
+    ///
+    /// The last avatar to finish loading is the one worth looking at: a
+    /// crasher avatar takes the client down as it loads, so it is the last
+    /// thing the log records. That is a lead, not a verdict, and the
+    /// window says so — the same avatar loading harmlessly a moment before
+    /// an unrelated freeze looks identical from here.
+    fn crash_report_window(&mut self, ctx: &egui::Context) {
+        let Some(report) = self.state.crash_report() else { return };
+        let mut open = true;
+        egui::Window::new("VRChat stopped unexpectedly")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("VRChat ended without shutting down cleanly.")
+                        .strong()
+                        .size(crate::theme::TEXT_TITLE),
+                );
+                ui.add_space(crate::theme::GAP);
+                match &report.last_avatar_load {
+                    Some(load) => {
+                        ui.label("Last avatar to finish loading before it stopped:");
+                        ui.add_space(crate::theme::GAP_TIGHT);
+                        egui::Grid::new("crash_report_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                            ui.label("Player");
+                            ui.label(egui::RichText::new(&load.display_name).strong());
+                            ui.end_row();
+                            if let Some(user_id) = &load.user_id {
+                                ui.label("User ID");
+                                ui.add(egui::Label::new(egui::RichText::new(user_id).monospace()).truncate())
+                                    .on_hover_text(user_id);
+                                ui.end_row();
+                            }
+                            if let Some(avatar) = &load.avatar_name {
+                                ui.label("Avatar");
+                                ui.add(egui::Label::new(avatar).truncate()).on_hover_text(avatar);
+                                ui.end_row();
+                            }
+                            ui.label("Loaded at");
+                            ui.label(load.at.format("%Y-%m-%d %H:%M:%S").to_string());
+                            ui.end_row();
+                            if let Some(location) = &report.location {
+                                ui.label("Instance");
+                                ui.add(egui::Label::new(egui::RichText::new(location).monospace()).truncate())
+                                    .on_hover_text(location);
+                                ui.end_row();
+                            }
+                        });
+                    }
+                    None => {
+                        ui.label("No avatar finished loading beforehand, so there is nobody to point at.");
+                    }
+                }
+                ui.add_space(crate::theme::GAP);
+                ui.separator();
+                ui.add_space(crate::theme::GAP_TIGHT);
+                ui.label(
+                    egui::RichText::new(
+                        "A crasher avatar takes the client down while it loads, so it tends to be \
+                         the last thing in the log. This is a lead, not proof - an ordinary avatar \
+                         loading just before an unrelated freeze looks exactly the same from here.",
+                    )
+                    .weak(),
+                );
+            });
+        if !open {
+            self.state.set_crash_report(None);
         }
     }
 
@@ -3627,6 +3705,7 @@ impl eframe::App for ScarletApp {
             });
         });
 
+        self.crash_report_window(ctx);
         self.exit_confirm_window(ctx);
         self.create_instance_window(ctx);
         self.import_groups_windows(ctx);

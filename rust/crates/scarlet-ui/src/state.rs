@@ -48,6 +48,9 @@ pub struct UiStateInner {
     pending_updates: HashMap<String, Vec<PendingUpdate>>,
     /// The instance the local VRChat client is currently in, if any.
     pub instance: Option<InstanceState>,
+    /// Set when a VRChat session ended without shutting down cleanly, so
+    /// the window can put the last avatar load in front of the person.
+    pub crash_report: Option<scarlet_core::crash_watch::CrashReport>,
     pub ui_scale: f32,
     pub cli_log: Vec<CliLine>,
     pub tts_enabled: bool,
@@ -268,6 +271,14 @@ impl UiState {
         self.0.lock().unwrap().instance = instance;
     }
 
+    pub fn set_crash_report(&self, report: Option<scarlet_core::crash_watch::CrashReport>) {
+        self.0.lock().unwrap().crash_report = report;
+    }
+
+    pub fn crash_report(&self) -> Option<scarlet_core::crash_watch::CrashReport> {
+        self.0.lock().unwrap().crash_report.clone()
+    }
+
     pub fn set_ui_scale(&self, scale: f32) {
         self.0.lock().unwrap().ui_scale = scale;
     }
@@ -333,6 +344,10 @@ impl UiState {
 impl CelesteUi for UiState {
     fn fire_sort(&self) {
         UiState::fire_sort(self)
+    }
+
+    fn report_vrchat_crash(&self, report: scarlet_core::crash_watch::CrashReport) {
+        UiState::set_crash_report(self, Some(report));
     }
 
     fn clear_instance(&self) {

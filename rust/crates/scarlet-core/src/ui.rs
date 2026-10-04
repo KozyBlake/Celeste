@@ -288,6 +288,9 @@ pub trait CelesteUi: Send + Sync {
     fn active_player_ids(&self) -> Vec<String> {
         Vec::new()
     }
+    /// A VRChat session ended without an orderly shutdown. Default no-op
+    /// so headless runs and tests stay source-compatible.
+    fn report_vrchat_crash(&self, _report: crate::crash_watch::CrashReport) {}
 }
 
 /// Port of `ScarletUIHeadless`: every call is a no-op, for runs with no

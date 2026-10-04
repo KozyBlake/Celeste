@@ -285,6 +285,14 @@ pub struct TtsService {
     paused: Arc<AtomicBool>,
     shutting_down: Arc<AtomicBool>,
     active: Arc<Mutex<Option<Child>>>,
+    /// Set by [`TtsService::skip`], consumed by the worker.
+    ///
+    /// Killing the active child alone is not enough: synthesis runs to
+    /// completion *before* anything is playing, so a skip pressed while
+    /// the engine is still rendering had nothing to kill, returned false,
+    /// and the clip then started anyway — pressing Skip and hearing the
+    /// line play is exactly the reported symptom.
+    skip_requested: Arc<AtomicBool>,
     engine_name: Option<&'static str>,
     mixed_character_alert: Option<PathBuf>,
     nuisance_alert: Option<PathBuf>,
@@ -299,12 +307,14 @@ impl TtsService {
         let (sender, receiver) = mpsc::channel();
         let paused = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
+        let skip_requested = Arc::new(AtomicBool::new(false));
         let active: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
         let worker_active = active.clone();
         let worker_shutdown = shutting_down.clone();
+        let worker_skip = skip_requested.clone();
         std::thread::Builder::new()
             .name("celeste-tts".into())
-            .spawn(move || worker(receiver, engine, worker_active, worker_shutdown))
+            .spawn(move || worker(receiver, engine, worker_active, worker_shutdown, worker_skip))
             .expect("spawn TTS worker");
         if let Some(name) = engine_name {
             tracing::info!(engine = name, "TTS service initialized");
@@ -313,6 +323,7 @@ impl TtsService {
         }
         Self {
             sender,
+            skip_requested,
             paused,
             shutting_down,
             active,
@@ -383,9 +394,25 @@ impl TtsService {
         self.submit(text, voice)
     }
 
+    /// Skip whatever is speaking or about to speak.
+    ///
+    /// Returns whether there was anything to skip: either a running clip
+    /// (killed) or a synthesis in flight (flagged, so its audio is
+    /// discarded instead of played once rendering finishes).
     pub fn skip(&self) -> bool {
-        let mut active = self.active.lock().unwrap();
-        active.as_mut().is_some_and(|child| child.kill().is_ok())
+        let killed = {
+            let mut active = self.active.lock().unwrap();
+            active.as_mut().is_some_and(|child| child.kill().is_ok())
+        };
+        // Always raise the flag, even when a clip was killed: the engine
+        // may already be rendering the next one.
+        self.skip_requested.store(true, Ordering::SeqCst);
+        killed || self.busy()
+    }
+
+    /// Whether the worker is mid-utterance — rendering or playing.
+    fn busy(&self) -> bool {
+        self.active.lock().unwrap().is_some()
     }
 }
 
@@ -402,11 +429,15 @@ fn worker(
     engine: Option<Engine>,
     active: Arc<Mutex<Option<Child>>>,
     shutting_down: Arc<AtomicBool>,
+    skip_requested: Arc<AtomicBool>,
 ) {
     while let Ok(request) = receiver.recv() {
         if shutting_down.load(Ordering::SeqCst) {
             break;
         }
+        // A skip raised while the previous clip was finishing must not eat
+        // this one.
+        skip_requested.store(false, Ordering::SeqCst);
         let spawned = match request {
             Request::Speak { text, voice } => {
                 // Pick the engine the chosen voice belongs to, not the one
@@ -422,7 +453,17 @@ fn worker(
             Request::Shutdown => break,
         };
         match spawned {
-            Ok(child) => *active.lock().unwrap() = Some(child),
+            Ok(mut child) => {
+                // Synthesis blocks, so Skip may have been pressed while
+                // this clip was still being rendered and had nothing to
+                // kill. Honour it now, before a sound is made.
+                if skip_requested.swap(false, Ordering::SeqCst) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    continue;
+                }
+                *active.lock().unwrap() = Some(child);
+            }
             Err(err) => {
                 tracing::warn!("Could not start TTS engine: {err}");
                 continue;
@@ -431,6 +472,15 @@ fn worker(
         loop {
             if shutting_down.load(Ordering::SeqCst) {
                 let _ = active.lock().unwrap().as_mut().map(Child::kill);
+                break;
+            }
+            if skip_requested.swap(false, Ordering::SeqCst) {
+                let mut guard = active.lock().unwrap();
+                if let Some(child) = guard.as_mut() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                guard.take();
                 break;
             }
             let finished = {
@@ -698,6 +748,34 @@ impl TtsSinkAdapter {
         ui: Option<crate::UiState>,
     ) -> Self {
         TtsSinkAdapter { service, settings, discord, ui }
+    }
+
+    /// Skip the current announcement on whichever route it is playing on.
+    ///
+    /// The toolbar button used to call [`TtsService::skip`] directly,
+    /// which only ever touches the local audio player. With the route set
+    /// to Discord there is nothing local playing, so Skip did nothing and
+    /// the announcement continued. Skipping has to follow the same route
+    /// decision the announcement did.
+    ///
+    /// Returns whether anything was skipped. Discord's queue is
+    /// asynchronous, so a skip sent there is reported as sent.
+    pub fn skip(&self) -> bool {
+        match select_output_route(
+            self.settings.tts_use_default_audio_device.get(),
+            self.discord.is_some(),
+        ) {
+            OutputRoute::Local => self.service.skip(),
+            OutputRoute::Discord => {
+                let discord = self.discord.as_ref().expect("route checked Discord availability");
+                discord.skip();
+                // A clip may also be finishing locally from before the
+                // route changed; silence that too rather than leaving it.
+                self.service.skip();
+                true
+            }
+            OutputRoute::Unavailable => false,
+        }
     }
 
     /// Copies the Discord voice route's last problem into the status bar.

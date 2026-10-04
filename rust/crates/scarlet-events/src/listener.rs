@@ -143,6 +143,9 @@ pub struct ScarletEventListener {
     /// One-shot, so a full instance doesn't repeat the warning per player.
     warned_no_vrchat_session: bool,
     seen_api_log_lines: bool,
+    /// Tracks whether the session being tailed ended cleanly, and who was
+    /// last loading an avatar if it did not.
+    crash_watch: scarlet_core::crash_watch::CrashWatch,
     /// Distinct `[ModerationManager]` shapes already reported this run.
     seen_moderation_shapes: std::collections::HashSet<String>,
     live_avatar_switches_without_api_log: u32,
@@ -222,6 +225,7 @@ impl ScarletEventListener {
             is_same_as_previous_instance: false,
             warned_no_vrchat_session: false,
             seen_api_log_lines: false,
+            crash_watch: scarlet_core::crash_watch::CrashWatch::new(),
             seen_moderation_shapes: std::collections::HashSet::new(),
             live_avatar_switches_without_api_log: 0,
             warned_missing_api_logging: false,
@@ -262,6 +266,26 @@ impl ScarletEventListener {
 
     /// Port of `log_init`.
     fn log_init(&mut self, file: &std::path::Path) {
+        // A new log file means VRChat started again, so whatever session
+        // Celeste was tailing has ended. If it never wrote a quit line, it
+        // did not end on purpose.
+        if let Some(report) = self.crash_watch.finish() {
+            match &report.last_avatar_load {
+                Some(load) => tracing::warn!(
+                    "VRChat ended without shutting down cleanly. Last avatar to load before it \
+                     stopped: {} ({}) wearing {} at {}",
+                    load.display_name,
+                    load.user_id.as_deref().unwrap_or("user id unknown"),
+                    load.avatar_name.as_deref().unwrap_or("an unnamed avatar"),
+                    load.at
+                ),
+                None => tracing::warn!(
+                    "VRChat ended without shutting down cleanly; no avatar load was seen beforehand."
+                ),
+            }
+            self.deps.ui.report_vrchat_crash(report);
+        }
+        self.crash_watch = scarlet_core::crash_watch::CrashWatch::new();
         self.is_tailer_live = false;
         // New VRChat log file = new VRChat session: re-evaluate whether this
         // session was launched with API debug logging.
@@ -295,6 +319,7 @@ impl ScarletEventListener {
         }
 
         self.is_tailer_live = true;
+        self.crash_watch.went_live();
         self.roster.flush();
         self.run_deferred_checks().await;
         self.deps.ui.fire_sort();
@@ -358,6 +383,8 @@ impl ScarletEventListener {
     /// per-instance avatar state — nothing may look up avatars for people
     /// from a session that no longer exists.
     fn log_user_quit(&mut self, lifetime_seconds: f64) {
+        // The one signal that says this was on purpose.
+        self.crash_watch.saw_clean_quit();
         self.display_name_to_avatar_name.clear();
         self.avatar_name_to_display_names.clear();
         self.display_name_to_avatar_bundle_info.clear();
@@ -579,6 +606,20 @@ impl ScarletEventListener {
         display_name: String,
         avatar_display_name: String,
     ) {
+        // Remember who loaded last, in case this session is about to stop
+        // without shutting down. A crasher avatar is the last thing the
+        // client manages to load.
+        self.crash_watch.record_avatar_load(
+            preamble,
+            scarlet_core::crash_watch::AvatarLoad {
+                display_name: display_name.clone(),
+                user_id: self.display_name_to_user_id.get(&display_name).cloned(),
+                avatar_name: Some(avatar_display_name.clone()),
+                at: timestamp,
+            },
+        );
+        self.crash_watch.set_location(self.client_location.clone());
+
         // Avatar statuses are built from `[API] ... analysis/file_...` log
         // lines, which VRChat only writes when launched with the debug
         // logging options. If avatars keep switching but no `[API]` lines
