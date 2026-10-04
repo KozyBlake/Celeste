@@ -269,6 +269,9 @@ impl ScarletEventListener {
         // A new log file means VRChat started again, so whatever session
         // Celeste was tailing has ended. If it never wrote a quit line, it
         // did not end on purpose.
+        // Narrate the decision either way: under test, "nothing happened"
+        // needs to be distinguishable from "the check did not run".
+        tracing::debug!("Previous VRChat session ended; {}", self.crash_watch.summary());
         if let Some(report) = self.crash_watch.finish() {
             match &report.last_avatar_load {
                 Some(load) => tracing::warn!(
@@ -391,7 +394,16 @@ impl ScarletEventListener {
         self.display_name_to_avatar_name.clear();
         self.avatar_name_to_display_names.clear();
         self.display_name_to_avatar_bundle_info.clear();
-        self.deps.ui.append_cli_output(&format!("VRChat closed after {lifetime_seconds:.0}s this session"));
+        // Say that the clean-exit marker was seen, not just that VRChat
+        // closed. Crash detection keys on the *absence* of this line, so
+        // a correct quiet exit and a check that never ran look identical
+        // otherwise - and the whole thing hangs on one VRChat string. If
+        // this stops appearing on a normal exit, the marker changed and
+        // every ordinary exit is about to be reported as a crash.
+        tracing::info!("VRChat shut down cleanly (quit marker seen); no crash will be reported for this session");
+        self.deps.ui.append_cli_output(&format!(
+            "VRChat closed after {lifetime_seconds:.0}s this session (clean exit - not a crash)"
+        ));
     }
 
     /// Port of `log_userJoined`.

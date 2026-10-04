@@ -116,6 +116,29 @@ impl CrashWatch {
         }
     }
 
+    /// Why [`finish`] will decide the way it does, in words.
+    ///
+    /// Crash detection is a judgement about a named person, so the
+    /// reasoning has to be inspectable in the log rather than inferred
+    /// from whether a window appeared.
+    ///
+    /// [`finish`]: CrashWatch::finish
+    pub fn summary(&self) -> String {
+        if !self.watched_live {
+            return "not reported: Celeste never watched this session live".to_string();
+        }
+        if self.saw_clean_quit {
+            return "not reported: VRChat wrote its clean-exit marker".to_string();
+        }
+        match &self.last_avatar_load {
+            Some(load) => format!(
+                "crash: no clean-exit marker; last avatar load was {} at {}",
+                load.display_name, load.at
+            ),
+            None => "crash: no clean-exit marker, and no avatar load was seen".to_string(),
+        }
+    }
+
     /// Called when this session's log is replaced by a new one, i.e. the
     /// session is over. `Some` means it ended badly.
     pub fn finish(&self) -> Option<CrashReport> {
@@ -259,5 +282,42 @@ mod enrichment_tests {
         watch.record_bundle_file_id("Wearer", "file_right");
         let load = watch.finish().unwrap().last_avatar_load.unwrap();
         assert_eq!(load.bundle_file_id.as_deref(), Some("file_right"));
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    #[test]
+    fn each_outcome_explains_itself() {
+        let fresh = CrashWatch::new();
+        assert!(fresh.summary().contains("never watched this session live"));
+
+        let mut clean = CrashWatch::new();
+        clean.went_live();
+        clean.saw_clean_quit();
+        assert!(clean.summary().contains("clean-exit marker"));
+
+        let mut crashed = CrashWatch::new();
+        crashed.went_live();
+        assert!(crashed.summary().starts_with("crash:"));
+    }
+
+    /// The summary must agree with the decision, or the log explains one
+    /// thing while the window shows another.
+    #[test]
+    fn the_summary_never_contradicts_the_verdict() {
+        for (watched, clean) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut watch = CrashWatch::new();
+            if watched {
+                watch.went_live();
+            }
+            if clean {
+                watch.saw_clean_quit();
+            }
+            let says_crash = watch.summary().starts_with("crash:");
+            assert_eq!(says_crash, watch.finish().is_some(), "watched={watched} clean={clean}");
+        }
     }
 }
