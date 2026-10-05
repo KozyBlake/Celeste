@@ -13,7 +13,7 @@ const RELAUNCH_SUPPRESS: std::time::Duration = std::time::Duration::from_secs(5 
 pub fn claim_recent_launch(location: &str) -> bool {
     static RECENT: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
     let now = std::time::Instant::now();
-    let mut recent = RECENT.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+    let mut recent = RECENT.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner());
     recent.retain(|_, launched| now.duration_since(*launched) <= RELAUNCH_SUPPRESS);
     if recent.get(location).is_some_and(|launched| now.duration_since(*launched) < RELAUNCH_SUPPRESS) {
         return false;

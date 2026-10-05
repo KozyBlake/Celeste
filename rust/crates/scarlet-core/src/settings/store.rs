@@ -37,7 +37,7 @@ impl SettingsStore {
     }
 
     fn with_json<R>(&self, f: impl FnOnce(&mut Map<String, Value>) -> R) -> R {
-        let mut guard = self.json.lock().unwrap();
+        let mut guard = self.json.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = Some(self.load());
         }
@@ -87,7 +87,7 @@ impl SettingsStore {
     }
 
     pub fn save(&self) {
-        let mut guard = self.json.lock().unwrap();
+        let mut guard = self.json.lock().unwrap_or_else(|e| e.into_inner());
         let Some(json) = guard.as_mut() else { return };
         let text = match serde_json::to_string_pretty(json) {
             Ok(t) => t,
@@ -169,7 +169,7 @@ impl SettingsStore {
     }
 
     pub fn clear_cached(&self) {
-        *self.json.lock().unwrap() = None;
+        *self.json.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 

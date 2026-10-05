@@ -401,7 +401,7 @@ impl TtsService {
     /// discarded instead of played once rendering finishes).
     pub fn skip(&self) -> bool {
         let killed = {
-            let mut active = self.active.lock().unwrap();
+            let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
             active.as_mut().is_some_and(|child| child.kill().is_ok())
         };
         // Always raise the flag, even when a clip was killed: the engine
@@ -412,7 +412,7 @@ impl TtsService {
 
     /// Whether the worker is mid-utterance — rendering or playing.
     fn busy(&self) -> bool {
-        self.active.lock().unwrap().is_some()
+        self.active.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 }
 
@@ -420,7 +420,7 @@ impl Drop for TtsService {
     fn drop(&mut self) {
         self.shutting_down.store(true, Ordering::SeqCst);
         let _ = self.sender.send(Request::Shutdown);
-        let _ = self.active.lock().unwrap().as_mut().map(Child::kill);
+        let _ = self.active.lock().unwrap_or_else(|e| e.into_inner()).as_mut().map(Child::kill);
     }
 }
 
@@ -462,7 +462,7 @@ fn worker(
                     let _ = child.wait();
                     continue;
                 }
-                *active.lock().unwrap() = Some(child);
+                *active.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
             }
             Err(err) => {
                 tracing::warn!("Could not start TTS engine: {err}");
@@ -471,11 +471,11 @@ fn worker(
         }
         loop {
             if shutting_down.load(Ordering::SeqCst) {
-                let _ = active.lock().unwrap().as_mut().map(Child::kill);
+                let _ = active.lock().unwrap_or_else(|e| e.into_inner()).as_mut().map(Child::kill);
                 break;
             }
             if skip_requested.swap(false, Ordering::SeqCst) {
-                let mut guard = active.lock().unwrap();
+                let mut guard = active.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(child) = guard.as_mut() {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -484,7 +484,7 @@ fn worker(
                 break;
             }
             let finished = {
-                let mut guard = active.lock().unwrap();
+                let mut guard = active.lock().unwrap_or_else(|e| e.into_inner());
                 match guard
                     .as_mut()
                     .and_then(|child| child.try_wait().ok())

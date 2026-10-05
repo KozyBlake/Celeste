@@ -41,21 +41,21 @@ impl RegistryStore {
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
-        self.map.lock().unwrap().get(key).cloned()
+        self.map.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned()
     }
 
     pub fn put(&self, key: &str, value: &str) {
-        self.map.lock().unwrap().insert(key.to_string(), value.to_string());
+        self.map.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), value.to_string());
         self.flush();
     }
 
     pub fn remove(&self, key: &str) {
-        self.map.lock().unwrap().remove(key);
+        self.map.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
         self.flush();
     }
 
     fn flush(&self) {
-        let map = self.map.lock().unwrap();
+        let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
         if let Ok(json) = serde_json::to_string_pretty(&*map) {
             if let Err(err) = crate::file_backups::write(&self.path, &json) {
                 tracing::warn!("Failed to flush registry store: {}", err);
@@ -148,7 +148,7 @@ impl<T: Clone> RegistryStringValued<T> {
 
     fn get(&self, or_now: bool) -> Option<T> {
         {
-            let cached = self.cached.lock().unwrap();
+            let cached = self.cached.lock().unwrap_or_else(|e| e.into_inner());
             if cached.is_some() {
                 return cached.clone();
             }
@@ -156,7 +156,7 @@ impl<T: Clone> RegistryStringValued<T> {
         let string = self.read();
         if let Some(string) = &string {
             if let Some(parsed) = (self.parse)(string) {
-                *self.cached.lock().unwrap() = Some(parsed.clone());
+                *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = Some(parsed.clone());
                 self.write(string);
                 return Some(parsed);
             }
@@ -164,7 +164,7 @@ impl<T: Clone> RegistryStringValued<T> {
         if or_now {
             if let Some(if_null) = &self.if_null {
                 let value = if_null();
-                *self.cached.lock().unwrap() = Some(value.clone());
+                *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = Some(value.clone());
                 self.write(&(self.stringify)(&value));
                 return Some(value);
             }
@@ -174,13 +174,13 @@ impl<T: Clone> RegistryStringValued<T> {
 
     pub fn set(&self, value: Option<T>) {
         let Some(value) = value else { return };
-        *self.cached.lock().unwrap() = Some(value.clone());
+        *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = Some(value.clone());
         self.write(&(self.stringify)(&value));
     }
 
     /// Removes this value from storage and clears the in-memory cache.
     pub fn clear(&self) {
-        *self.cached.lock().unwrap() = None;
+        *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = None;
         match &self.backing {
             Backing::Plain(store) => store.remove(&self.name),
             Backing::Encrypted(store) => store.remove(&self.name),

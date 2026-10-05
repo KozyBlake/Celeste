@@ -23,7 +23,7 @@ pub struct RecordingUi(pub Arc<Mutex<UiCalls>>);
 
 impl RecordingUi {
     pub fn calls(&self) -> std::sync::MutexGuard<'_, UiCalls> {
-        self.0.lock().unwrap()
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn player(&self, id: &str) -> Option<ConnectedPlayer> {
@@ -35,13 +35,13 @@ impl CelesteUi for RecordingUi {
     fn fire_sort(&self) {}
 
     fn clear_instance(&self) {
-        let mut calls = self.0.lock().unwrap();
+        let mut calls = self.0.lock().unwrap_or_else(|e| e.into_inner());
         calls.clears += 1;
         calls.players.clear();
     }
 
     fn player_join(&self, _initial_preamble: bool, player: PlayerJoin) {
-        let mut calls = self.0.lock().unwrap();
+        let mut calls = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut row = ConnectedPlayer::new(player.id.clone(), player.name.clone(), player.joined);
         row.set_base_advisory(player.advisory.clone(), player.text_color, player.priority);
         row.avatar_name = player.avatar_name.clone();
@@ -56,14 +56,14 @@ impl CelesteUi for RecordingUi {
     }
 
     fn player_update(&self, _initial_preamble: bool, id: &str, update: &mut dyn FnMut(&mut ConnectedPlayer)) {
-        let mut calls = self.0.lock().unwrap();
+        let mut calls = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(player) = calls.players.iter_mut().find(|p| p.id == id) {
             update(player);
         }
     }
 
     fn player_leave(&self, _initial_preamble: bool, id: &str, _name: &str, left: NaiveDateTime) {
-        let mut calls = self.0.lock().unwrap();
+        let mut calls = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(player) = calls.players.iter_mut().find(|p| p.id == id) {
             player.left = Some(left);
         }
@@ -71,17 +71,17 @@ impl CelesteUi for RecordingUi {
     }
 
     fn has_active_players(&self) -> bool {
-        self.0.lock().unwrap().players.iter().any(|p| p.left.is_none())
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).players.iter().any(|p| p.left.is_none())
     }
 
     fn append_cli_output(&self, text: &str) {
-        self.0.lock().unwrap().cli.push(text.to_string());
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).cli.push(text.to_string());
     }
 
     fn refresh_vrchat_api_status(&self, _status: &str) {}
 
     fn set_instance(&self, instance: Option<InstanceState>) {
-        self.0.lock().unwrap().instance = instance;
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).instance = instance;
     }
 }
 
@@ -93,10 +93,10 @@ pub struct RecordingEmitter(pub Arc<Mutex<Vec<String>>>);
 
 impl RecordingEmitter {
     pub fn events(&self) -> Vec<String> {
-        self.0.lock().unwrap().clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
     fn record(&self, what: String) {
-        self.0.lock().unwrap().push(what);
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(what);
     }
 }
 
@@ -157,18 +157,18 @@ pub struct RecordingTts(pub Arc<Mutex<Vec<String>>>);
 
 impl RecordingTts {
     pub fn spoken(&self) -> Vec<String> {
-        self.0.lock().unwrap().clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
 impl crate::TtsSink for RecordingTts {
     fn speak(&self, _marker: &str, text: &str) {
-        self.0.lock().unwrap().push(text.to_string());
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(text.to_string());
     }
     fn speak_after_nuisance_alert(&self, _marker: &str, text: &str) {
-        self.0.lock().unwrap().push(format!("[nuisance chime] {text}"));
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(format!("[nuisance chime] {text}"));
     }
     fn speak_mixed_character_name_alert(&self, _marker: &str) {
-        self.0.lock().unwrap().push("[mixed-name alert]".to_string());
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push("[mixed-name alert]".to_string());
     }
 }

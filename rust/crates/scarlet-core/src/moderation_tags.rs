@@ -88,18 +88,18 @@ impl ModerationTags {
     }
 
     pub fn get_tags(&self) -> Vec<Tag> {
-        self.tags.lock().unwrap().clone()
+        self.tags.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn get_tag(&self, value: &str) -> Option<Tag> {
-        self.tags.lock().unwrap().iter().find(|t| t.value == value).cloned()
+        self.tags.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|t| t.value == value).cloned()
     }
 
     /// Creates a new tag, or updates `label`/`description` on an existing
     /// one (only the fields given as `Some` are changed on an update,
     /// matching Java's `if (label != null) old.label = label;`).
     pub fn add_or_update_tag(&self, value: &str, label: Option<&str>, description: Option<&str>) -> TagUpdateResult {
-        let mut tags = self.tags.lock().unwrap();
+        let mut tags = self.tags.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = tags.iter_mut().find(|t| t.value == value) {
             if let Some(label) = label {
                 existing.label = label.to_string();
@@ -125,7 +125,7 @@ impl ModerationTags {
     }
 
     pub fn remove_tag(&self, value: &str) -> TagRemoveResult {
-        let mut tags = self.tags.lock().unwrap();
+        let mut tags = self.tags.lock().unwrap_or_else(|e| e.into_inner());
         if tags.is_empty() {
             return TagRemoveResult::Empty;
         }
@@ -138,7 +138,7 @@ impl ModerationTags {
     }
 
     pub fn get_tag_values(&self) -> Vec<String> {
-        self.tags.lock().unwrap().iter().map(|t| t.value.clone()).collect()
+        self.tags.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|t| t.value.clone()).collect()
     }
 
     /// Falls back to `value` itself when the tag doesn't exist, matching
@@ -152,7 +152,7 @@ impl ModerationTags {
     /// plain browse of the first `limit` tags (in stored order); never
     /// returns more than `limit` results.
     pub fn search_tags(&self, query: &str, limit: usize) -> Vec<Tag> {
-        let all = self.tags.lock().unwrap();
+        let all = self.tags.lock().unwrap_or_else(|e| e.into_inner());
         let q = query.trim().to_lowercase();
         if q.is_empty() {
             return all.iter().take(limit).cloned().collect();

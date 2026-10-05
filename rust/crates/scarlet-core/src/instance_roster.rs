@@ -39,7 +39,7 @@ pub struct InstanceRoster {
 
 impl std::fmt::Debug for InstanceRoster {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         f.debug_struct("InstanceRoster")
             .field("present", &inner.present.len())
             .field("pending", &inner.pending.len())
@@ -57,12 +57,12 @@ impl InstanceRoster {
         if user_id.is_empty() {
             return false;
         }
-        self.inner.lock().unwrap().present.contains_key(user_id)
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).present.contains_key(user_id)
     }
 
     /// Display name last seen for a present user.
     pub fn display_name(&self, user_id: &str) -> Option<String> {
-        self.inner.lock().unwrap().present.get(user_id).cloned()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).present.get(user_id).cloned()
     }
 
     /// Display name for a present user, or `fallback` if they aren't present.
@@ -72,19 +72,19 @@ impl InstanceRoster {
 
     /// Number of users currently present.
     pub fn present_count(&self) -> usize {
-        self.inner.lock().unwrap().present.len()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).present.len()
     }
 
     /// Snapshot of the currently-present user ids, in join order.
     pub fn present_user_ids(&self) -> Vec<String> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.present_order.iter().filter(|id| inner.present.contains_key(*id)).cloned().collect()
     }
 
     /// Records a join and schedules its UI update (deferred during preamble).
     pub fn join(&self, user_id: &str, display_name: &str, preamble: bool, ui_update: impl FnOnce() + Send + 'static) {
         if !user_id.is_empty() {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.present.insert(user_id.to_string(), display_name.to_string()).is_none() {
                 inner.present_order.retain(|id| id != user_id);
                 inner.present_order.push(user_id.to_string());
@@ -99,7 +99,7 @@ impl InstanceRoster {
     /// being undone by a late join.
     pub fn leave(&self, user_id: &str, preamble: bool, ui_update: impl FnOnce() + Send + 'static) {
         if !user_id.is_empty() {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.present.remove(user_id);
             inner.present_order.retain(|id| id != user_id);
         }
@@ -109,7 +109,7 @@ impl InstanceRoster {
     /// Runs a UI action now (live) or queues it to flush in order (preamble).
     pub fn run_or_defer(&self, preamble: bool, action: impl FnOnce() + Send + 'static) {
         if preamble {
-            self.inner.lock().unwrap().pending.push(Box::new(action));
+            self.inner.lock().unwrap_or_else(|e| e.into_inner()).pending.push(Box::new(action));
         } else {
             action();
         }
@@ -120,7 +120,7 @@ impl InstanceRoster {
     /// more work.
     pub fn flush(&self) {
         let queued: Vec<Update> = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             std::mem::take(&mut inner.pending)
         };
         for action in queued {
@@ -131,17 +131,17 @@ impl InstanceRoster {
     /// Drops queued updates without running them (e.g. leaving an instance
     /// mid-catch-up).
     pub fn clear_pending(&self) {
-        self.inner.lock().unwrap().pending.clear();
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).pending.clear();
     }
 
     /// Number of currently-queued (not yet flushed) updates.
     pub fn pending_count(&self) -> usize {
-        self.inner.lock().unwrap().pending.len()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).pending.len()
     }
 
     /// Clears all present players and queued updates.
     pub fn reset(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.present.clear();
         inner.present_order.clear();
         inner.pending.clear();
@@ -185,14 +185,14 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
 
         let log = order.clone();
-        roster.join("usr_1", "One", true, move || log.lock().unwrap().push("join"));
+        roster.join("usr_1", "One", true, move || log.lock().unwrap_or_else(|e| e.into_inner()).push("join"));
         let log = order.clone();
-        roster.leave("usr_1", true, move || log.lock().unwrap().push("leave"));
+        roster.leave("usr_1", true, move || log.lock().unwrap_or_else(|e| e.into_inner()).push("leave"));
 
         // Presence is updated eagerly, even while the UI updates are queued.
         assert!(!roster.is_present("usr_1"));
         roster.flush();
-        assert_eq!(*order.lock().unwrap(), vec!["join", "leave"]);
+        assert_eq!(*order.lock().unwrap_or_else(|e| e.into_inner()), vec!["join", "leave"]);
     }
 
     #[test]

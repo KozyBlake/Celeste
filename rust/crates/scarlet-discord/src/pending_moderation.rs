@@ -85,8 +85,8 @@ impl PendingModeration {
     }
 
     pub fn timed_bans(&self) -> HashMap<String, TimedBan> {
-        let _file_guard = FILE_LOCK.lock().unwrap();
-        let mut value = self.value.lock().unwrap();
+        let _file_guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut value = self.value.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(fresh) = self.read_disk() { *value = fresh; }
         value.get("timedBans").cloned()
             .and_then(|value| serde_json::from_value(value).ok())
@@ -124,8 +124,8 @@ impl PendingModeration {
     }
 
     fn bans(&self) -> HashMap<String, PendingBanInfo> {
-        let _file_guard = FILE_LOCK.lock().unwrap();
-        let mut value = self.value.lock().unwrap();
+        let _file_guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut value = self.value.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(fresh) = self.read_disk() {
             *value = fresh;
         }
@@ -135,8 +135,8 @@ impl PendingModeration {
     }
 
     fn edit_bans<T>(&self, edit: impl FnOnce(&mut HashMap<String, PendingBanInfo>) -> T) -> anyhow::Result<T> {
-        let _file_guard = FILE_LOCK.lock().unwrap();
-        let mut value = self.value.lock().unwrap();
+        let _file_guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut value = self.value.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(fresh) = self.read_disk() {
             *value = fresh;
         }
@@ -152,8 +152,8 @@ impl PendingModeration {
     }
 
     fn edit_pending<T>(&self, edit: impl FnOnce(&mut HashMap<String, String>) -> T) -> anyhow::Result<T> {
-        let _file_guard = FILE_LOCK.lock().unwrap();
-        let mut value = self.value.lock().unwrap();
+        let _file_guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut value = self.value.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(fresh) = self.read_disk() {
             *value = fresh;
         }
@@ -169,8 +169,8 @@ impl PendingModeration {
     }
 
     fn edit_timed_bans<T>(&self, edit: impl FnOnce(&mut HashMap<String, TimedBan>) -> T) -> anyhow::Result<T> {
-        let _file_guard = FILE_LOCK.lock().unwrap();
-        let mut value = self.value.lock().unwrap();
+        let _file_guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut value = self.value.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(fresh) = self.read_disk() { *value = fresh; }
         let mut timed: HashMap<String, TimedBan> = value.get("timedBans").cloned()
             .and_then(|value| serde_json::from_value(value).ok())

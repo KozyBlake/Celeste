@@ -86,21 +86,21 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> ObjDatum<T> {
     }
 
     pub fn exists(&self) -> bool {
-        self.value.lock().unwrap().is_some() || self.path.is_file()
+        self.value.lock().unwrap_or_else(|e| e.into_inner()).is_some() || self.path.is_file()
     }
 
     pub fn mark_dirty(&self) {
-        *self.dirty.lock().unwrap() = true;
+        *self.dirty.lock().unwrap_or_else(|e| e.into_inner()) = true;
     }
 
     /// Test-and-clear, matching `pollDirty`.
     pub fn poll_dirty(&self) -> bool {
-        std::mem::take(&mut *self.dirty.lock().unwrap())
+        std::mem::take(&mut *self.dirty.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     pub fn save(&self) {
-        *self.dirty.lock().unwrap() = false;
-        if let Some(value) = self.value.lock().unwrap().as_ref() {
+        *self.dirty.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        if let Some(value) = self.value.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             write_json(&self.path, value, crate::file_backups::DEFAULT_KEEP);
         }
     }
@@ -112,7 +112,7 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> ObjDatum<T> {
     }
 
     pub fn get(&self) -> T {
-        let mut guard = self.value.lock().unwrap();
+        let mut guard = self.value.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = read_json(&self.path, true);
         }
@@ -121,7 +121,7 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> ObjDatum<T> {
 
     /// Reads, applies `edit`, marks dirty, and returns the updated value.
     pub fn update(&self, edit: impl FnOnce(&mut T)) -> T {
-        let mut guard = self.value.lock().unwrap();
+        let mut guard = self.value.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = read_json(&self.path, true);
         }
@@ -159,7 +159,7 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> SubData<T> {
     }
 
     pub fn exists(&self, id: &str) -> bool {
-        self.values.lock().unwrap().contains(id) || self.path(id).is_file()
+        self.values.lock().unwrap_or_else(|e| e.into_inner()).contains(id) || self.path(id).is_file()
     }
 
     fn save_one(&self, id: &str, value: &T) {
@@ -171,7 +171,7 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> SubData<T> {
     /// Loads (from cache or disk, defaulting if absent) without marking
     /// dirty.
     pub fn get(&self, id: &str) -> T {
-        let mut cache = self.values.lock().unwrap();
+        let mut cache = self.values.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(v) = cache.get(id) {
             return v.clone();
         }
@@ -181,11 +181,11 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> SubData<T> {
     }
 
     pub fn mark_dirty(&self, id: &str) {
-        self.dirties.lock().unwrap().insert(id.to_string());
+        self.dirties.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string());
     }
 
     pub fn poll_dirty(&self, id: &str) -> bool {
-        self.dirties.lock().unwrap().remove(id)
+        self.dirties.lock().unwrap_or_else(|e| e.into_inner()).remove(id)
     }
 
     /// Reads, applies `edit`, persists immediately, and returns the updated
@@ -200,20 +200,20 @@ impl<T: Clone + Default + Serialize + serde::de::DeserializeOwned> SubData<T> {
 
     pub fn put(&self, id: &str, value: T) {
         self.save_one(id, &value);
-        self.values.lock().unwrap().put(id.to_string(), value);
-        self.dirties.lock().unwrap().remove(id);
+        self.values.lock().unwrap_or_else(|e| e.into_inner()).put(id.to_string(), value);
+        self.dirties.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
     }
 
     pub fn save(&self) {
-        let cache = self.values.lock().unwrap();
+        let cache = self.values.lock().unwrap_or_else(|e| e.into_inner());
         for (id, value) in cache.iter() {
             self.save_one(id, value);
         }
     }
 
     pub fn save_if_dirty(&self) {
-        let dirty_ids: Vec<String> = self.dirties.lock().unwrap().drain().collect();
-        let cache = self.values.lock().unwrap();
+        let dirty_ids: Vec<String> = self.dirties.lock().unwrap_or_else(|e| e.into_inner()).drain().collect();
+        let cache = self.values.lock().unwrap_or_else(|e| e.into_inner());
         for id in dirty_ids {
             if let Some(value) = cache.peek(&id) {
                 self.save_one(&id, value);

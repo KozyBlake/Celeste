@@ -132,7 +132,7 @@ impl WatchedEntities {
     }
 
     fn save(&self) {
-        let guard = self.entities.lock().unwrap();
+        let guard = self.entities.lock().unwrap_or_else(|e| e.into_inner());
         let entities: Vec<&WatchedEntity> = guard.values().collect();
         match serde_json::to_string_pretty(&entities) {
             Ok(json) => {
@@ -157,16 +157,16 @@ impl WatchedEntities {
     }
 
     pub fn get_watched_entity(&self, id: &str) -> Option<WatchedEntity> {
-        self.entities.lock().unwrap().get(id).cloned()
+        self.entities.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
     }
 
     pub fn get_all(&self) -> Vec<WatchedEntity> {
-        self.entities.lock().unwrap().values().cloned().collect()
+        self.entities.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
     pub fn export_json(&self) -> Result<Vec<u8>> {
         let entities: Vec<WatchedEntity> =
-            self.entities.lock().unwrap().values().cloned().collect();
+            self.entities.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
         serde_json::to_vec_pretty(&entities).context("serializing watched entities")
     }
 
@@ -213,7 +213,7 @@ impl WatchedEntities {
     ) -> usize {
         let mut imported = 0;
         {
-            let mut current = self.entities.lock().unwrap();
+            let mut current = self.entities.lock().unwrap_or_else(|e| e.into_inner());
             for entity in entities
                 .into_iter()
                 .filter(|entity| (self.validate_id)(&entity.id))
@@ -239,7 +239,7 @@ impl WatchedEntities {
     }
 
     pub fn remove_watched_entity(&self, id: &str) -> bool {
-        let removed = self.entities.lock().unwrap().remove(id).is_some();
+        let removed = self.entities.lock().unwrap_or_else(|e| e.into_inner()).remove(id).is_some();
         if removed {
             self.save();
         }
@@ -248,7 +248,7 @@ impl WatchedEntities {
 
     pub fn update(&self, id: &str, f: impl FnOnce(&mut WatchedEntity)) -> Option<WatchedEntity> {
         let updated = {
-            let mut entities = self.entities.lock().unwrap();
+            let mut entities = self.entities.lock().unwrap_or_else(|e| e.into_inner());
             let entity = entities.get_mut(id)?;
             f(entity);
             entity.clone()

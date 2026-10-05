@@ -33,7 +33,7 @@ impl Pacer {
     /// How long the next turn must wait, and reserves that slot. Splitting
     /// this out is what lets the sync and async waits share one policy.
     fn reserve(&self) -> Duration {
-        let mut epoch = self.epoch.lock().unwrap();
+        let mut epoch = self.epoch.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         let next = *epoch + self.interval;
         let layover = next.saturating_duration_since(now);

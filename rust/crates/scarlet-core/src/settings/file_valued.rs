@@ -159,7 +159,7 @@ where
 
     /// Port of `FileValued.get()`.
     pub fn get(&self) -> T {
-        let mut cached = self.cached.lock().unwrap();
+        let mut cached = self.cached.lock().unwrap_or_else(|e| e.into_inner());
         if cached.is_none() {
             *cached = self.store.get_object::<T>(&self.id);
         }
@@ -173,7 +173,7 @@ where
     /// to the default (matching the Java `.set(null, source)` idiom).
     pub fn set(&self, value: Option<T>, source: &str) -> bool {
         let prev = {
-            let cached = self.cached.lock().unwrap();
+            let cached = self.cached.lock().unwrap_or_else(|e| e.into_inner());
             cached.clone()
         };
         if prev == value {
@@ -183,7 +183,7 @@ where
         let validated = (self.validate)(value.clone());
         let valid = validated.is_some();
         if valid {
-            *self.cached.lock().unwrap() = Some(value.clone());
+            *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = Some(value.clone());
             self.store.set_object(&self.id, &value);
         }
         let notify_next = if valid { validated } else { Some(value) };
@@ -292,21 +292,21 @@ impl SettingsRegistry {
     }
 
     fn register_id(&self, id: &str) {
-        if !self.ids.lock().unwrap().insert(id.to_string()) {
+        if !self.ids.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string()) {
             panic!("Duplicate setting: {id}");
         }
     }
 
     fn record(&self, descriptor: Arc<dyn SettingDescriptor>) {
-        self.entries.lock().unwrap().push(descriptor);
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).push(descriptor);
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<dyn SettingDescriptor>> {
-        self.entries.lock().unwrap().iter().find(|d| d.id() == id).cloned()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|d| d.id() == id).cloned()
     }
 
     pub fn all(&self) -> Vec<Arc<dyn SettingDescriptor>> {
-        self.entries.lock().unwrap().clone()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn boolean(&self, id: &str, name: &str, category: SettingCategory, default: bool) -> Arc<FileValued<bool>> {
@@ -557,10 +557,10 @@ mod tests {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
         let seen2 = seen.clone();
         setting.listeners().register("l", 0, false, move |_prev, next, _valid, _src| {
-            *seen2.lock().unwrap() = next.clone();
+            *seen2.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
         });
         setting.set(Some("role:123456789".to_string()), "other");
-        assert_eq!(*seen.lock().unwrap(), Some("123456789".to_string()));
+        assert_eq!(*seen.lock().unwrap_or_else(|e| e.into_inner()), Some("123456789".to_string()));
     }
 
     #[test]
@@ -606,10 +606,10 @@ mod tests {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
         let seen2 = seen.clone();
         setting.listeners().register("test-listener", 0, false, move |_prev, next, valid, _src| {
-            *seen2.lock().unwrap() = Some((*next, valid));
+            *seen2.lock().unwrap_or_else(|e| e.into_inner()) = Some((*next, valid));
         });
         setting.set(Some(true), "other-source");
-        assert_eq!(*seen.lock().unwrap(), Some((Some(true), true)));
+        assert_eq!(*seen.lock().unwrap_or_else(|e| e.into_inner()), Some((Some(true), true)));
     }
 
     #[test]

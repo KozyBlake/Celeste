@@ -107,7 +107,7 @@ impl DiscordPermissions {
         value: Option<bool>,
     ) -> anyhow::Result<Option<bool>> {
         let previous = {
-            let mut sets = self.sets.lock().unwrap();
+            let mut sets = self.sets.lock().unwrap_or_else(|e| e.into_inner());
             let set = sets.entry(kind).or_default();
             let (map, id) = match target {
                 PermissionTarget::User(id) => (&mut set.by_user, id.to_string()),
@@ -139,7 +139,7 @@ impl DiscordPermissions {
         target: PermissionTarget,
         member_roles: &[RoleId],
     ) -> BTreeMap<String, bool> {
-        let sets = self.sets.lock().unwrap();
+        let sets = self.sets.lock().unwrap_or_else(|e| e.into_inner());
         let Some(set) = sets.get(&kind) else {
             return BTreeMap::new();
         };
@@ -184,7 +184,7 @@ impl DiscordPermissions {
         {
             return Some(true);
         }
-        let sets = self.sets.lock().unwrap();
+        let sets = self.sets.lock().unwrap_or_else(|e| e.into_inner());
         let set = sets.get(&kind)?;
         let legacy = Self::legacy_permission_name(permission);
         let lookup = |values: &std::collections::HashMap<String, bool>| {
@@ -253,7 +253,7 @@ impl DiscordPermissions {
     }
 
     fn save(&self) -> anyhow::Result<()> {
-        let sets = self.sets.lock().unwrap();
+        let sets = self.sets.lock().unwrap_or_else(|e| e.into_inner());
         let text = serde_json::to_string_pretty(&*sets)?;
         scarlet_core::file_backups::write(&self.file, &text)?;
         Ok(())

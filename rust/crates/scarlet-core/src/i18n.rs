@@ -110,7 +110,7 @@ pub fn locale() -> String {
 /// without rebuilding. External keys win over bundled ones.
 pub fn set_external_dir(dir: Option<PathBuf>) {
     *external_dir().write().unwrap() = dir;
-    cache().lock().unwrap().clear();
+    cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 /// Port of `I18n.loadLang`: bundled bundle first, external overlay second.
@@ -135,7 +135,7 @@ fn load_lang(lang: &str) -> HashMap<String, String> {
 
 fn bundle(lang: &str) -> &'static HashMap<String, String> {
     let key = normalize_lang(lang);
-    let mut cache = cache().lock().unwrap();
+    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(existing) = cache.get(&key) {
         return existing;
     }

@@ -931,7 +931,7 @@ impl Settings {
 
     /// Port of `checkHasVersionChangedSinceLastRun`.
     pub fn check_has_version_changed_since_last_run(&self, current_version: &str) -> bool {
-        if let Some(cached) = *self.has_version_changed_since_last_run.lock().unwrap() {
+        if let Some(cached) = *self.has_version_changed_since_last_run.lock().unwrap_or_else(|e| e.into_inner()) {
             return cached;
         }
         let changed = match self.last_run_time.get_or_null() {
@@ -953,7 +953,7 @@ impl Settings {
                 }
             }
         };
-        *self.has_version_changed_since_last_run.lock().unwrap() = Some(changed);
+        *self.has_version_changed_since_last_run.lock().unwrap_or_else(|e| e.into_inner()) = Some(changed);
         changed
     }
 

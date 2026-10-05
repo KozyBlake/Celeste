@@ -343,16 +343,16 @@ mod tests {
         report(&status, "no voice channel");
         report(&status, "no voice channel");
         assert_eq!(
-            status.lock().unwrap().last_problem.as_deref(),
+            status.lock().unwrap_or_else(|e| e.into_inner()).last_problem.as_deref(),
             Some("no voice channel")
         );
         report(&status, "something else");
         assert_eq!(
-            status.lock().unwrap().last_problem.as_deref(),
+            status.lock().unwrap_or_else(|e| e.into_inner()).last_problem.as_deref(),
             Some("something else")
         );
         clear(&status);
-        assert!(status.lock().unwrap().last_problem.is_none());
+        assert!(status.lock().unwrap_or_else(|e| e.into_inner()).last_problem.is_none());
     }
 
     #[test]

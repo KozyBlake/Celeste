@@ -179,7 +179,7 @@ impl WatchedGroups {
     }
 
     fn save(&self) {
-        let guard = self.groups.lock().unwrap();
+        let guard = self.groups.lock().unwrap_or_else(|e| e.into_inner());
         let groups: Vec<&WatchedGroup> = guard.values().collect();
         match serde_json::to_string_pretty(&groups) {
             Ok(json) => {
@@ -200,17 +200,17 @@ impl WatchedGroups {
     }
 
     pub fn get_watched_group(&self, group_id: &str) -> Option<WatchedGroup> {
-        self.groups.lock().unwrap().get(group_id).cloned()
+        self.groups.lock().unwrap_or_else(|e| e.into_inner()).get(group_id).cloned()
     }
 
     pub fn get_all(&self) -> Vec<WatchedGroup> {
-        self.groups.lock().unwrap().values().cloned().collect()
+        self.groups.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
     /// Serializes the current list in the same pretty-printed JSON array
     /// format as the Java `exportJson` implementation.
     pub fn export_json(&self) -> Result<Vec<u8>> {
-        let groups: Vec<WatchedGroup> = self.groups.lock().unwrap().values().cloned().collect();
+        let groups: Vec<WatchedGroup> = self.groups.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
         serde_json::to_vec_pretty(&groups).context("serializing watched groups")
     }
 
@@ -261,7 +261,7 @@ impl WatchedGroups {
     ) -> usize {
         let mut imported = 0;
         {
-            let mut current = self.groups.lock().unwrap();
+            let mut current = self.groups.lock().unwrap_or_else(|e| e.into_inner());
             for group in groups
                 .into_iter()
                 .filter(|group| group.id.starts_with("grp_"))
@@ -281,12 +281,12 @@ impl WatchedGroups {
     /// impossible (a caller can't pass a "null" `WatchedGroup`), so this
     /// just adds it -- always what Java's `true` branch does.
     pub fn add_watched_group(&self, group: WatchedGroup) {
-        self.groups.lock().unwrap().insert(group.id.clone(), group);
+        self.groups.lock().unwrap_or_else(|e| e.into_inner()).insert(group.id.clone(), group);
         self.save();
     }
 
     pub fn remove_watched_group(&self, group_id: &str) -> bool {
-        let removed = self.groups.lock().unwrap().remove(group_id).is_some();
+        let removed = self.groups.lock().unwrap_or_else(|e| e.into_inner()).remove(group_id).is_some();
         if removed {
             self.save();
         }
@@ -309,7 +309,7 @@ impl WatchedGroups {
             return None;
         }
         let previous = {
-            let mut groups = self.groups.lock().unwrap();
+            let mut groups = self.groups.lock().unwrap_or_else(|e| e.into_inner());
             let Some(group) = groups.get_mut(group_id) else { return None };
             match group.last_seen_name.as_deref() {
                 Some(stored) if stored == name => return None, // unchanged; no write
@@ -339,7 +339,7 @@ impl WatchedGroups {
         f: impl FnOnce(&mut WatchedGroup),
     ) -> Option<WatchedGroup> {
         let updated = {
-            let mut groups = self.groups.lock().unwrap();
+            let mut groups = self.groups.lock().unwrap_or_else(|e| e.into_inner());
             let group = groups.get_mut(group_id)?;
             f(group);
             group.clone()

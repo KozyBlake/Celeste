@@ -48,6 +48,7 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     let _log_guard = scarlet_core::log::init(&data_dir)?;
+    install_panic_hook();
 
     tracing::info!("App: {} {}", scarlet_core::identity::APP_NAME, scarlet_core::identity::VERSION);
     tracing::info!("Data folder resolved to: {} ({:?})", data_dir.display(), resolved.source);
@@ -385,6 +386,43 @@ fn main() -> anyhow::Result<()> {
     shutdown_data.save_all();
 
     Ok(())
+}
+
+/// Send panics through the normal tracing subscriber so failures in spawned
+/// tasks and worker threads are preserved in Celeste's log file. The default
+/// hook only writes to stderr, which is normally invisible for a desktop
+/// launch.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let message = if let Some(message) = info.payload().downcast_ref::<&str>() {
+            (*message).to_string()
+        } else if let Some(message) = info.payload().downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>");
+
+        if let Some(location) = info.location() {
+            tracing::error!(
+                target: "celeste::panic",
+                thread = thread_name,
+                file = location.file(),
+                line = location.line(),
+                column = location.column(),
+                panic = %message,
+                "thread panicked"
+            );
+        } else {
+            tracing::error!(
+                target: "celeste::panic",
+                thread = thread_name,
+                panic = %message,
+                "thread panicked"
+            );
+        }
+    }));
 }
 
 /// Java's session half of `healthWatchdogTick` (`Scarlet.java:2612-2719`). A

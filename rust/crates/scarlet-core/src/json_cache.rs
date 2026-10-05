@@ -99,12 +99,12 @@ where
     pub fn is_404(&self, id: Option<&str>) -> bool {
         match id {
             None => true,
-            Some(id) => self.known_404s.lock().unwrap().contains(id),
+            Some(id) => self.known_404s.lock().unwrap_or_else(|e| e.into_inner()).contains(id),
         }
     }
 
     pub fn add_404(&self, id: &str) -> bool {
-        let inserted = self.known_404s.lock().unwrap().insert(id.to_string());
+        let inserted = self.known_404s.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string());
         if inserted {
             self.save_404s();
         }
@@ -112,7 +112,7 @@ where
     }
 
     pub fn remove_404(&self, id: &str) -> bool {
-        let removed = self.known_404s.lock().unwrap().remove(id);
+        let removed = self.known_404s.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
         if removed {
             self.save_404s();
         }
@@ -137,7 +137,7 @@ where
         };
         match serde_json::from_str::<Vec<String>>(&contents) {
             Ok(list) => {
-                self.known_404s.lock().unwrap().extend(list);
+                self.known_404s.lock().unwrap_or_else(|e| e.into_inner()).extend(list);
             }
             Err(_) => {
                 tracing::error!("Exception reading known 404s JSON of kind `{}`", self.kind);
@@ -148,7 +148,7 @@ where
     fn save_404s(&self) {
         let _ = std::fs::create_dir_all(&self.dir);
         let path = self.known_404s_path();
-        let set = self.known_404s.lock().unwrap();
+        let set = self.known_404s.lock().unwrap_or_else(|e| e.into_inner());
         let mut list: Vec<&String> = set.iter().collect();
         list.sort();
         match serde_json::to_string_pretty(&list) {
@@ -209,7 +209,7 @@ where
         min_epoch: i64,
         populate: Option<impl FnOnce(&str) -> anyhow::Result<Option<T>>>,
     ) -> Option<Entry<T>> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut entry = entries.pop(id);
         match &entry {
@@ -269,7 +269,7 @@ where
 
     /// Port of `put(String id, T value)`.
     pub fn put(&self, id: &str, value: T) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let mut entry = entries
             .pop(id)
             .unwrap_or_else(|| Entry { id: id.to_string(), value: value.clone(), modified: 0 });

@@ -177,7 +177,7 @@ impl EncryptedPrefs {
     }
 
     fn get_or_derive(&self, salt: &str) -> [u8; 32] {
-        let mut cache = self.key_cache.lock().unwrap();
+        let mut cache = self.key_cache.lock().unwrap_or_else(|e| e.into_inner());
         *cache.entry(salt.to_string()).or_insert_with(|| derive_key(&self.local_password, salt))
     }
 
@@ -188,7 +188,7 @@ impl EncryptedPrefs {
         };
         let bk = hash_key(key);
         let encrypted = encrypt(&self.get_or_derive(key), value);
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         store.remove(&format!("{FALLBACK_PREFIX}{bk}"));
         store.insert(bk, encrypted);
         save_store(&self.data_dir, &store);
@@ -197,7 +197,7 @@ impl EncryptedPrefs {
     pub fn get(&self, key: &str) -> Option<String> {
         let bk = hash_key(key);
         let blob = {
-            let store = self.store.lock().unwrap();
+            let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
             store.get(&bk).cloned()
         }?;
         let decrypted = decrypt(&self.get_or_derive(key), &blob);
@@ -214,14 +214,14 @@ impl EncryptedPrefs {
 
     pub fn remove(&self, key: &str) {
         let bk = hash_key(key);
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         store.remove(&bk);
         save_store(&self.data_dir, &store);
     }
 
     pub fn contains(&self, key: &str) -> bool {
         let bk = hash_key(key);
-        self.store.lock().unwrap().contains_key(&bk)
+        self.store.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&bk)
     }
 }
 

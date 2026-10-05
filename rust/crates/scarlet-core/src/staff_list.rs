@@ -57,19 +57,19 @@ impl StaffList {
     }
 
     pub fn get_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.ids.lock().unwrap().iter().cloned().collect();
+        let mut ids: Vec<String> = self.ids.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
         ids.sort();
         ids
     }
 
     pub fn is_id(&self, user_id: &str) -> bool {
-        self.ids.lock().unwrap().contains(user_id)
+        self.ids.lock().unwrap_or_else(|e| e.into_inner()).contains(user_id)
     }
 
     /// Returns `false` (and does not save) if `user_id` was already present,
     /// matching Java's `Set::add`-return-value gate.
     pub fn add_id(&self, user_id: &str) -> bool {
-        let added = self.ids.lock().unwrap().insert(user_id.to_string());
+        let added = self.ids.lock().unwrap_or_else(|e| e.into_inner()).insert(user_id.to_string());
         if added {
             self.save();
         }
@@ -78,7 +78,7 @@ impl StaffList {
 
     /// Returns `false` (and does not save) if `user_id` was not present.
     pub fn remove_id(&self, user_id: &str) -> bool {
-        let removed = self.ids.lock().unwrap().remove(user_id);
+        let removed = self.ids.lock().unwrap_or_else(|e| e.into_inner()).remove(user_id);
         if removed {
             self.save();
         }

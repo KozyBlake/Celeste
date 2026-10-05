@@ -169,7 +169,7 @@ impl DiscordConfigStore {
     }
 
     pub fn map_strings(&self, map_name: &str, key: &str) -> Vec<String> {
-        let root = self.value.lock().unwrap();
+        let root = self.value.lock().unwrap_or_else(|e| e.into_inner());
         let Some(value) = root
             .get(map_name)
             .and_then(|value| value.as_object())
@@ -194,7 +194,7 @@ impl DiscordConfigStore {
         values: &[String],
     ) -> anyhow::Result<()> {
         {
-            let mut root = self.value.lock().unwrap();
+            let mut root = self.value.lock().unwrap_or_else(|e| e.into_inner());
             let map = root
                 .entry(map_name.to_string())
                 .or_insert_with(|| serde_json::json!({}));
@@ -233,7 +233,7 @@ impl DiscordConfigStore {
         value: Option<&str>,
     ) -> anyhow::Result<()> {
         {
-            let mut root = self.value.lock().unwrap();
+            let mut root = self.value.lock().unwrap_or_else(|e| e.into_inner());
             let map = root
                 .entry(map_name.to_string())
                 .or_insert_with(|| serde_json::json!({}));
@@ -258,7 +258,7 @@ impl DiscordConfigStore {
 
     pub fn set_string(&self, field: &str, value: Option<&str>) -> anyhow::Result<()> {
         {
-            let mut root = self.value.lock().unwrap();
+            let mut root = self.value.lock().unwrap_or_else(|e| e.into_inner());
             root.insert(
                 field.to_string(),
                 value.map_or(serde_json::Value::Null, |value| {
@@ -270,12 +270,12 @@ impl DiscordConfigStore {
     }
 
     pub fn set_json(&self, field: &str, value: serde_json::Value) -> anyhow::Result<()> {
-        self.value.lock().unwrap().insert(field.to_string(), value);
+        self.value.lock().unwrap_or_else(|e| e.into_inner()).insert(field.to_string(), value);
         self.save()
     }
 
     pub fn json(&self, field: &str) -> Option<serde_json::Value> {
-        self.value.lock().unwrap().get(field).cloned()
+        self.value.lock().unwrap_or_else(|e| e.into_inner()).get(field).cloned()
     }
 
     pub fn update_json(
@@ -283,7 +283,7 @@ impl DiscordConfigStore {
         fields: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
     ) -> anyhow::Result<()> {
         {
-            let mut root = self.value.lock().unwrap();
+            let mut root = self.value.lock().unwrap_or_else(|e| e.into_inner());
             for (field, value) in fields {
                 root.insert(field.to_string(), value);
             }
@@ -292,7 +292,7 @@ impl DiscordConfigStore {
     }
 
     fn save(&self) -> anyhow::Result<()> {
-        let json = serde_json::to_string_pretty(&*self.value.lock().unwrap())?;
+        let json = serde_json::to_string_pretty(&*self.value.lock().unwrap_or_else(|e| e.into_inner()))?;
         Ok(scarlet_core::file_backups::write(&self.file, &json)?)
     }
 }
@@ -450,7 +450,11 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    pub fn insert_into(self, data: &mut TypeMap) {
+    /// Populate a newly-built serenity client. Taking `&self` is deliberate:
+    /// the Discord supervisor may need to build another client after a
+    /// gateway failure, while every reconnect must keep pointing at the same
+    /// process-wide stores and VRChat session.
+    pub fn insert_into(&self, data: &mut TypeMap) {
         match synchronize_guild_id(&self.settings, &self.discord_config) {
             Ok(Some(guild_id)) => tracing::debug!(guild_id, "Discord guild configuration synchronized"),
             Ok(None) => tracing::warn!("No Discord guild is configured"),
@@ -462,21 +466,21 @@ impl SharedState {
         let pending_moderation = Arc::new(crate::pending_moderation::PendingModeration::open(
             self.discord_config.data_dir(),
         ));
-        data.insert::<VrChatClientKey>(self.vrchat_client);
-        data.insert::<HttpKey>(self.http);
-        data.insert::<ScarletDataKey>(self.scarlet_data);
-        data.insert::<SettingsKey>(self.settings);
-        data.insert::<AvatarSearchKey>(self.avatar_search);
-        data.insert::<DiscordConfigKey>(self.discord_config);
+        data.insert::<VrChatClientKey>(self.vrchat_client.clone());
+        data.insert::<HttpKey>(self.http.clone());
+        data.insert::<ScarletDataKey>(self.scarlet_data.clone());
+        data.insert::<SettingsKey>(self.settings.clone());
+        data.insert::<AvatarSearchKey>(self.avatar_search.clone());
+        data.insert::<DiscordConfigKey>(self.discord_config.clone());
         data.insert::<DiscordPermissionsKey>(discord_permissions);
         data.insert::<PendingModerationKey>(pending_moderation);
-        data.insert::<ProcessControllerKey>(self.process_controller);
-        data.insert::<StaffListKey>(self.staff_list);
-        data.insert::<SecretStaffListKey>(self.secret_staff_list);
-        data.insert::<ModerationTagsKey>(self.moderation_tags);
-        data.insert::<WatchedGroupsKey>(self.watched_groups);
-        data.insert::<WatchedUsersKey>(self.watched_users);
-        data.insert::<WatchedAvatarsKey>(self.watched_avatars);
+        data.insert::<ProcessControllerKey>(self.process_controller.clone());
+        data.insert::<StaffListKey>(self.staff_list.clone());
+        data.insert::<SecretStaffListKey>(self.secret_staff_list.clone());
+        data.insert::<ModerationTagsKey>(self.moderation_tags.clone());
+        data.insert::<WatchedGroupsKey>(self.watched_groups.clone());
+        data.insert::<WatchedUsersKey>(self.watched_users.clone());
+        data.insert::<WatchedAvatarsKey>(self.watched_avatars.clone());
         data.insert::<InstanceCreationsKey>(Arc::new(RwLock::new(HashMap::new())));
         data.insert::<DiscordModerationDraftsKey>(Arc::new(RwLock::new(HashMap::new())));
         data.insert::<PendingVrChatLinksKey>(Arc::new(RwLock::new(HashMap::new())));

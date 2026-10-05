@@ -185,7 +185,7 @@ async fn try_auto_response(ctx: &Context, channel: &GuildChannel, opener: Option
     if !config.is_candidate(channel) {
         return;
     }
-    if responded_channels().lock().unwrap().contains(&channel.id) {
+    if responded_channels().lock().unwrap_or_else(|e| e.into_inner()).contains(&channel.id) {
         return;
     }
 
@@ -243,7 +243,7 @@ async fn send_auto_response(
     }
     // Claim the channel before sending, so two triggers racing can't both
     // post; released again if the send fails, exactly as Java does.
-    if !responded_channels().lock().unwrap().insert(channel.id) {
+    if !responded_channels().lock().unwrap_or_else(|e| e.into_inner()).insert(channel.id) {
         return;
     }
 
@@ -262,7 +262,7 @@ async fn send_auto_response(
             source
         ),
         Err(err) => {
-            responded_channels().lock().unwrap().remove(&channel.id);
+            responded_channels().lock().unwrap_or_else(|e| e.into_inner()).remove(&channel.id);
             tracing::warn!("Ticket Tool auto-response failed in {} ({}): {err}", channel.name, channel.id);
         }
     }

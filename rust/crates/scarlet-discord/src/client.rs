@@ -11,6 +11,21 @@ use crate::data::SharedState;
 use crate::handler::Handler;
 use crate::token::normalize_discord_bot_token;
 
+const INITIAL_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const STABLE_CONNECTION: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn next_retry_delay(
+    current: std::time::Duration,
+    connected_for: Option<std::time::Duration>,
+) -> std::time::Duration {
+    if connected_for.is_some_and(|duration| duration >= STABLE_CONNECTION) {
+        INITIAL_RETRY_DELAY
+    } else {
+        current.saturating_mul(2).min(MAX_RETRY_DELAY)
+    }
+}
+
 /// Port of the `GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_MEMBERS`
 /// call in the Java constructor, plus the intents serenity itself needs to
 /// receive guild/message gateway events at all (JDA enables a baseline set
@@ -63,36 +78,61 @@ async fn build_client_with_voice(
 /// actually call the VRChat API or read/write `ScarletData` instead of only
 /// ever answering from Discord-local state.
 pub async fn connect_and_serve(token: Option<String>, state: SharedState) {
-    match token {
-        Some(token) if !token.trim().is_empty() => {
-            tracing::info!(
-                "Discord bot token configured (fingerprint {}); connecting...",
-                crate::token::fingerprint_discord_token(Some(&token))
-            );
-            match build_client_with_voice(Some(&token), state.voice_manager.clone()).await {
-                Some(Ok(mut client)) => {
-                    // Publish the HTTP handle before starting, so the event
-                    // listener's audit emitter can post as soon as the
-                    // gateway is up (it lives outside the client and has no
-                    // `Context` of its own).
-                    *state.http.write().await = Some(client.http.clone());
-                    {
-                        let mut data = client.data.write().await;
-                        state.insert_into(&mut data);
-                    }
-                    if let Err(err) = client.start().await {
-                        tracing::error!("Discord client error: {}", err);
-                    }
+    let Some(token) = normalize_discord_bot_token(token.as_deref()) else {
+        tracing::warn!(
+            "No Discord bot token configured (setting `discord.token`); running without Discord connectivity"
+        );
+        return;
+    };
+
+    let fingerprint = crate::token::fingerprint_discord_token(Some(&token));
+    let mut retry_delay = INITIAL_RETRY_DELAY;
+    let mut attempt = 0_u64;
+
+    loop {
+        attempt += 1;
+        tracing::info!(%fingerprint, attempt, "Discord bot token configured; connecting...");
+
+        let connected_for = match build_client_with_voice(Some(&token), state.voice_manager.clone()).await {
+            Some(Ok(mut client)) => {
+                // Publish the HTTP handle before starting, so the event
+                // listener's audit emitter can post as soon as the gateway
+                // is up (it lives outside the client and has no `Context`).
+                *state.http.write().await = Some(client.http.clone());
+                {
+                    let mut data = client.data.write().await;
+                    state.insert_into(&mut data);
                 }
-                Some(Err(err)) => tracing::error!("Failed to build Discord client: {}", err),
-                None => tracing::warn!("Discord token was configured but normalized to empty; not connecting"),
+
+                let started = std::time::Instant::now();
+                match client.start().await {
+                    Ok(()) => tracing::warn!("Discord client stopped; reconnecting"),
+                    Err(error) => tracing::error!(%error, "Discord client stopped with an error; reconnecting"),
+                }
+                Some(started.elapsed())
             }
-        }
-        _ => {
-            tracing::warn!(
-                "No Discord bot token configured (setting `discord.token`); running without Discord connectivity"
-            );
-        }
+            Some(Err(error)) => {
+                tracing::error!(%error, "Failed to build Discord client; retrying");
+                None
+            }
+            // `token` was normalized above, so this is defensive rather than
+            // an expected branch.
+            None => {
+                tracing::error!("Discord token unexpectedly normalized to empty; not connecting");
+                return;
+            }
+        };
+
+        *state.http.write().await = None;
+        let scheduled_delay = if connected_for.is_some_and(|duration| duration >= STABLE_CONNECTION)
+        {
+            INITIAL_RETRY_DELAY
+        } else {
+            retry_delay
+        };
+        tracing::warn!(retry_seconds = scheduled_delay.as_secs(), "Discord reconnect scheduled");
+        tokio::time::sleep(scheduled_delay).await;
+        retry_delay = next_retry_delay(retry_delay, connected_for);
     }
 }
 
@@ -104,5 +144,18 @@ mod tests {
     async fn empty_token_builds_no_client() {
         assert!(build_client(None).await.is_none());
         assert!(build_client(Some("   ")).await.is_none());
+    }
+
+    #[test]
+    fn retry_backoff_grows_caps_and_resets_after_a_stable_connection() {
+        assert_eq!(next_retry_delay(INITIAL_RETRY_DELAY, None), std::time::Duration::from_secs(10));
+        assert_eq!(
+            next_retry_delay(MAX_RETRY_DELAY, None),
+            MAX_RETRY_DELAY
+        );
+        assert_eq!(
+            next_retry_delay(MAX_RETRY_DELAY, Some(STABLE_CONNECTION)),
+            INITIAL_RETRY_DELAY
+        );
     }
 }

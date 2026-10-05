@@ -50,7 +50,7 @@ impl<T: PartialEq + Clone> ListenerList<T> {
         callback: impl Fn(&T, &T, bool, &str) + Send + Sync + 'static,
     ) -> bool {
         let source = source.into();
-        let mut listeners = self.listeners.lock().unwrap();
+        let mut listeners = self.listeners.lock().unwrap_or_else(|e| e.into_inner());
         listeners.retain(|h| h.source != source);
         listeners.push(Holder { source, priority, listens_self, callback: Box::new(callback) });
         listeners.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.source.cmp(&b.source)));
@@ -60,7 +60,7 @@ impl<T: PartialEq + Clone> ListenerList<T> {
     /// Unregisters the listener registered under `source`, if any. Returns
     /// whether one was removed.
     pub fn unregister(&self, source: &str) -> bool {
-        let mut listeners = self.listeners.lock().unwrap();
+        let mut listeners = self.listeners.lock().unwrap_or_else(|e| e.into_inner());
         let before = listeners.len();
         listeners.retain(|h| h.source != source);
         listeners.len() != before
@@ -73,7 +73,7 @@ impl<T: PartialEq + Clone> ListenerList<T> {
         if previous == next {
             return;
         }
-        let listeners = self.listeners.lock().unwrap();
+        let listeners = self.listeners.lock().unwrap_or_else(|e| e.into_inner());
         for holder in listeners.iter() {
             if holder.listens_self || holder.source != source {
                 (holder.callback)(previous, next, valid, source);

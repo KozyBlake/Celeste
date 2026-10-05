@@ -76,7 +76,7 @@ impl UiState {
     /// own — the caller resolves the profile fields (see
     /// [`scarlet_core::ui`]'s module docs) and passes them in.
     pub fn player_join(&self, _initial_preamble: bool, join: PlayerJoin) {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let PlayerJoin {
             id,
             name,
@@ -164,7 +164,7 @@ impl UiState {
     pub fn player_update(&self, initial_preamble: bool, id: &str, update: impl FnMut(&mut ConnectedPlayer) + Send + 'static) {
         let mut update = update;
         let applied = {
-            let mut inner = self.0.lock().unwrap();
+            let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
             match inner.players.get_mut(id) {
                 Some(player) => {
                     update(player);
@@ -196,7 +196,7 @@ impl UiState {
     /// row, as Java does, so a player who joined before Celeste started is
     /// still accounted for in the session totals.
     pub fn player_leave(&self, _initial_preamble: bool, id: &str, name: &str, left: NaiveDateTime) {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         match inner.players.get_mut(id) {
             Some(player) => {
                 if !name.is_empty() {
@@ -217,7 +217,7 @@ impl UiState {
     /// Like `player_update`, but matches by display name. Some VRChat log
     /// lines (avatar switches) carry only a display name.
     pub fn player_update_by_name(&self, name: &str, update: impl FnOnce(&mut ConnectedPlayer)) {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(player) = inner.players.values_mut().find(|p| p.name == name) {
             update(player);
         }
@@ -227,7 +227,7 @@ impl UiState {
     /// clear [`UiState::instance`] — the listener sets that separately, and
     /// Java clears the table on both instance change and instance leave.
     pub fn clear_instance(&self) {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.players.clear();
         inner.player_order.clear();
         inner.pending_updates.clear();
@@ -238,7 +238,7 @@ impl UiState {
     /// sorted on priority alone, so departed players stayed interleaved with
     /// present ones.)
     pub fn fire_sort(&self) {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let players = inner.players.clone();
         inner.player_order.sort_by(|a, b| match (players.get(a), players.get(b)) {
             (Some(a), Some(b)) => compare_players(a, b),
@@ -250,7 +250,7 @@ impl UiState {
 
     /// Port of `hasActivePlayers`.
     pub fn has_active_players(&self) -> bool {
-        self.0.lock().unwrap().players.values().any(|p| p.left.is_none())
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).players.values().any(|p| p.left.is_none())
     }
 
     /// Snapshot of the live log-derived roster. Departed rows remain in the
@@ -267,59 +267,59 @@ impl UiState {
     }
 
     pub fn refresh_vrchat_api_status(&self, status: impl Into<String>) {
-        self.0.lock().unwrap().connection_status = status.into();
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).connection_status = status.into();
     }
 
     /// The instance the client is in, or `None` when no instance is open.
     pub fn instance(&self) -> Option<InstanceState> {
-        self.0.lock().unwrap().instance.clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).instance.clone()
     }
 
     pub fn set_instance(&self, instance: Option<InstanceState>) {
-        self.0.lock().unwrap().instance = instance;
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).instance = instance;
     }
 
     pub fn set_crash_report(&self, report: Option<scarlet_core::crash_watch::CrashReport>) {
-        self.0.lock().unwrap().crash_report = report;
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).crash_report = report;
     }
 
     pub fn crash_report(&self) -> Option<scarlet_core::crash_watch::CrashReport> {
-        self.0.lock().unwrap().crash_report.clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).crash_report.clone()
     }
 
     pub fn set_ui_scale(&self, scale: f32) {
-        self.0.lock().unwrap().ui_scale = scale;
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).ui_scale = scale;
     }
 
     /// Snapshot of players in current display order, for rendering.
     pub fn ordered_players(&self) -> Vec<ConnectedPlayer> {
-        let inner = self.0.lock().unwrap();
+        let inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.player_order.iter().filter_map(|id| inner.players.get(id).cloned()).collect()
     }
 
     pub fn set_group_name(&self, name: Option<String>) {
-        self.0.lock().unwrap().group_name = name;
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).group_name = name;
     }
 
     pub fn group_name(&self) -> Option<String> {
-        self.0.lock().unwrap().group_name.clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).group_name.clone()
     }
 
     pub fn set_tts_status(&self, status: Option<String>) {
-        self.0.lock().unwrap().tts_status = status;
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).tts_status = status;
     }
 
     pub fn tts_status(&self) -> Option<String> {
-        self.0.lock().unwrap().tts_status.clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).tts_status.clone()
     }
 
     pub fn connection_status(&self) -> String {
-        self.0.lock().unwrap().connection_status.clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).connection_status.clone()
     }
 
     /// Port of `updateStatusBar`'s counts: (present, left, total).
     pub fn status_counts(&self) -> (usize, usize, usize) {
-        let inner = self.0.lock().unwrap();
+        let inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let total = inner.players.len();
         let present = inner.players.values().filter(|p| p.left.is_none()).count();
         (present, total - present, total)
@@ -327,23 +327,23 @@ impl UiState {
 
     /// Port of `appendCliOutput`.
     pub fn append_cli_output(&self, text: impl Into<String>) {
-        self.0.lock().unwrap().cli_log.push(CliLine(text.into()));
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).cli_log.push(CliLine(text.into()));
     }
 
     pub fn cli_log(&self) -> Vec<CliLine> {
-        self.0.lock().unwrap().cli_log.clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).cli_log.clone()
     }
 
     pub fn clear_cli_log(&self) {
-        self.0.lock().unwrap().cli_log.clear();
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).cli_log.clear();
     }
 
     pub fn tts_enabled(&self) -> bool {
-        self.0.lock().unwrap().tts_enabled
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).tts_enabled
     }
 
     pub fn set_tts_enabled(&self, enabled: bool) {
-        self.0.lock().unwrap().tts_enabled = enabled;
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).tts_enabled = enabled;
     }
 }
 
@@ -373,7 +373,7 @@ impl CelesteUi for UiState {
     fn player_update(&self, initial_preamble: bool, id: &str, update: &mut dyn FnMut(&mut ConnectedPlayer)) {
         // The trait hands over a borrowed closure (so it stays object-safe);
         // apply it inline rather than queueing a boxed copy.
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         match inner.players.get_mut(id) {
             Some(player) => update(player),
             None => {
