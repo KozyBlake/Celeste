@@ -4092,13 +4092,22 @@ fn known_choices_for(id: &str) -> Option<Vec<(String, String)>> {
     }
 }
 
-/// The window and taskbar icon, read from `icon.png` in the data folder or
-/// beside the executable.
-///
-/// Loaded at runtime rather than embedded so replacing it does not mean
-/// rebuilding, and so no placeholder artwork has to be invented to keep the
-/// build compiling. Anything unreadable is ignored: a broken icon file is
-/// not a reason to fail to start.
+const BUNDLED_WINDOW_ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
+
+fn decode_window_icon(bytes: &[u8]) -> Result<egui::IconData, image::ImageError> {
+    let image = image::load_from_memory(bytes)?.to_rgba8();
+    let (width, height) = image.dimensions();
+    Ok(egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    })
+}
+
+/// The window and taskbar icon. A user-supplied `icon.png` in the data folder
+/// or beside the executable remains the first choice; Celeste's own artwork
+/// is embedded as the dependable fallback so a standalone binary never falls
+/// back to the platform's generic application icon.
 fn load_window_icon(data_dir: &std::path::Path) -> Option<egui::IconData> {
     let beside_binary = std::env::current_exe()
         .ok()
@@ -4106,23 +4115,27 @@ fn load_window_icon(data_dir: &std::path::Path) -> Option<egui::IconData> {
     let candidates = [Some(data_dir.join("icon.png")), beside_binary];
     for path in candidates.into_iter().flatten() {
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        match image::load_from_memory(&bytes) {
-            Ok(image) => {
-                let image = image.to_rgba8();
-                let (width, height) = image.dimensions();
+        match decode_window_icon(&bytes) {
+            Ok(icon) => {
                 tracing::info!("Using window icon {}", path.display());
-                return Some(egui::IconData {
-                    rgba: image.into_raw(),
-                    width,
-                    height,
-                });
+                return Some(icon);
             }
             Err(error) => {
                 tracing::warn!("Ignoring unreadable window icon {}: {error}", path.display());
             }
         }
     }
-    None
+
+    match decode_window_icon(BUNDLED_WINDOW_ICON) {
+        Ok(icon) => {
+            tracing::info!("Using bundled Celeste window icon");
+            Some(icon)
+        }
+        Err(error) => {
+            tracing::error!("Bundled Celeste window icon is unreadable: {error}");
+            None
+        }
+    }
 }
 
 fn settings_search_id() -> egui::Id {
@@ -4162,11 +4175,8 @@ pub fn run(
     let bounds = shared.settings.ui_bounds.get_or_null().filter(|bounds| {
         bounds.width > 0 && bounds.height > 0
     });
-    // Celeste has no artwork of its own yet -- the image that used to be
-    // bundled was Scarlet's -- so rather than ship a placeholder, the icon
-    // is read from disk at startup. Drop a PNG at `icon.png` in the data
-    // folder (or beside the binary) and it is picked up on the next launch,
-    // with no rebuild. Absent, the platform's neutral default is used.
+    // A data-folder or beside-the-binary `icon.png` can still override the
+    // bundled Celeste mark without a rebuild.
     let mut viewport = egui::ViewportBuilder::default();
     if let Some(icon) = load_window_icon(&data_dir) {
         viewport = viewport.with_icon(icon);
@@ -4235,6 +4245,14 @@ fn spawn_unattended_vrchat_login(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bundled_window_icon_is_valid_and_square() {
+        let icon = decode_window_icon(BUNDLED_WINDOW_ICON).expect("bundled icon must decode");
+        assert_eq!(icon.width, 256);
+        assert_eq!(icon.height, 256);
+        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
+    }
+
     /// The avatar databases are a choice between named services, so the
     /// setting row offers them as such. Everything else is a genuinely
     /// free list and gets a multi-line editor instead of a single-line box
