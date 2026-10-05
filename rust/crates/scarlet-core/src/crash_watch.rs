@@ -89,8 +89,6 @@ pub struct AvatarLoad {
     /// The asset bundle VRChat was unpacking, when it is known. This is
     /// the identifier that survives VRChat no longer exposing avatar ids.
     pub bundle_file_id: Option<String>,
-    /// The full `avtr_` id, when VRChat revealed it.
-    pub avatar_id: Option<String>,
     /// The wearer's standing in the watched lists, when Celeste checked
     /// their groups on join. `None` means it never got to look.
     pub watched_groups: Option<WatchedGroupProfile>,
@@ -161,18 +159,6 @@ impl CrashWatch {
         let Some(load) = self.last_avatar_load.as_mut() else { return };
         if load.avatar_name.as_deref() == Some(avatar_name) {
             load.avatar_author = author.map(str::to_string);
-        }
-    }
-
-    /// Attach the full `avtr_` id once VRChat reveals it.
-    ///
-    /// Worth more than everything else in the report put together: it is
-    /// the identifier VRChat stopped exposing, and the one a moderator
-    /// used to be able to act on directly.
-    pub fn record_avatar_id(&mut self, display_name: &str, avatar_id: &str) {
-        let Some(load) = self.last_avatar_load.as_mut() else { return };
-        if load.display_name == display_name {
-            load.avatar_id = Some(avatar_id.to_string());
         }
     }
 
@@ -258,7 +244,6 @@ mod tests {
             avatar_name: Some("Some Avatar".into()),
             avatar_author: None,
             bundle_file_id: None,
-            avatar_id: None,
             watched_groups: None,
             at: at(),
         }
@@ -343,7 +328,6 @@ mod enrichment_tests {
                 avatar_name: Some("Crasher Avatar".into()),
                 avatar_author: None,
                 bundle_file_id: None,
-                avatar_id: None,
                 watched_groups: None,
                 at: NaiveDate::from_ymd_opt(2026, 10, 4).unwrap().and_hms_opt(12, 47, 56).unwrap(),
             },
@@ -503,7 +487,6 @@ mod watched_profile_tests {
             avatar_name: None,
             avatar_author: None,
             bundle_file_id: None,
-            avatar_id: None,
             watched_groups: None,
             at: chrono::NaiveDate::from_ymd_opt(2026, 10, 4).unwrap().and_hms_opt(21, 48, 13).unwrap(),
         });
