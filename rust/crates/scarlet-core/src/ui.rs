@@ -76,7 +76,9 @@ pub struct ConnectedPlayer {
     pub pronouns_flagged: bool,
     pub avatar_name: Option<String>,
     /// The full `avtr_` id of the avatar this player is wearing, once
-    /// VRChat has revealed it — opening their QuickMenu makes it do so.
+    /// VRChat has revealed it — selecting them in your own Quick Menu
+    /// (their nameplate, or the player list) opens their user panel and
+    /// makes VRChat fetch the avatar by id.
     /// VRChat redacts avatar ids in its own debug UI, so this is the one
     /// place a full id for somebody else still becomes available.
     pub avatar_id: Option<String>,

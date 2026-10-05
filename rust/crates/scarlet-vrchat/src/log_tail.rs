@@ -235,7 +235,12 @@ pub enum LogEventKind {
     PlayerSpawnProp { user_id: String, prop_id: String },
     ApiRequest { index: i32, method: String, url: String },
     VideoLoad { display_name: String, url: String, title: String },
-    /// `QuickMenuSelectedUser?id=usr_...`: a user's QuickMenu was opened.
+    /// `QuickMenuSelectedUser?id=usr_...`: the local player opened a
+    /// chosen player's panel in their own Quick Menu.
+    ///
+    /// The Quick Menu belongs to the local player; `QuickMenuSelectedUser`
+    /// is the page within it that shows another player's details, reached
+    /// by clicking their nameplate or picking them from the player list.
     ///
     /// On its own this is just UI navigation. Its value is what follows:
     /// VRChat fetches that user's current avatar by id, and the fetch

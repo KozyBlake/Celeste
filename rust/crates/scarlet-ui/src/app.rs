@@ -1627,8 +1627,9 @@ impl ScarletApp {
                             ))
                             .on_hover_text(
                                 "VRChat only writes a full avatar ID when it fetches the avatar by \
-                                 ID. Opening this player's QuickMenu in VRChat makes it do that, \
-                                 and Celeste will pick it up from the log.",
+                                 ID. Selecting this player in your Quick Menu - their nameplate, or \
+                                 the player list - opens their user panel, which makes VRChat do \
+                                 that, and Celeste picks the ID up from the log.",
                             );
                         }
                     }

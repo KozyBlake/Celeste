@@ -146,7 +146,12 @@ pub struct ScarletEventListener {
     /// Tracks whether the session being tailed ended cleanly, and who was
     /// last loading an avatar if it did not.
     crash_watch: scarlet_core::crash_watch::CrashWatch,
-    /// The user whose QuickMenu was opened most recently, and when.
+    /// The user most recently selected in the local player's Quick Menu,
+    /// and when.
+    ///
+    /// Not *their* menu — the Quick Menu belongs to the local player, and
+    /// `QuickMenuSelectedUser` is the page inside it that shows a chosen
+    /// player's details.
     ///
     /// VRChat fetches that user's avatar by id a moment later, and that
     /// fetch is the only place a full, unredacted `avtr_` for someone
@@ -1279,7 +1284,8 @@ impl ScarletEventListener {
     }
 
     /// VRChat fetched an avatar by id. Attributed to the user whose
-    /// QuickMenu was just opened, if one was.
+    /// user panel was just opened in the local player's Quick Menu, if
+    /// one was.
     ///
     /// Measured on a real session: the fetch follows the selection by
     /// 2-12 log lines, within the same second. The window here is
