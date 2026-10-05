@@ -49,6 +49,7 @@ impl CelesteUi for RecordingUi {
         row.pronouns = player.pronouns.clone();
         row.pronouns_flagged = player.pronouns_flagged;
         row.is_rejoin_from_prev = player.is_rejoin_from_prev;
+        row.watched_memberships = player.watched_memberships.clone();
         calls.players.retain(|p| p.id != player.id);
         calls.players.push(row);
         calls.joins.push(player);

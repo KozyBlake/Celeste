@@ -222,6 +222,12 @@ pub struct PlayerJoin {
     pub age_verification_status: Option<String>,
     pub avatar_name: Option<String>,
     pub avatar_info: Option<AvatarBundleInfo>,
+    /// Watched-group memberships resolved by the join check.
+    ///
+    /// Carried on the join rather than pushed by a later `player_update`:
+    /// in the live path `check_player` runs *before* the row is created, so
+    /// an update would target a row that does not exist yet and be dropped.
+    pub watched_memberships: Vec<crate::watched_membership::WatchedMembership>,
 }
 
 impl PlayerJoin {
@@ -241,6 +247,7 @@ impl PlayerJoin {
             age_verification_status: None,
             avatar_name: None,
             avatar_info: None,
+            watched_memberships: Vec::new(),
         }
     }
 }

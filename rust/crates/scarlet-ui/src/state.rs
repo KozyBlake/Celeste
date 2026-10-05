@@ -92,6 +92,7 @@ impl UiState {
             age_verification_status,
             avatar_name,
             avatar_info,
+            watched_memberships,
         } = join;
 
         match inner.players.get_mut(&id) {
@@ -117,6 +118,12 @@ impl UiState {
                 if avatar_info.is_some() {
                     player.avatar_info = avatar_info;
                 }
+                // An empty list means the check could not look, not that
+                // they are in nothing; don't erase a standing we already
+                // have (see `watched_groups_of`'s Option).
+                if !watched_memberships.is_empty() {
+                    player.watched_memberships = watched_memberships;
+                }
             }
             None => {
                 let mut player = ConnectedPlayer::new(id.clone(), name, joined);
@@ -129,6 +136,7 @@ impl UiState {
                 player.is_rejoin_from_prev = is_rejoin_from_prev;
                 player.avatar_name = avatar_name;
                 player.avatar_info = avatar_info;
+                player.watched_memberships = watched_memberships;
                 inner.player_order.push(id.clone());
                 inner.players.insert(id.clone(), player);
             }

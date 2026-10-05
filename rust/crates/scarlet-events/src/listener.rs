@@ -176,6 +176,13 @@ struct CheckOutcome {
     trust_rank: TrustRank,
     account_age: Option<(i32, i32, i32)>,
     age_verification_status: Option<String>,
+    /// Every watched group this user is in, for the Groups column.
+    ///
+    /// Returned on the outcome rather than pushed from inside the check:
+    /// the live join path runs the check *before* the row exists, and the
+    /// trait's `player_update` takes a borrowed closure it cannot queue, so
+    /// such an update is dropped (see `UiState`'s trait impl).
+    watched_memberships: Vec<scarlet_core::watched_membership::WatchedMembership>,
 }
 
 /// How stale a cached profile may be and still answer a join check.
@@ -201,6 +208,7 @@ impl CheckOutcome {
             trust_rank: TrustRank::Unknown,
             account_age: None,
             age_verification_status: None,
+            watched_memberships: Vec::new(),
         }
     }
 }
@@ -547,6 +555,7 @@ impl ScarletEventListener {
             join.trust_rank = outcome.trust_rank;
             join.account_age = outcome.account_age;
             join.age_verification_status = outcome.age_verification_status.clone();
+            join.watched_memberships = outcome.watched_memberships.clone();
             self.roster.join(&user_id, &display_name, false, move || {
                 ui.player_join(false, join);
                 // Java's `playerJoin` re-sorts the table for every live
@@ -1063,10 +1072,16 @@ impl ScarletEventListener {
                     silent: hit.group.silent,
                 })
                 .collect();
-            let initial_preamble = !self.is_tailer_live;
-            self.deps.ui.player_update(initial_preamble, user_id, &mut |player| {
-                player.watched_memberships = memberships.clone();
-            });
+            // Catch-up rows already exist (the roster adds them before the
+            // deferred checks run), so push straight to them; the live path
+            // has no row yet and takes delivery through the outcome.
+            if preamble {
+                let queued = memberships.clone();
+                self.deps.ui.player_update(true, user_id, &mut |player| {
+                    player.watched_memberships = queued.clone();
+                });
+            }
+            outcome.watched_memberships = memberships;
         }
         if let Some(checked) = &checked_groups {
             self.watched_group_profiles.insert(
@@ -2472,6 +2487,87 @@ mod tests {
             h.emitter.events(),
             vec!["print:usr_owner:prnt_1".to_string(), "emoji:usr_owner:inv_emoji".to_string()]
         );
+    }
+
+    /// The Groups column is filled on the live join path.
+    ///
+    /// This regressed once and showed as an empty column on every row while
+    /// the advisories beside it named the very same groups. The cause was
+    /// ordering: `check_player` runs *before* `ui.player_join` creates the
+    /// row, and the trait's `player_update` takes a borrowed closure it
+    /// cannot queue, so the push was dropped for a row that did not exist
+    /// yet. Delivering the set on the join outcome is what fixes it, so the
+    /// assertion here is specifically that a row created by a live join
+    /// already carries its memberships.
+    #[tokio::test]
+    async fn a_live_join_carries_the_full_watched_group_set_to_the_row() {
+        const MEMBER: &str = "usr_22222222-2222-2222-2222-222222222222";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/users/{MEMBER}/groups")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"groupId": "grp_bad", "name": "Crasher Crew", "memberVisibility": "visible"},
+                {"groupId": "grp_mid", "name": "Loud Lot", "memberVisibility": "hidden"},
+                {"groupId": "grp_unwatched", "name": "Some Public Group"},
+            ])))
+            .mount(&server)
+            .await;
+
+        let h_dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(h_dir.path()));
+        settings.store.set_string("vrchat_group_id", GROUP_ID);
+        let watched_groups = Arc::new(WatchedGroups::open(h_dir.path(), "watched_groups.json"));
+        use scarlet_core::watched_groups::WatchedGroupType;
+        for (id, kind, message) in [
+            ("grp_bad", WatchedGroupType::Malicious, "Kick on sight"),
+            ("grp_mid", WatchedGroupType::Nuisance, "Watch them"),
+        ] {
+            let mut group = scarlet_core::watched_groups::WatchedGroup::new(id);
+            group.r#type = kind;
+            group.message = Some(message.to_string());
+            watched_groups.add_watched_group(group);
+        }
+
+        let ui = RecordingUi::default();
+        let mut listener = ScarletEventListener::new(ListenerDeps {
+            ui: Arc::new(ui.clone()),
+            vrchat: Arc::new(tokio::sync::RwLock::new(None)),
+            settings,
+            data: Arc::new(ScarletData::open(h_dir.path())),
+            staff_list: Arc::new(StaffList::open(h_dir.path(), "staff_list.json")),
+            watched_users: Arc::new(WatchedEntities::open(
+                h_dir.path(),
+                "watched_users.json",
+                scarlet_core::watched_entities::is_valid_user_id,
+            )),
+            watched_avatars: Arc::new(WatchedEntities::open(
+                h_dir.path(),
+                "watched_avatars.json",
+                scarlet_core::watched_entities::is_valid_avatar_id,
+            )),
+            watched_groups,
+            pronoun_lists: Arc::new(PronounLists::open(h_dir.path())),
+            tts: Arc::new(RecordingTts::default()),
+            avatar_search: Arc::new(crate::NoAvatarSearch),
+            emitter: Arc::new(crate::NoopAuditEmitter),
+        });
+        *listener.deps.vrchat.write().await = Some(Arc::new(VrChatClient::with_base_url(&server.uri()).unwrap()));
+
+        listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        listener.handle(entry(false, 101, player_joined("Member", MEMBER))).await;
+
+        let row = ui.player(MEMBER).expect("the join created a row");
+        let labels: Vec<&str> = row.watched_memberships.iter().map(|m| m.label()).collect();
+        assert_eq!(
+            labels,
+            vec!["Crasher Crew", "Loud Lot"],
+            "both watched memberships reach the row; the unwatched group is not listed"
+        );
+        assert_eq!(row.watched_memberships[0].kind, "MALICIOUS");
+        assert!(row.watched_memberships[1].hidden, "hidden membership keeps that fact");
+        // The advisory and the column are fed from the same check, so the
+        // column must never be empty while the advisory names a group.
+        assert!(row.advisory.as_deref().unwrap_or_default().contains("Kick on sight"));
     }
 
     #[test]
