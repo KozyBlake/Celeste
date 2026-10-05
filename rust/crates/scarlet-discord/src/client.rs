@@ -106,13 +106,38 @@ pub async fn connect_and_serve(token: Option<String>, state: SharedState) {
 
                 let started = std::time::Instant::now();
                 match client.start().await {
-                    Ok(()) => tracing::warn!("Discord client stopped; reconnecting"),
-                    Err(error) => tracing::error!(%error, "Discord client stopped with an error; reconnecting"),
+                    Ok(()) => {
+                        tracing::warn!("Discord client stopped; reconnecting");
+                        state
+                            .health_reporter
+                            .incident(
+                                "Discord gateway",
+                                "The Discord client stopped unexpectedly. Celeste is reconnecting automatically.",
+                            )
+                            .await;
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "Discord client stopped with an error; reconnecting");
+                        state
+                            .health_reporter
+                            .incident(
+                                "Discord gateway",
+                                format!("The Discord client stopped: {error}. Celeste is reconnecting automatically."),
+                            )
+                            .await;
+                    }
                 }
                 Some(started.elapsed())
             }
             Some(Err(error)) => {
                 tracing::error!(%error, "Failed to build Discord client; retrying");
+                state
+                    .health_reporter
+                    .incident(
+                        "Discord gateway",
+                        format!("Celeste could not establish a Discord client: {error}. It will keep retrying automatically."),
+                    )
+                    .await;
                 None
             }
             // `token` was normalized above, so this is defensive rather than

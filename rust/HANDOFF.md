@@ -394,3 +394,12 @@ committed.
 
 Still the release gate, unchanged: hands-on testing against Blake's real
 Discord server and VRChat account.
+
+## Update 2026-10-05: operational health reporting
+
+The previously dead `opsAlertChannelSf` route is live. Configuring it sends a
+real test message so channel permissions are verified immediately. Celeste
+then posts deduplicated incidents and recoveries for Discord gateway failures
+and VRChat session authorization loss; recovery notices include outage length
+and retry count. Discord failures that cannot be delivered during the outage
+are retained in memory and reported after the gateway becomes ready again.

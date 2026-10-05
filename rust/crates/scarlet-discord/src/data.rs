@@ -135,7 +135,7 @@ impl DiscordConfigStore {
     pub fn map_value(&self, map_name: &str, key: &str) -> Option<String> {
         self.value
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| error.into_inner())
             .get(map_name)?
             .as_object()?
             .get(key)?
@@ -146,7 +146,7 @@ impl DiscordConfigStore {
     pub fn string(&self, field: &str) -> Option<String> {
         self.value
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| error.into_inner())
             .get(field)?
             .as_str()
             .map(str::to_string)
@@ -155,7 +155,7 @@ impl DiscordConfigStore {
     pub fn string_map(&self, map_name: &str) -> HashMap<String, String> {
         self.value
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| error.into_inner())
             .get(map_name)
             .and_then(|value| value.as_object())
             .map(|map| {
@@ -368,6 +368,11 @@ impl TypeMapKey for PendingModerationKey {
     type Value = Arc<crate::pending_moderation::PendingModeration>;
 }
 
+pub struct OpsHealthReporterKey;
+impl TypeMapKey for OpsHealthReporterKey {
+    type Value = Arc<crate::health::OpsHealthReporter>;
+}
+
 pub struct HttpKey;
 impl TypeMapKey for HttpKey {
     type Value = SharedHttp;
@@ -437,6 +442,7 @@ pub struct SharedState {
     /// same instance that background emitters read, so routing changes take
     /// effect immediately instead of only after a restart.
     pub discord_config: Arc<DiscordConfigStore>,
+    pub health_reporter: Arc<crate::health::OpsHealthReporter>,
     pub voice_manager: Arc<songbird::Songbird>,
     pub process_controller: Arc<ProcessController>,
     pub scarlet_data: Arc<scarlet_core::data::ScarletData>,
@@ -472,6 +478,7 @@ impl SharedState {
         data.insert::<SettingsKey>(self.settings.clone());
         data.insert::<AvatarSearchKey>(self.avatar_search.clone());
         data.insert::<DiscordConfigKey>(self.discord_config.clone());
+        data.insert::<OpsHealthReporterKey>(self.health_reporter.clone());
         data.insert::<DiscordPermissionsKey>(discord_permissions);
         data.insert::<PendingModerationKey>(pending_moderation);
         data.insert::<ProcessControllerKey>(self.process_controller.clone());

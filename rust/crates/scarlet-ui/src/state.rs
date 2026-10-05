@@ -258,7 +258,7 @@ impl UiState {
     pub fn active_player_ids(&self) -> Vec<String> {
         self.0
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| error.into_inner())
             .players
             .values()
             .filter(|player| player.left.is_none())

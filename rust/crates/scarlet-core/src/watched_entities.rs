@@ -233,7 +233,7 @@ impl WatchedEntities {
     pub fn add_watched_entity(&self, entity: WatchedEntity) {
         self.entities
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| error.into_inner())
             .insert(entity.id.clone(), entity);
         self.save();
     }

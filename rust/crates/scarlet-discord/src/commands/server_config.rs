@@ -1,7 +1,7 @@
 //! Server-manager configuration commands backed by Java-compatible config
 //! and Celeste settings storage.
 
-use serenity::builder::{CreateCommand, CreateCommandOption};
+use serenity::builder::{CreateCommand, CreateCommandOption, CreateMessage};
 use serenity::client::Context;
 use serenity::model::application::{
     CommandInteraction, CommandOptionType, ResolvedOption, ResolvedValue,
@@ -17,7 +17,7 @@ pub const ACTION_LOG_NAME: &str = "set-discord-action-log-channel";
 pub const ACCOUNT_AGE_NAME: &str = "set-discord-account-age-alert";
 pub const AUTO_INVITE_NAME: &str = "set-verification-auto-invite";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ChannelSetting {
     Training,
     OpsAlert,
@@ -106,6 +106,30 @@ pub async fn run_channel(
             &format!("Could not save Discord configuration: {err}"),
         )
         .await;
+    }
+    if setting == ChannelSetting::OpsAlert {
+        if let Some(channel) = selected {
+            if let Err(error) = channel
+                .id
+                .send_message(
+                    &ctx.http,
+                    CreateMessage::new().content(format!(
+                        "🟢 **Celeste health reporting is active** · version {}\nThis channel will receive deduplicated operational incidents and recovery notices.",
+                        scarlet_core::identity::VERSION,
+                    )),
+                )
+                .await
+            {
+                return super::reply_ephemeral(
+                    ctx,
+                    command,
+                    &format!(
+                        "The channel was saved, but Celeste could not send its test alert: {error}"
+                    ),
+                )
+                .await;
+            }
+        }
     }
     let message = match (setting, selected) {
         (ChannelSetting::Training, Some(channel)) => format!(

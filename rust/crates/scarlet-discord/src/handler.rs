@@ -25,6 +25,16 @@ impl EventHandler for Handler {
             ready.user.name,
             ready.user.id
         );
+        let health = {
+            ctx.data
+                .read()
+                .await
+                .get::<crate::data::OpsHealthReporterKey>()
+                .cloned()
+        };
+        if let Some(health) = health {
+            health.discord_ready(ctx.http.clone()).await;
+        }
         commands::register_global_commands(&ctx).await;
         commands::clear_stale_guild_commands(&ctx).await;
         reconnect_voice_channel(&ctx).await;

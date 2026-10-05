@@ -461,6 +461,7 @@ pub struct ScarletApp {
     discord_http: scarlet_discord::data::SharedHttp,
     avatar_search: Arc<scarlet_discord::avatar_search::AvatarSearch>,
     discord_config: Arc<scarlet_discord::data::DiscordConfigStore>,
+    health_reporter: Arc<scarlet_discord::health::OpsHealthReporter>,
     voice_manager: Arc<songbird::Songbird>,
     process_controller: Arc<scarlet_discord::data::ProcessController>,
     /// Set when a background VRChat login stopped to ask for a two-factor
@@ -577,6 +578,7 @@ impl ScarletApp {
         let discord_http = shared.http.clone();
         let avatar_search = shared.avatar_search.clone();
         let discord_config = shared.discord_config.clone();
+        let health_reporter = shared.health_reporter.clone();
         let voice_manager = shared.voice_manager.clone();
         let process_controller = shared.process_controller.clone();
         let settings = Some(shared.settings.clone());
@@ -627,6 +629,7 @@ impl ScarletApp {
                         avatar_search: avatar_search.clone(),
                         http: discord_http.clone(),
                         discord_config: discord_config.clone(),
+                        health_reporter: health_reporter.clone(),
                         voice_manager: voice_manager.clone(),
                         process_controller: process_controller.clone(),
                         scarlet_data: scarlet_data.clone(),
@@ -659,6 +662,7 @@ impl ScarletApp {
             avatar_search,
             discord_http,
             discord_config,
+            health_reporter,
             voice_manager,
             process_controller,
             two_factor_tx,
@@ -3855,6 +3859,7 @@ impl eframe::App for ScarletApp {
                             avatar_search: self.avatar_search.clone(),
                             http: self.discord_http.clone(),
                             discord_config: self.discord_config.clone(),
+                            health_reporter: self.health_reporter.clone(),
                             voice_manager: self.voice_manager.clone(),
                             process_controller: self.process_controller.clone(),
                             scarlet_data: self.scarlet_data.clone(),

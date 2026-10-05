@@ -89,6 +89,10 @@ fn main() -> anyhow::Result<()> {
     // the event listener's audit emitter can post without a `Context`.
     let discord_http: scarlet_discord::data::SharedHttp = Arc::new(tokio::sync::RwLock::new(None));
     let discord_config = Arc::new(scarlet_discord::data::DiscordConfigStore::open(&data_dir));
+    let health_reporter = Arc::new(scarlet_discord::health::OpsHealthReporter::new(
+        discord_http.clone(),
+        discord_config.clone(),
+    ));
     if let Err(error) = scarlet_discord::data::synchronize_guild_id(&settings, &discord_config) {
         tracing::error!(%error, "Failed to synchronize Discord guild configuration");
     }
@@ -100,6 +104,7 @@ fn main() -> anyhow::Result<()> {
         avatar_search: avatar_search.clone(),
         http: discord_http.clone(),
         discord_config: discord_config.clone(),
+        health_reporter: health_reporter.clone(),
         voice_manager: voice_manager.clone(),
         process_controller,
         scarlet_data: Arc::new(scarlet_core::data::ScarletData::open(&data_dir)),
@@ -147,6 +152,7 @@ fn main() -> anyhow::Result<()> {
         settings.clone(),
         ui_state.clone(),
         (!headless).then_some(two_factor_tx.clone()),
+        health_reporter,
     );
     spawn_cache_cleanup(runtime.handle(), data_dir.clone(), settings.clone());
 
@@ -443,6 +449,7 @@ fn spawn_vrchat_session_watchdog(
     two_factor_tx: Option<
         std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
     >,
+    health_reporter: Arc<scarlet_discord::health::OpsHealthReporter>,
 ) {
     runtime.spawn(async move {
         const INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(90);
@@ -478,6 +485,12 @@ fn spawn_vrchat_session_watchdog(
                         {
                             settings.last_auth_refresh.set(Some(now));
                         }
+                        health_reporter
+                            .recovered(
+                                "VRChat session",
+                                "The moderation account is authenticated again.",
+                            )
+                            .await;
                     }
                     Err(error) if error.is_unauthorized() => {
                         must_recover = true;
@@ -500,6 +513,12 @@ fn spawn_vrchat_session_watchdog(
                 if retry_ready {
                     last_recovery_attempt = Some(now);
                     tracing::warn!("VRChat session is no longer authorized; attempting unattended recovery");
+                    health_reporter
+                        .incident(
+                            "VRChat session",
+                            "VRChat rejected Celeste's saved session. Automatic sign-in recovery has started.",
+                        )
+                        .await;
 
                     ui_state.refresh_vrchat_api_status("VRChat: session expired; reconnecting...");
                     match scarlet_vrchat::client::login_with_stored_credentials_detailed(&settings).await {
@@ -508,6 +527,12 @@ fn spawn_vrchat_session_watchdog(
                             last_recovery_attempt = None;
                             tracing::info!("VRChat session recovery succeeded");
                             ui_state.refresh_vrchat_api_status("VRChat: session recovered");
+                            health_reporter
+                                .recovered(
+                                    "VRChat session",
+                                    "The moderation account is authenticated again.",
+                                )
+                                .await;
                         }
                         scarlet_vrchat::client::StoredLogin::RequiresTwoFactor { client, methods } => {
                             *slot.write().await = None;

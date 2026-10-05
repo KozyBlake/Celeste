@@ -491,3 +491,15 @@ redaction with it. See that file's F1.
 - Prefer porting one Java file (or one cohesive method group) at a time to completion over touching many files shallowly.
 - When a Java file is too large to read in one call, read it in sections (grep for method boundaries first) rather than skipping it.
 - Keep this file updated as subsystems move from "not started" → "in progress" → "done", with the line-count table trimmed as things land.
+
+## Celeste operational health alerts (5 Oct 2026)
+
+`discord_bot.json` already exposed `opsAlertChannelSf` through
+`/set-ops-alert-channel`, but neither Java nor the Rust port consumed it.
+Celeste deliberately extends the reference behavior here: the selected
+channel now receives a configuration test, Discord gateway termination and
+recovery, and VRChat authorization loss and recovery. Repeated retry failures
+are folded into one incident and the eventual recovery includes its duration
+and attempt count. A Discord outage cannot be reported through Discord while
+it is in progress, so Celeste records it locally and posts the summary when
+the gateway is ready again.
