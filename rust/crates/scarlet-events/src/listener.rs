@@ -146,6 +146,13 @@ pub struct ScarletEventListener {
     /// Tracks whether the session being tailed ended cleanly, and who was
     /// last loading an avatar if it did not.
     crash_watch: scarlet_core::crash_watch::CrashWatch,
+    /// The user whose QuickMenu was opened most recently, and when.
+    ///
+    /// VRChat fetches that user's avatar by id a moment later, and that
+    /// fetch is the only place a full, unredacted `avtr_` for someone
+    /// else appears. Pairing the two is what makes an avatar id
+    /// attributable again after VRChat stopped exposing them.
+    pending_quickmenu_user: Option<(String, NaiveDateTime)>,
     /// Each user's watched-group standing, from the check run on join.
     ///
     /// Kept because a crash report names a person and the next question
@@ -234,6 +241,7 @@ impl ScarletEventListener {
             crash_watch: scarlet_core::crash_watch::CrashWatch::new(),
             seen_moderation_shapes: std::collections::HashSet::new(),
             watched_group_profiles: std::collections::HashMap::new(),
+            pending_quickmenu_user: None,
             live_avatar_switches_without_api_log: 0,
             warned_missing_api_logging: false,
             // Java: `new Pacer(500L)`.
@@ -406,6 +414,12 @@ impl ScarletEventListener {
             }
             LogEventKind::VideoLoad { display_name, url, title } => {
                 self.log_video_load(preamble, timestamp, display_name, url, title).await
+            }
+            LogEventKind::QuickMenuUserSelected { user_id } => {
+                self.pending_quickmenu_user = Some((user_id, timestamp));
+            }
+            LogEventKind::AvatarFetched { avatar_id } => {
+                self.log_avatar_fetched(preamble, timestamp, avatar_id);
             }
             LogEventKind::AvatarUnpacked { avatar_name, author_name } => {
                 self.crash_watch.record_avatar_author(preamble, &avatar_name, author_name.as_deref());
@@ -666,6 +680,7 @@ impl ScarletEventListener {
                 avatar_name: Some(avatar_display_name.clone()),
                 avatar_author: None,
                 bundle_file_id: None,
+                avatar_id: None,
                 watched_groups: None,
                 at: timestamp,
             },
@@ -1261,6 +1276,53 @@ impl ScarletEventListener {
                 .then_with(|| a.group.silent.cmp(&b.group.silent))
         });
         Some(watched)
+    }
+
+    /// VRChat fetched an avatar by id. Attributed to the user whose
+    /// QuickMenu was just opened, if one was.
+    ///
+    /// Measured on a real session: the fetch follows the selection by
+    /// 2-12 log lines, within the same second. The window here is
+    /// generous by comparison but still short, and **only the first
+    /// fetch after a selection is taken** - further fetches follow for
+    /// unrelated reasons, and attributing those too would start pinning
+    /// other people's avatars on whoever was last clicked.
+    ///
+    /// Fetches with no preceding selection are common and are ignored:
+    /// the client loads its own and others' avatars throughout, and an
+    /// unattributed id helps nobody.
+    fn log_avatar_fetched(&mut self, preamble: bool, timestamp: NaiveDateTime, avatar_id: String) {
+        const ATTRIBUTION_WINDOW_SECONDS: i64 = 5;
+
+        let Some((user_id, selected_at)) = self.pending_quickmenu_user.clone() else { return };
+        if (timestamp - selected_at).num_seconds().abs() > ATTRIBUTION_WINDOW_SECONDS {
+            self.pending_quickmenu_user = None;
+            return;
+        }
+        // Consume it: one selection attributes one fetch.
+        self.pending_quickmenu_user = None;
+
+        // Only a name -> id map exists; this walks it backwards. The
+        // instance roster is tens of entries, not thousands.
+        let display_name = self
+            .display_name_to_user_id
+            .iter()
+            .find(|(_, id)| **id == user_id)
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| user_id.clone());
+        tracing::info!("{display_name} ({user_id}) is wearing {avatar_id}");
+        self.crash_watch.record_avatar_id(&display_name, &avatar_id);
+
+        let initial_preamble = !self.is_tailer_live;
+        let id = avatar_id.clone();
+        self.deps.ui.player_update(initial_preamble, &user_id, &mut |player| {
+            player.avatar_id = Some(id.clone());
+        });
+        if !preamble {
+            self.deps
+                .ui
+                .append_cli_output(&format!("{display_name} is wearing avatar {avatar_id}"));
+        }
     }
 
     /// A kick that took effect in this instance.

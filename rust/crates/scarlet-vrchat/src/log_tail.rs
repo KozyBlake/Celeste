@@ -235,6 +235,26 @@ pub enum LogEventKind {
     PlayerSpawnProp { user_id: String, prop_id: String },
     ApiRequest { index: i32, method: String, url: String },
     VideoLoad { display_name: String, url: String, title: String },
+    /// `QuickMenuSelectedUser?id=usr_...`: a user's QuickMenu was opened.
+    ///
+    /// On its own this is just UI navigation. Its value is what follows:
+    /// VRChat fetches that user's current avatar by id, and the fetch
+    /// carries the full unredacted `avtr_`. Measured on a real session,
+    /// the fetch lands 2-12 lines later, same second.
+    QuickMenuUserSelected { user_id: String },
+    /// `[API] Requesting Get avatars/avtr_...`: VRChat is fetching an
+    /// avatar by id.
+    ///
+    /// **This is the only place a full avatar id for someone else
+    /// reliably appears.** VRChat redacts avatar ids in the in-game debug
+    /// UI, and `Switching X to avatar Y` carries only a display name — so
+    /// this line is what makes "which avatar exactly" answerable again.
+    ///
+    /// Unattributed by itself; [`QuickMenuUserSelected`] immediately
+    /// before is what says whose it is.
+    ///
+    /// [`QuickMenuUserSelected`]: LogEventKind::QuickMenuUserSelected
+    AvatarFetched { avatar_id: String },
     /// `[AssetBundleDownloadManager] [N] Unpacking Avatar (<name> by <author>)`
     ///
     /// **Not in Java.** The last thing a client manages before a crasher
@@ -383,6 +403,27 @@ pub fn parse_entry_text(text: &str) -> Option<LogEventKind> {
                     url: after_sending[sep1 + " request to ".len()..].to_string(),
                 });
             }
+        }
+        return None;
+    }
+
+    // "[API] Requesting Get avatars/avtr_..." - note this is the
+    // `Requesting` form, not the `[API] [N] Sending` form the ApiRequest
+    // arm handles; both appear for the same fetch and either would do,
+    // but `Requesting` comes first.
+    if let Some(after) = text.strip_prefix("[API] Requesting Get avatars/") {
+        let id: String = after.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+        if is_avatar_id(&id) {
+            return Some(LogEventKind::AvatarFetched { avatar_id: id });
+        }
+        return None;
+    }
+
+    if let Some(at) = text.find("QuickMenuSelectedUser?id=") {
+        let after = &text[at + "QuickMenuSelectedUser?id=".len()..];
+        let id: String = after.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+        if id.starts_with("usr_") && id.len() == 40 {
+            return Some(LogEventKind::QuickMenuUserSelected { user_id: id });
         }
         return None;
     }
@@ -733,6 +774,20 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
     }
 }
 
+/// `avtr_` followed by a canonical UUID. Strict on purpose: a truncated
+/// or redacted id on a moderation report is worse than none, and VRChat
+/// does redact these in its own debug UI.
+fn is_avatar_id(id: &str) -> bool {
+    let Some(uuid) = id.strip_prefix("avtr_") else { return false };
+    let groups = [8usize, 4, 4, 4, 12];
+    let parts: Vec<&str> = uuid.split('-').collect();
+    parts.len() == groups.len()
+        && parts
+            .iter()
+            .zip(groups)
+            .all(|(part, len)| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 /// Fast string gate for the exact families understood by
 /// [`parse_entry_text`]. It avoids parsing timestamps for the overwhelming
 /// majority of Unity's diagnostic chatter without changing parser behavior.
@@ -746,6 +801,8 @@ fn might_contain_event(line: &str) -> bool {
         "[Behaviour] OnPlayerLeft ",
         "[Behaviour] Switching ",
         "[API] [",
+        "[API] Requesting Get avatars/",
+        "QuickMenuSelectedUser?id=",
         "[AssetBundleDownloadManager] ",
         "[ModerationManager] ",
         "[SharingManager] User ",
@@ -1383,5 +1440,50 @@ mod stall_gate_tests {
 
         // Already reported; once per stall.
         assert!(!would_report(false, true, true, true));
+    }
+}
+
+#[cfg(test)]
+mod avatar_id_tests {
+    use super::*;
+
+    /// The pair that makes a full avatar id attributable, taken verbatim
+    /// from a real session (ids altered).
+    #[test]
+    fn a_quickmenu_selection_and_an_avatar_fetch_both_parse() {
+        assert_eq!(
+            parse_entry_text(
+                "VP QuickMenuSelectedUser OnNavigated() QuickMenuSelectedUser?id=usr_a6ddc195-aff0-4aaa-add4-8db6dbef110e"
+            ),
+            Some(LogEventKind::QuickMenuUserSelected {
+                user_id: "usr_a6ddc195-aff0-4aaa-add4-8db6dbef110e".to_string()
+            })
+        );
+        assert_eq!(
+            parse_entry_text("[API] Requesting Get avatars/avtr_85a409a2-2461-4daa-b1a1-c692a22d6919 {{}} retryCount: 2"),
+            Some(LogEventKind::AvatarFetched {
+                avatar_id: "avtr_85a409a2-2461-4daa-b1a1-c692a22d6919".to_string()
+            })
+        );
+    }
+
+    /// A truncated or redacted id must be rejected rather than reported.
+    /// VRChat redacts these in its own debug UI, so half an id is a
+    /// realistic input, and half an id on a report is worse than none.
+    #[test]
+    fn a_partial_avatar_id_is_not_accepted() {
+        assert!(is_avatar_id("avtr_85a409a2-2461-4daa-b1a1-c692a22d6919"));
+        assert!(!is_avatar_id("avtr_85a409a2-2461-4daa-b1a1-c692a22d691"), "one char short");
+        assert!(!is_avatar_id("avtr_85a409a2…"), "redacted");
+        assert!(!is_avatar_id("avtr_"));
+        assert!(!is_avatar_id("usr_85a409a2-2461-4daa-b1a1-c692a22d6919"), "wrong prefix");
+        assert!(!is_avatar_id("avtr_85a409a2-2461-4daa-b1a1-c692a22d691g"), "not hex");
+    }
+
+    /// Other avatar API paths must not be mistaken for a fetch by id.
+    #[test]
+    fn only_a_fetch_by_id_counts() {
+        assert_eq!(parse_entry_text("[API] Requesting Get avatars/favorites {{}} retryCount: 2"), None);
+        assert_eq!(parse_entry_text("[API] Requesting Get users/usr_1/avatar {{}} retryCount: 2"), None);
     }
 }

@@ -75,6 +75,11 @@ pub struct ConnectedPlayer {
     pub pronouns: Option<String>,
     pub pronouns_flagged: bool,
     pub avatar_name: Option<String>,
+    /// The full `avtr_` id of the avatar this player is wearing, once
+    /// VRChat has revealed it — opening their QuickMenu makes it do so.
+    /// VRChat redacts avatar ids in its own debug UI, so this is the one
+    /// place a full id for somebody else still becomes available.
+    pub avatar_id: Option<String>,
     pub avatar_info: Option<AvatarBundleInfo>,
     /// Human-readable reason avatar info is missing, shown by "View" when
     /// [`ConnectedPlayer::avatar_info`] is `None`.
@@ -110,6 +115,7 @@ impl ConnectedPlayer {
             pronouns: None,
             pronouns_flagged: false,
             avatar_name: None,
+            avatar_id: None,
             avatar_info: None,
             avatar_info_note: None,
             account_age: None,

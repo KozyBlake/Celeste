@@ -23,6 +23,7 @@ fn main() {
                     avatar_name: Some(avatar_display_name),
                     avatar_author: None,
                     bundle_file_id: None,
+                    avatar_id: None,
                     watched_groups: None,
                     at: timestamp,
                 });

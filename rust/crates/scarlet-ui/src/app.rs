@@ -407,6 +407,7 @@ const CONTROL_WIDTH: f32 = 260.0;
 pub struct AvatarStatsView {
     player_name: String,
     avatar_name: Option<String>,
+    avatar_id: Option<String>,
     info: Option<scarlet_core::ui::AvatarBundleInfo>,
     note: Option<String>,
     /// Pre-rendered report block, built when the window opens so the
@@ -1225,6 +1226,7 @@ impl ScarletApp {
                     self.avatar_stats_open = Some(AvatarStatsView {
                         player_name: player.name.clone(),
                         avatar_name: player.avatar_name.clone(),
+                        avatar_id: player.avatar_id.clone(),
                         info: player.avatar_info.clone(),
                         note: player.avatar_info_note.clone(),
                         evidence: scarlet_core::report_evidence::has_avatar_evidence(player)
@@ -1613,6 +1615,25 @@ impl ScarletApp {
                     ui.label(view.avatar_name.clone().unwrap_or_else(|| "(unknown)".to_string()));
                     ui.end_row();
 
+                    ui.label("Avatar ID");
+                    match &view.avatar_id {
+                        Some(id) => {
+                            ui.add(egui::Label::new(egui::RichText::new(id).monospace()).truncate())
+                                .on_hover_text(id);
+                        }
+                        None => {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new("not revealed yet").weak().italics(),
+                            ))
+                            .on_hover_text(
+                                "VRChat only writes a full avatar ID when it fetches the avatar by \
+                                 ID. Opening this player's QuickMenu in VRChat makes it do that, \
+                                 and Celeste will pick it up from the log.",
+                            );
+                        }
+                    }
+                    ui.end_row();
+
                     match &view.info {
                         Some(info) => {
                             ui.label("Performance");
@@ -1748,6 +1769,15 @@ impl ScarletApp {
                                     .on_hover_text(author);
                                 ui.end_row();
                             }
+                            if let Some(avatar_id) = &load.avatar_id {
+                                ui.label("Avatar ID");
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(avatar_id).monospace().strong())
+                                        .truncate(),
+                                )
+                                .on_hover_text(avatar_id);
+                                ui.end_row();
+                            }
                             if let Some(file_id) = &load.bundle_file_id {
                                 ui.label("Asset bundle");
                                 ui.add(egui::Label::new(egui::RichText::new(file_id).monospace()).truncate())
@@ -1814,6 +1844,9 @@ impl ScarletApp {
                         }
                         if let Some(author) = &load.avatar_author {
                             text.push_str(&format!("Avatar uploaded by: {author}\n"));
+                        }
+                        if let Some(avatar_id) = &load.avatar_id {
+                            text.push_str(&format!("Avatar ID: {avatar_id}\n"));
                         }
                         if let Some(file_id) = &load.bundle_file_id {
                             text.push_str(&format!("Asset bundle file ID: {file_id}\n"));
