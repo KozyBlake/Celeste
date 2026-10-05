@@ -621,12 +621,23 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
         let mut preamble = true;
         let mut last_growth = std::time::Instant::now();
         let mut silent = false;
+        // Reaching catch-up is not the same as watching a session run.
+        // Starting Celeste while VRChat is closed also reaches catch-up,
+        // on a log that stopped hours ago — and that log is silent by
+        // definition, so a stall check keyed on catch-up alone would
+        // report the previous session's crash on every startup, forever.
+        // A stall only means something once this file has grown while
+        // live.
+        let mut grew_while_live = false;
 
         loop {
             match read_new_lines(&current_path, &mut position) {
                 Ok(lines) => {
                     if !lines.is_empty() {
                         last_growth = std::time::Instant::now();
+                        if !preamble {
+                            grew_while_live = true;
+                        }
                         if silent {
                             silent = false;
                             tracing::info!("VRChat log is being written again; withdrawing the stall report");
@@ -634,7 +645,11 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
                                 return;
                             }
                         }
-                    } else if !preamble && !silent && last_growth.elapsed() >= SILENCE_THRESHOLD {
+                    } else if !preamble
+                        && grew_while_live
+                        && !silent
+                        && last_growth.elapsed() >= SILENCE_THRESHOLD
+                    {
                         // Only once live: during preamble an empty read
                         // just means we reached the end of an old file.
                         silent = true;
@@ -1329,5 +1344,44 @@ mod avatar_unpack_tests {
     fn other_download_manager_lines_are_ignored() {
         assert_eq!(parse_entry_text("[AssetBundleDownloadManager] Starting download of Avatar @ 0 MB, 0 still queued."), None);
         assert_eq!(parse_entry_text("[AssetBundleDownloadManager] Asset bundle cache cleared successfully"), None);
+    }
+}
+
+#[cfg(test)]
+mod stall_gate_tests {
+    use super::*;
+
+    /// A stall is only meaningful once the file has grown while live.
+    ///
+    /// The bug this guards: reaching catch-up is not the same as watching
+    /// a session run. Starting Celeste with VRChat closed also reaches
+    /// catch-up, on a log that stopped hours ago and is silent by
+    /// definition — so a check keyed on catch-up alone reports the
+    /// previous session's crash on every single startup.
+    ///
+    /// This mirrors the tailer's own condition rather than driving the
+    /// loop, which needs a real clock and a real file; the loop is
+    /// covered by the integration test above.
+    #[test]
+    fn silence_is_only_a_stall_after_the_log_grew_live() {
+        fn would_report(preamble: bool, grew_while_live: bool, elapsed_ok: bool, silent: bool) -> bool {
+            !preamble && grew_while_live && !silent && elapsed_ok
+        }
+
+        // Celeste started on an old, finished log: caught up, nothing ever
+        // arrived live, and the file is silent. Must stay quiet.
+        assert!(!would_report(false, false, true, false), "stale log on startup must not report");
+
+        // A real session that was running and stopped.
+        assert!(would_report(false, true, true, false), "a live session going quiet is a stall");
+
+        // Still replaying history.
+        assert!(!would_report(true, true, true, false));
+
+        // Not quiet long enough yet.
+        assert!(!would_report(false, true, false, false));
+
+        // Already reported; once per stall.
+        assert!(!would_report(false, true, true, true));
     }
 }
