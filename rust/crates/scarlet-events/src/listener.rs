@@ -1031,23 +1031,33 @@ impl ScarletEventListener {
         };
 
         // check groups
-        let mut watched_groups = self.watched_groups_of(user_id, false).await;
+        let checked_groups = self.watched_groups_of(user_id, false).await;
+        let mut watched_groups = checked_groups.clone().unwrap_or_default();
         // Group membership is cached indefinitely, so a user who left a
         // watched group would keep getting flagged on every rejoin. Re-check
         // against fresh membership for an actual rejoin of an
         // already-flagged user.
+        let mut checked_groups = checked_groups;
         if !preamble && rejoined_instance && watched_groups.iter().any(|hit| !hit.group.silent) {
-            watched_groups = self.watched_groups_of(user_id, true).await;
+            if let Some(fresh) = self.watched_groups_of(user_id, true).await {
+                watched_groups = fresh.clone();
+                checked_groups = Some(fresh);
+            }
         }
-        // Record the standing even when it is empty: "in nothing" is
-        // evidence against a lead, and a crash report that omits it
-        // forces the question to be asked again by hand.
-        self.watched_group_profiles.insert(
-            user_id.to_string(),
-            scarlet_core::crash_watch::WatchedGroupProfile::from_types(
-                watched_groups.iter().map(|hit| hit.group.r#type.as_str()),
-            ),
-        );
+        // Record the standing only when the lookup actually succeeded.
+        // "In nothing" is evidence against a lead and is worth keeping;
+        // "could not check" must stay absent rather than be rendered as
+        // the same thing.
+        if let Some(checked) = &checked_groups {
+            self.watched_group_profiles.insert(
+                user_id.to_string(),
+                scarlet_core::crash_watch::WatchedGroupProfile::from_types(
+                    checked.iter().map(|hit| hit.group.r#type.as_str()),
+                ),
+            );
+        } else {
+            self.watched_group_profiles.remove(user_id);
+        }
         if !watched_groups.is_empty() {
             let show_groups = self.deps.settings.advisory_show_watched_groups.get();
             if let Some(first) = watched_groups.iter().find(|hit| !hit.group.silent) {
@@ -1194,14 +1204,22 @@ impl ScarletEventListener {
         &self,
         user_id: &str,
         force_fresh: bool,
-    ) -> Vec<WatchedGroupHit> {
+    ) -> Option<Vec<WatchedGroupHit>> {
         let _ = force_fresh; // no membership cache here yet; every call is fresh
-        let Some(client) = self.vrchat().await else { return Vec::new() };
+        // `None` means Celeste could not look, which is not the same as
+        // looking and finding nothing. Returning an empty list for both
+        // let a failed lookup be reported as "in no watched groups" - an
+        // absence of information presented as an absence of doubt, on a
+        // window that names somebody.
+        let Some(client) = self.vrchat().await else {
+            tracing::debug!("No VRChat session; cannot check watched groups for {user_id}");
+            return None;
+        };
         let groups = match client.get_user_groups(user_id).await {
             Ok(groups) => groups,
             Err(err) => {
                 tracing::debug!("Could not read groups for {user_id}: {err}");
-                return Vec::new();
+                return None;
             }
         };
         let mut watched: Vec<WatchedGroupHit> = Vec::new();
@@ -1242,7 +1260,7 @@ impl ScarletEventListener {
                 .then_with(|| a.group.critical.cmp(&b.group.critical))
                 .then_with(|| a.group.silent.cmp(&b.group.silent))
         });
-        watched
+        Some(watched)
     }
 
     /// A kick that took effect in this instance.

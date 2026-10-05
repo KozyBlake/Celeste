@@ -1754,16 +1754,34 @@ impl ScarletApp {
                                     .on_hover_text(file_id);
                                 ui.end_row();
                             }
-                            // The question a moderator asks next. Shown
-                            // even when the answer is "none", because that
-                            // is evidence against the lead.
-                            if let Some(profile) = &load.watched_groups {
-                                ui.label("Watched groups");
-                                let text = egui::RichText::new(profile.describe());
-                                let text = if profile.total > 0 { text.strong() } else { text.weak() };
-                                ui.add(egui::Label::new(text).truncate()).on_hover_text(profile.describe());
-                                ui.end_row();
+                            // The question a moderator asks next. Always
+                            // shown, with three distinct answers: the
+                            // counts, "none" (evidence against the lead),
+                            // and "not checked" (Celeste does not know).
+                            // Collapsing the last two would present an
+                            // absence of information as an absence of
+                            // doubt.
+                            ui.label("Watched groups");
+                            match &load.watched_groups {
+                                Some(profile) => {
+                                    let text = egui::RichText::new(profile.describe());
+                                    let text =
+                                        if profile.total > 0 { text.strong() } else { text.weak() };
+                                    ui.add(egui::Label::new(text).truncate())
+                                        .on_hover_text(profile.describe());
+                                }
+                                None => {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new("not checked").weak().italics(),
+                                    ))
+                                    .on_hover_text(
+                                        "Celeste could not read this user's groups - no VRChat \
+                                         session, or the lookup failed. This is not the same as \
+                                         them being in none.",
+                                    );
+                                }
                             }
+                            ui.end_row();
                             ui.label("Loaded at");
                             ui.label(load.at.format("%Y-%m-%d %H:%M:%S").to_string());
                             ui.end_row();
@@ -1800,9 +1818,10 @@ impl ScarletApp {
                         if let Some(file_id) = &load.bundle_file_id {
                             text.push_str(&format!("Asset bundle file ID: {file_id}\n"));
                         }
-                        if let Some(profile) = &load.watched_groups {
-                            text.push_str(&format!("Watched groups: {}\n", profile.describe()));
-                        }
+                        text.push_str(&match &load.watched_groups {
+                            Some(profile) => format!("Watched groups: {}\n", profile.describe()),
+                            None => "Watched groups: not checked (lookup unavailable)\n".to_string(),
+                        });
                         if let Some(location) = &report.location {
                             text.push_str(&format!("Instance: {location}\n"));
                         }
