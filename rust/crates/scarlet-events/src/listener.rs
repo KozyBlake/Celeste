@@ -146,6 +146,12 @@ pub struct ScarletEventListener {
     /// Tracks whether the session being tailed ended cleanly, and who was
     /// last loading an avatar if it did not.
     crash_watch: scarlet_core::crash_watch::CrashWatch,
+    /// Each user's watched-group standing, from the check run on join.
+    ///
+    /// Kept because a crash report names a person and the next question
+    /// is always "what are they in?" - the judgement moderators fall back
+    /// on now that an avatar cannot be pulled and tested.
+    watched_group_profiles: std::collections::HashMap<String, scarlet_core::crash_watch::WatchedGroupProfile>,
     /// Distinct `[ModerationManager]` shapes already reported this run.
     seen_moderation_shapes: std::collections::HashSet<String>,
     live_avatar_switches_without_api_log: u32,
@@ -227,6 +233,7 @@ impl ScarletEventListener {
             seen_api_log_lines: false,
             crash_watch: scarlet_core::crash_watch::CrashWatch::new(),
             seen_moderation_shapes: std::collections::HashSet::new(),
+            watched_group_profiles: std::collections::HashMap::new(),
             live_avatar_switches_without_api_log: 0,
             warned_missing_api_logging: false,
             // Java: `new Pacer(500L)`.
@@ -659,9 +666,18 @@ impl ScarletEventListener {
                 avatar_name: Some(avatar_display_name.clone()),
                 avatar_author: None,
                 bundle_file_id: None,
+                watched_groups: None,
                 at: timestamp,
             },
         );
+        if let Some(profile) = self
+            .display_name_to_user_id
+            .get(&display_name)
+            .and_then(|user_id| self.watched_group_profiles.get(user_id))
+            .cloned()
+        {
+            self.crash_watch.record_watched_groups(&display_name, profile);
+        }
         self.crash_watch.set_location(self.client_location.clone());
 
         // Avatar statuses are built from `[API] ... analysis/file_...` log
@@ -1023,6 +1039,15 @@ impl ScarletEventListener {
         if !preamble && rejoined_instance && watched_groups.iter().any(|hit| !hit.group.silent) {
             watched_groups = self.watched_groups_of(user_id, true).await;
         }
+        // Record the standing even when it is empty: "in nothing" is
+        // evidence against a lead, and a crash report that omits it
+        // forces the question to be asked again by hand.
+        self.watched_group_profiles.insert(
+            user_id.to_string(),
+            scarlet_core::crash_watch::WatchedGroupProfile::from_types(
+                watched_groups.iter().map(|hit| hit.group.r#type.as_str()),
+            ),
+        );
         if !watched_groups.is_empty() {
             let show_groups = self.deps.settings.advisory_show_watched_groups.get();
             if let Some(first) = watched_groups.iter().find(|hit| !hit.group.silent) {

@@ -28,6 +28,54 @@
 
 use chrono::NaiveDateTime;
 
+/// How deep into the watched lists a user sits.
+///
+/// Moderators do not judge a suspect on one watched group; they look at
+/// how *many* they are in and of what kind. Someone in a single community
+/// group is nobody; someone in five malicious ones is the sort of account
+/// that turns up to break instances. That judgement is the fallback now
+/// that VRChat no longer lets anyone pull an avatar and test it, so the
+/// crash report should carry it rather than making someone go and look it
+/// up at the moment they are least able to.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WatchedGroupProfile {
+    pub total: usize,
+    /// Counts per watched-group type, largest first; the type strings are
+    /// the Java enum names (MALICIOUS, NUISANCE, ...).
+    pub by_type: Vec<(String, usize)>,
+}
+
+impl WatchedGroupProfile {
+    /// Builds the profile from the type of each watched group the user is
+    /// in. Ties break alphabetically so the summary is stable between
+    /// runs rather than reshuffling on every lookup.
+    pub fn from_types<'a>(types: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut total = 0;
+        for kind in types {
+            *counts.entry(kind.to_string()).or_default() += 1;
+            total += 1;
+        }
+        let mut by_type: Vec<(String, usize)> = counts.into_iter().collect();
+        by_type.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        WatchedGroupProfile { total, by_type }
+    }
+
+    /// One line for a report: "5 watched groups (3 MALICIOUS, 2 NUISANCE)".
+    pub fn describe(&self) -> String {
+        if self.total == 0 {
+            return "none".to_string();
+        }
+        let breakdown = self
+            .by_type
+            .iter()
+            .map(|(kind, count)| format!("{count} {kind}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{} watched group{} ({breakdown})", self.total, if self.total == 1 { "" } else { "s" })
+    }
+}
+
 /// The avatar load Celeste saw most recently before a session ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvatarLoad {
@@ -41,6 +89,9 @@ pub struct AvatarLoad {
     /// The asset bundle VRChat was unpacking, when it is known. This is
     /// the identifier that survives VRChat no longer exposing avatar ids.
     pub bundle_file_id: Option<String>,
+    /// The wearer's standing in the watched lists, when Celeste checked
+    /// their groups on join. `None` means it never got to look.
+    pub watched_groups: Option<WatchedGroupProfile>,
     pub at: NaiveDateTime,
 }
 
@@ -108,6 +159,14 @@ impl CrashWatch {
         let Some(load) = self.last_avatar_load.as_mut() else { return };
         if load.avatar_name.as_deref() == Some(avatar_name) {
             load.avatar_author = author.map(str::to_string);
+        }
+    }
+
+    /// Attach the wearer's watched-group standing.
+    pub fn record_watched_groups(&mut self, display_name: &str, profile: WatchedGroupProfile) {
+        let Some(load) = self.last_avatar_load.as_mut() else { return };
+        if load.display_name == display_name {
+            load.watched_groups = Some(profile);
         }
     }
 
@@ -185,6 +244,7 @@ mod tests {
             avatar_name: Some("Some Avatar".into()),
             avatar_author: None,
             bundle_file_id: None,
+            watched_groups: None,
             at: at(),
         }
     }
@@ -268,6 +328,7 @@ mod enrichment_tests {
                 avatar_name: Some("Crasher Avatar".into()),
                 avatar_author: None,
                 bundle_file_id: None,
+                watched_groups: None,
                 at: NaiveDate::from_ymd_opt(2026, 10, 4).unwrap().and_hms_opt(12, 47, 56).unwrap(),
             },
         );
@@ -383,5 +444,54 @@ mod stall_tests {
         watch.went_live();
         watch.saw_clean_quit();
         assert!(watch.finish().is_none());
+    }
+}
+
+#[cfg(test)]
+mod watched_profile_tests {
+    use super::*;
+
+    #[test]
+    fn the_breakdown_leads_with_the_commonest_type() {
+        let profile = WatchedGroupProfile::from_types(["NUISANCE", "MALICIOUS", "MALICIOUS", "MALICIOUS", "NUISANCE"]);
+        assert_eq!(profile.total, 5);
+        assert_eq!(profile.describe(), "5 watched groups (3 MALICIOUS, 2 NUISANCE)");
+    }
+
+    /// Equal counts must not reorder between runs, or the same account
+    /// reads differently each time it is looked at.
+    #[test]
+    fn ties_are_ordered_stably() {
+        let a = WatchedGroupProfile::from_types(["NUISANCE", "MALICIOUS"]);
+        let b = WatchedGroupProfile::from_types(["MALICIOUS", "NUISANCE"]);
+        assert_eq!(a, b);
+        assert_eq!(a.describe(), "2 watched groups (1 MALICIOUS, 1 NUISANCE)");
+    }
+
+    #[test]
+    fn one_group_reads_as_singular_and_none_says_none() {
+        assert_eq!(WatchedGroupProfile::from_types(["COMMUNITY"]).describe(), "1 watched group (1 COMMUNITY)");
+        assert_eq!(WatchedGroupProfile::default().describe(), "none");
+    }
+
+    /// Being in nothing is itself worth reporting: it is the evidence
+    /// *against* the lead, and a moderator weighing an accusation needs
+    /// that as much as the counts.
+    #[test]
+    fn a_clean_user_is_recorded_rather_than_left_blank() {
+        let mut watch = CrashWatch::new();
+        watch.went_live();
+        watch.record_avatar_load(false, AvatarLoad {
+            display_name: "Suspect".into(),
+            user_id: None,
+            avatar_name: None,
+            avatar_author: None,
+            bundle_file_id: None,
+            watched_groups: None,
+            at: chrono::NaiveDate::from_ymd_opt(2026, 10, 4).unwrap().and_hms_opt(21, 48, 13).unwrap(),
+        });
+        watch.record_watched_groups("Suspect", WatchedGroupProfile::default());
+        let load = watch.finish().unwrap().last_avatar_load.unwrap();
+        assert_eq!(load.watched_groups.unwrap().describe(), "none");
     }
 }

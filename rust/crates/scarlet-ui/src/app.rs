@@ -1754,6 +1754,16 @@ impl ScarletApp {
                                     .on_hover_text(file_id);
                                 ui.end_row();
                             }
+                            // The question a moderator asks next. Shown
+                            // even when the answer is "none", because that
+                            // is evidence against the lead.
+                            if let Some(profile) = &load.watched_groups {
+                                ui.label("Watched groups");
+                                let text = egui::RichText::new(profile.describe());
+                                let text = if profile.total > 0 { text.strong() } else { text.weak() };
+                                ui.add(egui::Label::new(text).truncate()).on_hover_text(profile.describe());
+                                ui.end_row();
+                            }
                             ui.label("Loaded at");
                             ui.label(load.at.format("%Y-%m-%d %H:%M:%S").to_string());
                             ui.end_row();
@@ -1789,6 +1799,9 @@ impl ScarletApp {
                         }
                         if let Some(file_id) = &load.bundle_file_id {
                             text.push_str(&format!("Asset bundle file ID: {file_id}\n"));
+                        }
+                        if let Some(profile) = &load.watched_groups {
+                            text.push_str(&format!("Watched groups: {}\n", profile.describe()));
                         }
                         if let Some(location) = &report.location {
                             text.push_str(&format!("Instance: {location}\n"));
