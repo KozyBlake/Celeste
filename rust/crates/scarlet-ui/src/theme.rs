@@ -119,7 +119,7 @@ pub const TEXT_TITLE: f32 = 19.0;
 
 /// A hairline in [`RULE`], for drawing structure.
 pub fn hairline() -> egui::Stroke {
-    egui::Stroke::new(1.0, RULE)
+    egui::Stroke::new(1.0_f32, RULE)
 }
 
 /// A square panel: filled, ruled, and padded consistently. Using this
