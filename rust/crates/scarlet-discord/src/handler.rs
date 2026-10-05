@@ -128,7 +128,7 @@ impl EventHandler for Handler {
 }
 
 fn permission_denied() -> &'static str {
-    "You do not have permission to perform this action.\n(Have your admin use `/scarlet-discord-permissions` to assign permissions)"
+    "You do not have permission to perform this action.\n(Have your admin use `/celeste-discord-permissions` to assign permissions)"
 }
 
 async fn configured_guild(ctx: &Context, guild_id: Option<GuildId>) -> bool {
