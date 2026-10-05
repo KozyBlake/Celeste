@@ -18,6 +18,9 @@ pub const LEGACY_NAME: &str = "Scarlet";
 /// authoritative here.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_NAME: &str = "KozyBlake/Celeste";
+/// Freedesktop/Wayland application identity. This must match the installed
+/// `.desktop` file name so compositors can associate Celeste with its icon.
+pub const DESKTOP_APP_ID: &str = "io.github.KozyBlake.Celeste";
 pub const FORK_GROUP: &str = GROUP;
 /// The GitHub repository, which is still named Celeste — this feeds real
 /// URLs, so it does not follow the display name.

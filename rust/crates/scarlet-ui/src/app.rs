@@ -4177,7 +4177,8 @@ pub fn run(
     });
     // A data-folder or beside-the-binary `icon.png` can still override the
     // bundled Celeste mark without a rebuild.
-    let mut viewport = egui::ViewportBuilder::default();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_app_id(scarlet_core::identity::DESKTOP_APP_ID);
     if let Some(icon) = load_window_icon(&data_dir) {
         viewport = viewport.with_icon(icon);
     }

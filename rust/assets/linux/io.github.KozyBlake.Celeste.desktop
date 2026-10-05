@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Celeste
+Comment=VRChat moderation and Discord companion
+Exec=celeste
+Icon=io.github.KozyBlake.Celeste
+Terminal=false
+Categories=Utility;
+StartupWMClass=io.github.KozyBlake.Celeste
