@@ -75,6 +75,9 @@ pub struct ConnectedPlayer {
     pub pronouns: Option<String>,
     pub pronouns_flagged: bool,
     pub avatar_name: Option<String>,
+    /// Every watched group this player is in, not just the first few that
+    /// fit in the advisory cell.
+    pub watched_memberships: Vec<crate::watched_membership::WatchedMembership>,
     pub avatar_info: Option<AvatarBundleInfo>,
     /// Human-readable reason avatar info is missing, shown by "View" when
     /// [`ConnectedPlayer::avatar_info`] is `None`.
@@ -110,6 +113,7 @@ impl ConnectedPlayer {
             pronouns: None,
             pronouns_flagged: false,
             avatar_name: None,
+            watched_memberships: Vec::new(),
             avatar_info: None,
             avatar_info_note: None,
             account_age: None,

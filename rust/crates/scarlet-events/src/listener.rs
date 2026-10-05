@@ -1048,6 +1048,26 @@ impl ScarletEventListener {
         // "In nothing" is evidence against a lead and is worth keeping;
         // "could not check" must stay absent rather than be rendered as
         // the same thing.
+        // Push the full set to the row so the desktop can lay them out
+        // by type; the advisory string can only ever show the first few.
+        if let Some(checked) = &checked_groups {
+            let memberships: Vec<scarlet_core::watched_membership::WatchedMembership> = checked
+                .iter()
+                .map(|hit| scarlet_core::watched_membership::WatchedMembership {
+                    group_id: hit.group.id.clone(),
+                    kind: hit.group.r#type.as_str().to_string(),
+                    current_name: hit.current_name.clone(),
+                    message: hit.group.message.clone(),
+                    hidden: hit.hidden,
+                    critical: hit.group.critical,
+                    silent: hit.group.silent,
+                })
+                .collect();
+            let initial_preamble = !self.is_tailer_live;
+            self.deps.ui.player_update(initial_preamble, user_id, &mut |player| {
+                player.watched_memberships = memberships.clone();
+            });
+        }
         if let Some(checked) = &checked_groups {
             self.watched_group_profiles.insert(
                 user_id.to_string(),

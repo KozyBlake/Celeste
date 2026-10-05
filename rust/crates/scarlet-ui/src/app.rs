@@ -50,6 +50,7 @@ enum ColumnId {
     Avatar,
     Performance,
     AvatarStats,
+    WatchedGroups,
     AccAge,
     Joined,
     Left,
@@ -201,7 +202,7 @@ fn load_column_layout(
 }
 
 impl ColumnId {
-    const ALL: [ColumnId; 17] = [
+    const ALL: [ColumnId; 18] = [
         ColumnId::Name,
         ColumnId::Id,
         ColumnId::Pronouns,
@@ -212,6 +213,7 @@ impl ColumnId {
         ColumnId::Joined,
         ColumnId::Left,
         ColumnId::Advisory,
+        ColumnId::WatchedGroups,
         ColumnId::Age18,
         ColumnId::Rank,
         ColumnId::Profile,
@@ -221,7 +223,7 @@ impl ColumnId {
         ColumnId::Invite,
     ];
 
-    const DEFAULT_VISIBLE: [ColumnId; 15] = [
+    const DEFAULT_VISIBLE: [ColumnId; 16] = [
         ColumnId::Name,
         ColumnId::Id,
         ColumnId::Pronouns,
@@ -232,6 +234,7 @@ impl ColumnId {
         ColumnId::Joined,
         ColumnId::Left,
         ColumnId::Advisory,
+        ColumnId::WatchedGroups,
         ColumnId::Age18,
         ColumnId::Rank,
         ColumnId::Profile,
@@ -247,6 +250,7 @@ impl ColumnId {
             ColumnId::Avatar => "Avatar",
             ColumnId::Performance => "Performance",
             ColumnId::AvatarStats => "Avatar Stats",
+            ColumnId::WatchedGroups => "Groups",
             ColumnId::AccAge => "Acc-Age",
             ColumnId::Joined => "Joined",
             ColumnId::Left => "Left",
@@ -283,6 +287,7 @@ impl ColumnId {
             ColumnId::Avatar => 160.0,
             ColumnId::Performance => 90.0,
             ColumnId::AvatarStats => 60.0,
+            ColumnId::WatchedGroups => 86.0,
             ColumnId::AccAge => 90.0,
             ColumnId::Joined => 125.0,
             ColumnId::Left => 125.0,
@@ -305,7 +310,8 @@ impl ColumnId {
             | ColumnId::Invite
             | ColumnId::Profile
             | ColumnId::CopyId
-            | ColumnId::AvatarStats => 40.0,
+            | ColumnId::AvatarStats
+            | ColumnId::WatchedGroups => 40.0,
             _ => 55.0,
         }
     }
@@ -414,6 +420,14 @@ pub struct AvatarStatsView {
     evidence: Option<String>,
 }
 
+/// Every watched group a player is in, for the panel that shows them
+/// all at once.
+pub struct WatchedGroupsView {
+    player_name: String,
+    user_id: String,
+    memberships: Vec<scarlet_core::watched_membership::WatchedMembership>,
+}
+
 struct PendingCacheCleanup {
     files: Vec<PathBuf>,
     bytes: u64,
@@ -503,6 +517,7 @@ pub struct ScarletApp {
     /// `ScarletUI.infoStats`), and the pending Ban confirmation (port of the
     /// row's Ban action, which Java also confirms before acting).
     avatar_stats_open: Option<AvatarStatsView>,
+    watched_groups_open: Option<WatchedGroupsView>,
     group_action_confirm: Option<(GroupAction, String, String)>,
     create_instance_open: bool,
     create_instance_form: CreateInstanceForm,
@@ -670,6 +685,7 @@ impl ScarletApp {
             settings_category: SettingCategory::General,
             settings_search: String::new(),
             avatar_stats_open: None,
+            watched_groups_open: None,
             group_action_confirm: None,
             create_instance_open: false,
             create_instance_form: CreateInstanceForm::default(),
@@ -1232,6 +1248,27 @@ impl ScarletApp {
                     });
                 }
             }
+            ColumnId::WatchedGroups => {
+                let total = player.watched_memberships.len();
+                if total == 0 {
+                    Self::text_cell(ui, "");
+                } else {
+                    // The count is the signal moderators act on; the
+                    // button is how they see which ones.
+                    let worst = player
+                        .watched_memberships
+                        .iter()
+                        .any(|m| m.kind == "MALICIOUS" || m.critical);
+                    let label = if worst { format!("⚠ {total}") } else { total.to_string() };
+                    if Self::table_button(ui, &label).clicked() {
+                        self.watched_groups_open = Some(WatchedGroupsView {
+                            player_name: player.name.clone(),
+                            user_id: player.id.clone(),
+                            memberships: player.watched_memberships.clone(),
+                        });
+                    }
+                }
+            }
             ColumnId::AccAge => {
                 let age = player.account_age.map(format_account_age).unwrap_or_default();
                 Self::text_cell(ui, &age);
@@ -1697,6 +1734,126 @@ impl ScarletApp {
             });
         if !open {
             self.avatar_stats_open = None;
+        }
+    }
+
+    /// Every watched group a player is in, grouped by type.
+    ///
+    /// The advisory column joins the messages and truncates them, so for
+    /// the accounts that matter most — the ones in a dozen watched groups
+    /// — almost everything is invisible. This is the whole set, laid out
+    /// by type with the worst first, rather than one run-on string.
+    fn watched_groups_window(&mut self, ctx: &egui::Context) {
+        let Some(view) = self.watched_groups_open.as_ref() else { return };
+        let sections = scarlet_core::watched_membership::group_by_kind(&view.memberships);
+        let total = view.memberships.len();
+        let player_name = view.player_name.clone();
+        let user_id = view.user_id.clone();
+        let mut open = true;
+        let mut copy: Option<String> = None;
+
+        egui::Window::new(format!("Watched groups - {player_name}"))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(460.0)
+            .max_height(560.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{player_name} is in {total} watched group{}",
+                        if total == 1 { "" } else { "s" }
+                    ))
+                    .strong()
+                    .size(crate::theme::TEXT_TITLE),
+                );
+                ui.add(egui::Label::new(egui::RichText::new(&user_id).monospace().weak()).truncate());
+                ui.add_space(crate::theme::GAP);
+
+                egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+                    for (kind, entries) in &sections {
+                        let accent = match kind.as_str() {
+                            "MALICIOUS" => crate::theme::DANGER,
+                            "NUISANCE" => crate::theme::WARN,
+                            "COMMUNITY" => crate::theme::OK,
+                            "AFFILIATED" => crate::theme::INFO,
+                            _ => crate::theme::TEXT_DIM,
+                        };
+                        ui.add_space(crate::theme::GAP_TIGHT);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(kind).color(accent).strong());
+                            ui.label(
+                                egui::RichText::new(format!("({})", entries.len()))
+                                    .color(crate::theme::TEXT_MUTED),
+                            );
+                        });
+                        ui.separator();
+
+                        for entry in entries {
+                            ui.add_space(2.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new(entry.label()).strong());
+                                if entry.critical {
+                                    ui.label(egui::RichText::new("critical").small().color(crate::theme::DANGER));
+                                }
+                                if entry.hidden {
+                                    ui.label(
+                                        egui::RichText::new("hidden on profile")
+                                            .small()
+                                            .color(crate::theme::WARN),
+                                    )
+                                    .on_hover_text(
+                                        "This membership is hidden on their VRChat profile - checking \
+                                         the profile by hand will not show it.",
+                                    );
+                                }
+                                if entry.silent {
+                                    ui.label(egui::RichText::new("silent").small().weak());
+                                }
+                            });
+                            if let Some(message) = entry.message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                                ui.label(egui::RichText::new(message).color(crate::theme::TEXT_DIM));
+                            }
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&entry.group_id).monospace().small().weak(),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&entry.group_id);
+                            ui.add_space(crate::theme::GAP_TIGHT);
+                        }
+                    }
+                });
+
+                ui.add_space(crate::theme::GAP);
+                ui.separator();
+                ui.add_space(crate::theme::GAP_TIGHT);
+                if ui.button("Copy all").clicked() {
+                    let mut text = format!("{player_name} ({user_id}) - {total} watched groups\n");
+                    for (kind, entries) in &sections {
+                        text.push_str(&format!("\n{kind} ({})\n", entries.len()));
+                        for entry in entries {
+                            text.push_str(&format!("  {} [{}]", entry.label(), entry.group_id));
+                            if entry.hidden {
+                                text.push_str(" (hidden on profile)");
+                            }
+                            text.push('\n');
+                            if let Some(message) = entry.message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                                text.push_str(&format!("    {message}\n"));
+                            }
+                        }
+                    }
+                    copy = Some(text);
+                }
+            });
+
+        if let Some(text) = copy {
+            ctx.copy_text(text);
+            self.state.append_cli_output(&format!("Copied {player_name}'s watched groups."));
+        }
+        if !open {
+            self.watched_groups_open = None;
         }
     }
 
@@ -3780,6 +3937,7 @@ impl eframe::App for ScarletApp {
             });
         });
 
+        self.watched_groups_window(ctx);
         self.crash_report_window(ctx);
         self.exit_confirm_window(ctx);
         self.create_instance_window(ctx);
@@ -3846,6 +4004,9 @@ fn sort_players(players: &mut [scarlet_core::ui::ConnectedPlayer], sort: Option<
             ColumnId::Joined => left.joined.cmp(&right.joined),
             ColumnId::Left => left.left.cmp(&right.left),
             ColumnId::Advisory => text(left.advisory.as_deref(), right.advisory.as_deref()),
+            // Sorting by count puts the accounts worth looking at
+            // together, which is the point of the column.
+            ColumnId::WatchedGroups => left.watched_memberships.len().cmp(&right.watched_memberships.len()),
             ColumnId::Age18 => text(
                 left.age_verification_status.as_deref(),
                 right.age_verification_status.as_deref(),
@@ -4188,14 +4349,18 @@ mod tests {
     #[test]
     fn column_order_starts_as_all_columns_with_no_duplicates() {
         // Guards the drag-to-reorder column list against accidental
-        // duplication/omission: exactly the 17 `propstable` columns,
-        // matching ScarletUI.java's column set, each exactly once.
+        // duplication/omission: each column exactly once.
+        //
+        // Java's `propstable` had 17. Celeste has 18: `Groups`, which
+        // opens the full watched-group panel, has no Java counterpart
+        // because Java only ever showed the truncated advisory string.
         let mut seen = std::collections::HashSet::new();
         for column in ColumnId::ALL {
             assert!(seen.insert(column), "duplicate column in ColumnId::ALL: {:?}", column);
         }
-        assert_eq!(ColumnId::ALL.len(), 17);
-        assert_eq!(ColumnId::DEFAULT_VISIBLE.len(), 15);
+        assert_eq!(ColumnId::ALL.len(), 18);
+        assert_eq!(ColumnId::DEFAULT_VISIBLE.len(), 16);
+        assert!(ColumnId::DEFAULT_VISIBLE.contains(&ColumnId::WatchedGroups));
         assert!(!ColumnId::DEFAULT_VISIBLE.contains(&ColumnId::Unban));
         assert!(!ColumnId::DEFAULT_VISIBLE.contains(&ColumnId::Invite));
     }

@@ -34,3 +34,4 @@ pub mod unique_strings;
 pub mod versioned_file;
 pub mod watched_entities;
 pub mod watched_groups;
+pub mod watched_membership;
