@@ -58,6 +58,9 @@ pub struct CrashReport {
 pub struct CrashWatch {
     saw_clean_quit: bool,
     watched_live: bool,
+    /// Already reported for this session, so the log rolling over later
+    /// does not announce the same crash a second time.
+    reported: bool,
     last_avatar_load: Option<AvatarLoad>,
     location: Option<String>,
 }
@@ -116,6 +119,12 @@ impl CrashWatch {
         }
     }
 
+    /// The client started writing again after a stall, so it was hung
+    /// rather than dead and the report must be withdrawn.
+    pub fn resumed(&mut self) -> bool {
+        std::mem::take(&mut self.reported)
+    }
+
     /// Why [`finish`] will decide the way it does, in words.
     ///
     /// Crash detection is a judgement about a named person, so the
@@ -124,6 +133,9 @@ impl CrashWatch {
     ///
     /// [`finish`]: CrashWatch::finish
     pub fn summary(&self) -> String {
+        if self.reported {
+            return "not reported again: already reported for this session".to_string();
+        }
         if !self.watched_live {
             return "not reported: Celeste never watched this session live".to_string();
         }
@@ -139,12 +151,17 @@ impl CrashWatch {
         }
     }
 
-    /// Called when this session's log is replaced by a new one, i.e. the
-    /// session is over. `Some` means it ended badly.
-    pub fn finish(&self) -> Option<CrashReport> {
-        if self.saw_clean_quit || !self.watched_live {
+    /// The log stopped growing, or was replaced by a new one: either way
+    /// this session is over. `Some` means it ended badly.
+    ///
+    /// Reports at most once per session. The live stall fires first and
+    /// the log rotating when the person relaunches would otherwise
+    /// announce the same crash again.
+    pub fn finish(&mut self) -> Option<CrashReport> {
+        if self.saw_clean_quit || !self.watched_live || self.reported {
             return None;
         }
+        self.reported = true;
         Some(CrashReport {
             last_avatar_load: self.last_avatar_load.clone(),
             location: self.location.clone(),
@@ -291,7 +308,7 @@ mod summary_tests {
 
     #[test]
     fn each_outcome_explains_itself() {
-        let fresh = CrashWatch::new();
+        let mut fresh = CrashWatch::new();
         assert!(fresh.summary().contains("never watched this session live"));
 
         let mut clean = CrashWatch::new();
@@ -319,5 +336,52 @@ mod summary_tests {
             let says_crash = watch.summary().starts_with("crash:");
             assert_eq!(says_crash, watch.finish().is_some(), "watched={watched} clean={clean}");
         }
+    }
+}
+
+#[cfg(test)]
+mod stall_tests {
+    use super::*;
+
+    /// The stall fires first and the log rotates when the person
+    /// relaunches. Without the once-per-session guard that is two popups
+    /// for one crash, and the second arrives minutes later looking like a
+    /// second incident.
+    #[test]
+    fn a_crash_is_reported_once_even_though_both_paths_fire() {
+        let mut watch = CrashWatch::new();
+        watch.went_live();
+        assert!(watch.finish().is_some(), "the stall reports it");
+        assert!(watch.finish().is_none(), "the rotation must not report it again");
+        assert!(watch.summary().contains("already reported"));
+    }
+
+    /// "Wait Longer" rather than "Terminate": the client was hung, not
+    /// dead. A report left standing would accuse someone over a hiccup.
+    #[test]
+    fn recovering_withdraws_the_report_and_rearms() {
+        let mut watch = CrashWatch::new();
+        watch.went_live();
+        assert!(watch.finish().is_some());
+        assert!(watch.resumed(), "there was a report to withdraw");
+
+        // Armed again: if it really dies later, that is a fresh crash.
+        assert!(watch.finish().is_some());
+    }
+
+    #[test]
+    fn recovering_without_a_report_withdraws_nothing() {
+        let mut watch = CrashWatch::new();
+        watch.went_live();
+        assert!(!watch.resumed(), "nothing was reported, so nothing to take back");
+    }
+
+    /// A stall after a clean quit is VRChat being closed, not a crash.
+    #[test]
+    fn a_stall_after_a_clean_quit_is_still_not_a_crash() {
+        let mut watch = CrashWatch::new();
+        watch.went_live();
+        watch.saw_clean_quit();
+        assert!(watch.finish().is_none());
     }
 }

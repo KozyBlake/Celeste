@@ -261,6 +261,45 @@ impl ScarletEventListener {
             TailerEvent::Init { file } => self.log_init(&file),
             TailerEvent::CatchUp { file } => self.log_catch_up(file.as_deref()).await,
             TailerEvent::Entry(entry) => self.handle_entry(entry).await,
+            TailerEvent::WentSilent => self.log_went_silent(),
+            TailerEvent::Resumed => self.log_resumed(),
+        }
+    }
+
+    /// The log stopped growing while the session was live: the client is
+    /// hung or gone. Reported now rather than on the next launch, because
+    /// by then the person already knows they crashed — what they need is
+    /// who was loading at the time, while the frozen window is still in
+    /// front of them.
+    fn log_went_silent(&mut self) {
+        tracing::debug!("VRChat log stalled; {}", self.crash_watch.summary());
+        if let Some(report) = self.crash_watch.finish() {
+            self.announce_crash(&report);
+            self.deps.ui.report_vrchat_crash(report);
+        }
+    }
+
+    /// The client was hung, not dead, and has started writing again.
+    fn log_resumed(&mut self) {
+        if self.crash_watch.resumed() {
+            tracing::info!("VRChat recovered; withdrawing the crash report");
+            self.deps.ui.withdraw_vrchat_crash();
+            self.deps.ui.append_cli_output("VRChat started responding again - the crash report was withdrawn.");
+        }
+    }
+
+    fn announce_crash(&self, report: &scarlet_core::crash_watch::CrashReport) {
+        match &report.last_avatar_load {
+            Some(load) => tracing::warn!(
+                "VRChat stopped without shutting down cleanly. Last avatar to load: {} ({}) wearing {} at {}",
+                load.display_name,
+                load.user_id.as_deref().unwrap_or("user id unknown"),
+                load.avatar_name.as_deref().unwrap_or("an unnamed avatar"),
+                load.at
+            ),
+            None => tracing::warn!(
+                "VRChat stopped without shutting down cleanly; no avatar load was seen beforehand."
+            ),
         }
     }
 
@@ -273,19 +312,7 @@ impl ScarletEventListener {
         // needs to be distinguishable from "the check did not run".
         tracing::debug!("Previous VRChat session ended; {}", self.crash_watch.summary());
         if let Some(report) = self.crash_watch.finish() {
-            match &report.last_avatar_load {
-                Some(load) => tracing::warn!(
-                    "VRChat ended without shutting down cleanly. Last avatar to load before it \
-                     stopped: {} ({}) wearing {} at {}",
-                    load.display_name,
-                    load.user_id.as_deref().unwrap_or("user id unknown"),
-                    load.avatar_name.as_deref().unwrap_or("an unnamed avatar"),
-                    load.at
-                ),
-                None => tracing::warn!(
-                    "VRChat ended without shutting down cleanly; no avatar load was seen beforehand."
-                ),
-            }
+            self.announce_crash(&report);
             self.deps.ui.report_vrchat_crash(report);
         }
         self.crash_watch = scarlet_core::crash_watch::CrashWatch::new();

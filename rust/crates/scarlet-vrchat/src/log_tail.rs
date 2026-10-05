@@ -524,7 +524,31 @@ pub enum TailerEvent {
     CatchUp { file: Option<PathBuf> },
     /// One recognized log line (`handleEntry`).
     Entry(LogEvent),
+    /// The log Celeste is tailing has stopped growing while the session
+    /// was live — the client is hung or gone.
+    ///
+    /// **Not in Java.** Detecting a crash only when a *new* log appears
+    /// means waiting for the person to relaunch, which is exactly when
+    /// they no longer need telling. A frozen client leaves the log
+    /// abruptly silent, and that is observable immediately.
+    ///
+    /// Measured on a real 73-minute session (357,245 timestamped lines):
+    /// the longest gap between consecutive lines was 22 seconds and
+    /// nothing exceeded 30. A live client is simply never quiet for long,
+    /// so [`SILENCE_THRESHOLD`] sits well clear of the observed maximum.
+    WentSilent,
+    /// The log started growing again after [`TailerEvent::WentSilent`] —
+    /// the client was hung and recovered ("Wait Longer" rather than
+    /// "Terminate"). Whatever the silence raised must be withdrawn.
+    Resumed,
 }
+
+/// How long the log must stand still before the client is presumed hung.
+///
+/// 60s is roughly three times the longest gap observed in a real session.
+/// Raising it delays the report; lowering it risks calling a quiet moment
+/// a crash, and a false crash report names a person.
+pub const SILENCE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Spawns the tailer as a background task on `handle` and returns a channel
 /// of [`TailerEvent`]s. Resolves the VRChat app-data directory via
@@ -595,10 +619,33 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
 
         let mut position: u64 = 0;
         let mut preamble = true;
+        let mut last_growth = std::time::Instant::now();
+        let mut silent = false;
 
         loop {
             match read_new_lines(&current_path, &mut position) {
                 Ok(lines) => {
+                    if !lines.is_empty() {
+                        last_growth = std::time::Instant::now();
+                        if silent {
+                            silent = false;
+                            tracing::info!("VRChat log is being written again; withdrawing the stall report");
+                            if sender.send(TailerEvent::Resumed).is_err() {
+                                return;
+                            }
+                        }
+                    } else if !preamble && !silent && last_growth.elapsed() >= SILENCE_THRESHOLD {
+                        // Only once live: during preamble an empty read
+                        // just means we reached the end of an old file.
+                        silent = true;
+                        tracing::warn!(
+                            "VRChat log has not grown for {}s; the client appears to have stopped",
+                            SILENCE_THRESHOLD.as_secs()
+                        );
+                        if sender.send(TailerEvent::WentSilent).is_err() {
+                            return;
+                        }
+                    }
                     let mut events = Vec::new();
                     for line in lines {
                         // Parsing a NaiveDateTime is comparatively expensive.

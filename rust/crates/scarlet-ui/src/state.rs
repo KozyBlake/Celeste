@@ -350,6 +350,10 @@ impl CelesteUi for UiState {
         UiState::set_crash_report(self, Some(report));
     }
 
+    fn withdraw_vrchat_crash(&self) {
+        UiState::set_crash_report(self, None);
+    }
+
     fn clear_instance(&self) {
         UiState::clear_instance(self)
     }

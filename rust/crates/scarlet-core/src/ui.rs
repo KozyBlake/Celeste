@@ -291,6 +291,9 @@ pub trait CelesteUi: Send + Sync {
     /// A VRChat session ended without an orderly shutdown. Default no-op
     /// so headless runs and tests stay source-compatible.
     fn report_vrchat_crash(&self, _report: crate::crash_watch::CrashReport) {}
+    /// The client was hung rather than dead and has recovered, so a
+    /// report already shown must be taken down.
+    fn withdraw_vrchat_crash(&self) {}
 }
 
 /// Port of `ScarletUIHeadless`: every call is a no-op, for runs with no
