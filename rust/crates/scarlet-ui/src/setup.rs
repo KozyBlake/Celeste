@@ -757,7 +757,7 @@ fn render_vibecoded_notice(ui: &mut egui::Ui, action: &mut Action) {
 fn render_legacy_import_stage(
     ui: &mut egui::Ui,
     detected: &mut Option<std::path::PathBuf>,
-    error: &Option<String>,
+    error: &mut Option<String>,
     action: &mut Action,
 ) {
     ui.heading("Bring your Scarlet data into Celeste");
@@ -794,11 +794,12 @@ fn render_legacy_import_stage(
             }
         }
         if ui.button("Choose Scarlet folder...").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .set_title("Choose the Scarlet data folder")
-                .pick_folder()
-            {
-                *action = Action::LegacyImport(path);
+            match crate::dialogs::pick_folder("Choose the Scarlet data folder", None) {
+                Ok(Some(path)) => *action = Action::LegacyImport(path),
+                Ok(None) => {}
+                Err(dialog_error) => {
+                    *error = Some(format!("Could not open the folder picker: {dialog_error}"));
+                }
             }
         }
         if ui.button("Continue without importing").clicked() {

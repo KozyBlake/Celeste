@@ -3293,12 +3293,18 @@ impl ScarletApp {
     /// alone costs disk and nothing else — the user deletes it once the
     /// new location has started cleanly.
     fn begin_move_data_dir(&mut self) {
-        let Some(target) = rfd::FileDialog::new()
-            .set_title("Choose a folder for Celeste's data")
-            .set_directory(&self.data_dir)
-            .pick_folder()
-        else {
-            return;
+        let target = match crate::dialogs::pick_folder(
+            "Choose a folder for Celeste's data",
+            Some(&self.data_dir),
+        ) {
+            Ok(Some(target)) => target,
+            Ok(None) => return,
+            Err(error) => {
+                let message = format!("Could not open the folder picker: {error}");
+                self.state.append_cli_output(&message);
+                self.settings_notice = Some(message);
+                return;
+            }
         };
         if target == self.data_dir {
             self.settings_notice =
@@ -3337,27 +3343,50 @@ impl ScarletApp {
             .into_iter()
             .next();
         let source = if let Some(detected) = detected {
-            match rfd::MessageDialog::new()
-                .set_title("Celeste - Scarlet data found")
-                .set_description(format!(
+            let result = crate::dialogs::message(
+                "Celeste - Scarlet data found",
+                format!(
                     "Celeste found a legacy Scarlet folder:\n\n{}\n\nUse this folder?\n\nYes: use it\nNo: choose another folder\nCancel: do nothing",
                     detected.display(),
-                ))
-                .set_buttons(rfd::MessageButtons::YesNoCancel)
-                .show()
-            {
-                rfd::MessageDialogResult::Yes => Some(detected),
-                rfd::MessageDialogResult::No => rfd::FileDialog::new()
-                    .set_title("Choose the Scarlet data folder")
-                    .set_directory(self.data_dir.parent().unwrap_or(&self.data_dir))
-                    .pick_folder(),
-                _ => None,
+                ),
+                rfd::MessageButtons::YesNoCancel,
+                rfd::MessageLevel::Info,
+            );
+            match result {
+                Err(error) => {
+                    let message = format!("Could not open the Scarlet import question: {error}");
+                    self.state.append_cli_output(&message);
+                    self.settings_notice = Some(message);
+                    return;
+                }
+                Ok(rfd::MessageDialogResult::Yes) => Some(detected),
+                Ok(rfd::MessageDialogResult::No) => match crate::dialogs::pick_folder(
+                    "Choose the Scarlet data folder",
+                    Some(self.data_dir.parent().unwrap_or(&self.data_dir)),
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let message = format!("Could not open the Scarlet folder picker: {error}");
+                        self.state.append_cli_output(&message);
+                        self.settings_notice = Some(message);
+                        return;
+                    }
+                },
+                Ok(_) => None,
             }
         } else {
-            rfd::FileDialog::new()
-                .set_title("Choose the Scarlet data folder")
-                .set_directory(self.data_dir.parent().unwrap_or(&self.data_dir))
-                .pick_folder()
+            match crate::dialogs::pick_folder(
+                "Choose the Scarlet data folder",
+                Some(self.data_dir.parent().unwrap_or(&self.data_dir)),
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    let message = format!("Could not open the Scarlet folder picker: {error}");
+                    self.state.append_cli_output(&message);
+                    self.settings_notice = Some(message);
+                    return;
+                }
+            }
         };
         let Some(source) = source else { return };
         if !scarlet_core::paths::settings_file_usable(&source) {
@@ -3365,25 +3394,31 @@ impl ScarletApp {
                 "{} does not contain a readable, non-empty settings.json, so it was not imported.",
                 source.display()
             );
-            rfd::MessageDialog::new()
-                .set_title("Celeste - not a Scarlet data folder")
-                .set_description(&message)
-                .set_level(rfd::MessageLevel::Error)
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
+            let _ = crate::dialogs::message(
+                "Celeste - not a Scarlet data folder",
+                &message,
+                rfd::MessageButtons::Ok,
+                rfd::MessageLevel::Error,
+            );
             self.settings_notice = Some(message);
             return;
         }
-        let confirmed = rfd::MessageDialog::new()
-            .set_title("Celeste - import Scarlet data")
-            .set_description(format!(
+        let confirmed = crate::dialogs::message(
+            "Celeste - import Scarlet data",
+            format!(
                 "Add reusable data from:\n{}\n\ninto Celeste:\n{}\n\nExisting Celeste records win conflicts. Scarlet contributes missing staff, watched entities, moderation tags, Discord permissions, account links and history. Settings and credentials are skipped, and the Scarlet folder is never changed.\n\nCeleste must restart to perform this safely.",
                 source.display(),
                 self.data_dir.display(),
-            ))
-            .set_buttons(rfd::MessageButtons::OkCancel)
-            .show();
-        if confirmed != rfd::MessageDialogResult::Ok {
+            ),
+            rfd::MessageButtons::OkCancel,
+            rfd::MessageLevel::Info,
+        );
+        if !matches!(confirmed, Ok(rfd::MessageDialogResult::Ok)) {
+            if let Err(error) = confirmed {
+                let message = format!("Could not open the Scarlet import confirmation: {error}");
+                self.state.append_cli_output(&message);
+                self.settings_notice = Some(message);
+            }
             return;
         }
         match scarlet_core::legacy_import::queue(&self.data_dir, &source) {

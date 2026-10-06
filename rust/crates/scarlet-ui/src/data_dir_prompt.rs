@@ -47,11 +47,18 @@ pub fn ask_where_to_store_data(default_dir: &Path) -> PathBuf {
         default_dir.display()
     );
 
-    let use_default = rfd::MessageDialog::new()
-        .set_title("Celeste - data folder")
-        .set_description(&message)
-        .set_buttons(rfd::MessageButtons::YesNo)
-        .show();
+    let use_default = match crate::dialogs::message(
+        "Celeste - data folder",
+        &message,
+        rfd::MessageButtons::YesNo,
+        rfd::MessageLevel::Info,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(%error, "Could not open the first-run data-folder question");
+            return default_dir.to_path_buf();
+        }
+    };
 
     if use_default == rfd::MessageDialogResult::Yes {
         // The platform default needs no pointer file: it is what resolution
@@ -59,10 +66,16 @@ pub fn ask_where_to_store_data(default_dir: &Path) -> PathBuf {
         return default_dir.to_path_buf();
     }
 
-    let picked = rfd::FileDialog::new()
-        .set_title("Choose a folder for Celeste's data")
-        .set_directory(default_dir.parent().unwrap_or(default_dir))
-        .pick_folder();
+    let picked = match crate::dialogs::pick_folder(
+        "Choose a folder for Celeste's data",
+        Some(default_dir.parent().unwrap_or(default_dir)),
+    ) {
+        Ok(picked) => picked,
+        Err(error) => {
+            tracing::error!(%error, "Could not open the first-run data-folder picker");
+            None
+        }
+    };
 
     match picked {
         Some(chosen) => {

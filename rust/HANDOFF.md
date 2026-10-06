@@ -465,3 +465,15 @@ companion process avoids the cross-platform
 winit limitation around creating a splash event loop and then a second main
 event loop in one process. It times itself out after 90 seconds if the parent
 is killed; headless launches never spawn it.
+
+## Update 2026-10-06: Linux native-dialog crash
+
+Every remaining synchronous `rfd::FileDialog`/`MessageDialog` call was unsafe
+with the Linux XDG portal backend. A real log captured zbus panicking on the
+egui main thread with `there is no reactor running`, which terminated Celeste
+when an import or data-folder picker opened. `scarlet-ui::dialogs` now drives
+rfd's asynchronous APIs inside a small Tokio reactor and contains a backend
+panic as a visible error instead of losing the process. Existing-user Scarlet
+import, first-run Scarlet selection, data-folder selection/move, and their
+confirmation/error messages all use the bridge. Watched-group file import was
+already using `AsyncFileDialog` on Celeste's runtime and remains asynchronous.
