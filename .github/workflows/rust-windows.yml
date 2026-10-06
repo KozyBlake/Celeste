@@ -51,7 +51,7 @@ jobs:
 
       - name: Prepare Celeste executable
         shell: pwsh
-        run: Copy-Item target/release/scarlet.exe celeste-testing.exe
+        run: Copy-Item target/release/celeste.exe celeste-testing.exe
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@v7

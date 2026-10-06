@@ -25,10 +25,10 @@ cd Celeste/rust
 cargo build --release
 ```
 
-The binary is `rust/target/release/scarlet`. (The crate names and the binary
-keep the `scarlet` spelling deliberately — only user-visible strings say
-Celeste. Renaming them would churn the whole workspace for no functional
-gain.)
+The binary is `rust/target/release/celeste`. Internal library crate names keep
+the `scarlet` spelling for source compatibility, but the executable uses the
+user-visible project name so Linux process monitors and desktop launchers show
+`celeste` consistently.
 
 A cold build takes a few minutes; incremental builds are seconds.
 

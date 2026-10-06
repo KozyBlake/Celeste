@@ -3,10 +3,10 @@ name = "scarlet"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Rust port of net.sybyline.scarlet.Main / Scarlet (entry point)"
+description = "Celeste VRChat moderation logger"
 
 [[bin]]
-name = "scarlet"
+name = "celeste"
 path = "src/main.rs"
 
 [build-dependencies]
