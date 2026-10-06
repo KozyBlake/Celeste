@@ -4904,6 +4904,7 @@ pub fn run(
     }
     let options = eframe::NativeOptions {
         viewport,
+        renderer: crate::platform::native_renderer(),
         ..Default::default()
     };
     eframe::run_native(

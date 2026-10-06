@@ -35,6 +35,7 @@ pub fn run(status_file: PathBuf) -> eframe::Result<()> {
         "Celeste — Starting",
         eframe::NativeOptions {
             viewport,
+            renderer: crate::platform::native_renderer(),
             ..Default::default()
         },
         Box::new(move |_cc| Ok(Box::new(StartupSplash::new(status_file)))),

@@ -25,6 +25,17 @@ pub fn is_headless() -> bool {
     }
 }
 
+/// Windows' built-in fallback OpenGL implementation is only version 1.1,
+/// which cannot run egui_glow. Prefer wgpu there so normal installations
+/// and GPU-passthrough VMs use DirectX 12. Linux keeps the proven Glow path.
+pub fn native_renderer() -> eframe::Renderer {
+    if cfg!(windows) {
+        eframe::Renderer::Wgpu
+    } else {
+        eframe::Renderer::Glow
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

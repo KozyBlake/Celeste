@@ -16,7 +16,7 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-eframe = "0.29"
+eframe = { version = "0.29", features = ["wgpu"] }
 egui = "0.29"
 egui_extras = "0.29"
 image.workspace = true
