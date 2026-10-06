@@ -9,6 +9,9 @@ description = "Rust port of net.sybyline.scarlet.Main / Scarlet (entry point)"
 name = "scarlet"
 path = "src/main.rs"
 
+[build-dependencies]
+winresource = "0.1.31"
+
 [dependencies]
 scarlet-core.workspace = true
 scarlet-gif.workspace = true

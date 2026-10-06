@@ -26,6 +26,10 @@
 //! the async work onto it, and reserves the main thread for the GUI event
 //! loop.
 
+// Release builds are desktop applications on Windows. Debug builds retain a
+// console so developers can still see startup failures while diagnosing them.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::sync::Arc;
 
 use scarlet_core::settings::Settings;
@@ -39,11 +43,10 @@ fn main() -> anyhow::Result<()> {
     // ports that, and adds the "ask on a first run" step.
     let resolved = scarlet_core::paths::resolve_data_dir();
     let headless = scarlet_ui::platform::is_headless();
-    let data_dir = match (&resolved.source, headless) {
-        (scarlet_core::paths::DataDirSource::FirstRun, false) => {
-            scarlet_ui::data_dir_prompt::ask_where_to_store_data(&resolved.path)
-        }
-        _ => resolved.path.clone(),
+    let data_dir = if headless {
+        resolved.path.clone()
+    } else {
+        scarlet_ui::data_dir_prompt::choose_startup_data_dir(&resolved)
     };
     std::fs::create_dir_all(&data_dir)?;
 

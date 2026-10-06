@@ -3242,7 +3242,7 @@ impl ScarletApp {
                 Some("That is already the data folder; nothing was moved.".to_string());
             return;
         }
-        match copy_data_dir(&self.data_dir, &target) {
+        match scarlet_core::paths::copy_data_dir(&self.data_dir, &target) {
             Ok(copied) => {
                 let remembered = scarlet_core::paths::remember_data_dir(&target);
                 let message = match remembered {
@@ -4031,35 +4031,6 @@ fn sort_players(players: &mut [scarlet_core::ui::ConnectedPlayer], sort: Option<
     });
 }
 
-/// Recursively copies a data directory, skipping the regenerable parts.
-/// Returns how many entries were copied.
-///
-/// `logs/` and `caches/` are deliberately not carried over: they are the
-/// bulk of the folder, they rebuild themselves, and copying tens of
-/// megabytes of old logs into a fresh location is not what "move my data"
-/// means.
-fn copy_data_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<usize> {
-    const SKIP: [&str; 3] = ["logs", "caches", "backups"];
-    std::fs::create_dir_all(to)?;
-    let mut copied = 0usize;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        if SKIP.iter().any(|skip| name == std::ffi::OsStr::new(skip)) {
-            continue;
-        }
-        let source = entry.path();
-        let destination = to.join(&name);
-        if entry.file_type()?.is_dir() {
-            copied += copy_data_dir(&source, &destination)?;
-        } else {
-            std::fs::copy(&source, &destination)?;
-            copied += 1;
-        }
-    }
-    Ok(copied)
-}
-
 /// Whether a text setting's buffer should be written to the store.
 ///
 /// Split out so the rule is testable and so the dead expression it
@@ -4316,7 +4287,7 @@ mod tests {
         std::fs::write(from.join("logs").join("celeste_log.txt"), "noise").unwrap();
         std::fs::write(from.join("caches").join("junk.json"), "noise").unwrap();
 
-        let copied = copy_data_dir(&from, &to).unwrap();
+        let copied = scarlet_core::paths::copy_data_dir(&from, &to).unwrap();
 
         assert!(to.join("settings.json").is_file(), "settings must come across");
         assert!(to.join("secure-prefs.json").is_file(), "the login must come across");

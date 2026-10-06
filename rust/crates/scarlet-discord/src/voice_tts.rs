@@ -324,11 +324,7 @@ async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Resul
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|directory| directory.join(executable))
-            .find(|candidate| candidate.is_file())
-    })
+    scarlet_core::tts_voices::find_executable(executable)
 }
 
 #[cfg(test)]

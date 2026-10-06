@@ -121,9 +121,14 @@ fn proton_prefix() -> PathBuf {
 /// `USERPROFILE` instead (falling back to `HOMEDRIVE`+`HOMEPATH` on older
 /// setups where even that's unset).
 fn dirs_home() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(profile);
+    }
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home);
     }
+    #[cfg(not(windows))]
     if let Some(profile) = std::env::var_os("USERPROFILE") {
         return PathBuf::from(profile);
     }

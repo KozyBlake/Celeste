@@ -29,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::identity::{GROUP, LEGACY_NAME, NAME};
+use crate::identity::{GROUP, LEGACY_NAME, NAME, UPSTREAM_GROUP};
 
 /// Where the remembered choice is stored, relative to the platform default
 /// directory. A pointer file rather than a setting, because it has to be
@@ -90,11 +90,16 @@ fn default_data_dir_for(group: &str) -> PathBuf {
 /// corrupt.
 pub fn settings_file_usable(dir: &Path) -> bool {
     let file = dir.join("settings.json");
-    let Ok(metadata) = std::fs::metadata(&file) else { return false };
+    let Ok(metadata) = std::fs::metadata(&file) else {
+        return false;
+    };
     if !metadata.is_file() || metadata.len() == 0 {
         return false;
     }
-    match std::fs::read_to_string(&file).ok().and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok()) {
+    match std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    {
         Some(serde_json::Value::Object(map)) => !map.is_empty(),
         _ => false,
     }
@@ -105,19 +110,23 @@ pub fn settings_file_usable(dir: &Path) -> bool {
 pub fn find_all_usable_data_dirs(primary: &Path) -> Vec<PathBuf> {
     let home = home_dir();
     let mut candidates: Vec<PathBuf> = Vec::new();
-    // The current name first, then the name this fork used before it was
-    // renamed — an install that predates the rename must keep working
-    // rather than silently starting from a blank config.
-    for name in [NAME, LEGACY_NAME] {
+    // Current Celeste first, then both known Java Scarlet publishers. The
+    // upstream build used SybylineNetwork/Scarlet; the maintained fork used
+    // KozyBlake/Scarlet before being renamed to Celeste.
+    for (group, name) in [
+        (GROUP, NAME),
+        (GROUP, LEGACY_NAME),
+        (UPSTREAM_GROUP, LEGACY_NAME),
+    ] {
         if let Some(xdg) = non_empty_env("XDG_DATA_HOME") {
-            candidates.push(PathBuf::from(xdg).join(GROUP).join(name));
+            candidates.push(PathBuf::from(xdg).join(group).join(name));
         }
-        candidates.push(home.join(".local/share").join(GROUP).join(name));
+        candidates.push(home.join(".local/share").join(group).join(name));
         if let Some(local_app_data) = non_empty_env("LOCALAPPDATA") {
-            candidates.push(PathBuf::from(local_app_data).join(GROUP).join(name));
+            candidates.push(PathBuf::from(local_app_data).join(group).join(name));
         }
-        candidates.push(home.join("AppData/Local").join(GROUP).join(name));
-        candidates.push(home.join(format!(".{GROUP}")).join(name));
+        candidates.push(home.join("AppData/Local").join(group).join(name));
+        candidates.push(home.join(format!(".{group}")).join(name));
         // A bare ~/<name>, used by older SCARLET_HOME layouts and early builds.
         candidates.push(home.join(name));
     }
@@ -172,6 +181,34 @@ pub fn forget_data_dir() -> std::io::Result<()> {
     }
 }
 
+/// Copies durable application data into a new directory without modifying
+/// the source. Logs, caches and backups are intentionally skipped: they are
+/// regenerable bulk and can be very large on long-running installations.
+///
+/// This is shared by first-run Scarlet migration and Settings' **Move data
+/// folder** action so both paths preserve exactly the same files.
+pub fn copy_data_dir(from: &Path, to: &Path) -> std::io::Result<usize> {
+    const SKIP: [&str; 3] = ["logs", "caches", "backups"];
+    std::fs::create_dir_all(to)?;
+    let mut copied = 0usize;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if SKIP.iter().any(|skip| name == std::ffi::OsStr::new(skip)) {
+            continue;
+        }
+        let source = entry.path();
+        let destination = to.join(&name);
+        if entry.file_type()?.is_dir() {
+            copied += copy_data_dir(&source, &destination)?;
+        } else {
+            std::fs::copy(&source, &destination)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
 /// Resolves the data directory. Creates nothing — the caller decides
 /// whether to create it or to ask first (see [`DataDirSource::FirstRun`]).
 pub fn resolve_data_dir() -> ResolvedDataDir {
@@ -190,38 +227,70 @@ pub fn resolve_data_dir() -> ResolvedDataDir {
         } else {
             let path = PathBuf::from(&trimmed);
             let path = std::fs::canonicalize(&path).unwrap_or(path);
-            return ResolvedDataDir { path, source: DataDirSource::Explicit, other_candidates: Vec::new() };
+            return ResolvedDataDir {
+                path,
+                source: DataDirSource::Explicit,
+                other_candidates: Vec::new(),
+            };
         }
     }
 
     if let Some(remembered) = remembered_data_dir() {
-        let others = find_all_usable_data_dirs(&remembered);
-        return ResolvedDataDir { path: remembered, source: DataDirSource::Remembered, other_candidates: others };
+        // A moved/deleted drive must not strand Celeste in a new blank
+        // folder forever. Ignore stale pointers and continue through normal
+        // legacy discovery so the operator can choose again.
+        if settings_file_usable(&remembered) {
+            let others = find_all_usable_data_dirs(&remembered);
+            return ResolvedDataDir {
+                path: remembered,
+                source: DataDirSource::Remembered,
+                other_candidates: others,
+            };
+        }
     }
 
     let default = default_data_dir();
     if settings_file_usable(&default) {
         let others = find_all_usable_data_dirs(&default);
-        return ResolvedDataDir { path: default, source: DataDirSource::PlatformDefault, other_candidates: others };
+        return ResolvedDataDir {
+            path: default,
+            source: DataDirSource::PlatformDefault,
+            other_candidates: others,
+        };
     }
 
     let mut discovered = find_all_usable_data_dirs(&default);
     if !discovered.is_empty() {
         let chosen = discovered.remove(0);
-        return ResolvedDataDir { path: chosen, source: DataDirSource::Discovered, other_candidates: discovered };
+        return ResolvedDataDir {
+            path: chosen,
+            source: DataDirSource::Discovered,
+            other_candidates: discovered,
+        };
     }
 
-    ResolvedDataDir { path: default, source: DataDirSource::FirstRun, other_candidates: Vec::new() }
+    ResolvedDataDir {
+        path: default,
+        source: DataDirSource::FirstRun,
+        other_candidates: Vec::new(),
+    }
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.trim().is_empty())
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn home_dir() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(profile);
+    }
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home);
     }
+    #[cfg(not(windows))]
     if let Some(profile) = std::env::var_os("USERPROFILE") {
         return PathBuf::from(profile);
     }
@@ -231,11 +300,17 @@ fn home_dir() -> PathBuf {
 /// Java uses the jar's directory; the equivalent here is the directory the
 /// running binary sits in.
 pub fn executable_dir() -> Option<PathBuf> {
-    std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
 }
 
 fn canonical_key(path: &Path) -> String {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().to_string()
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -246,6 +321,44 @@ mod tests {
     /// in parallel threads by default — without a lock they would see each
     /// other's `SCARLET_HOME`/`HOME` and fail intermittently.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct TestEnvironment {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl TestEnvironment {
+        fn isolated(home: &Path) -> Self {
+            let keys = [
+                "CELESTE_HOME",
+                "SCARLET_HOME",
+                "XDG_DATA_HOME",
+                "LOCALAPPDATA",
+                "HOME",
+                "USERPROFILE",
+            ];
+            let saved = keys
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect();
+            std::env::remove_var("CELESTE_HOME");
+            std::env::remove_var("SCARLET_HOME");
+            for key in ["XDG_DATA_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE"] {
+                std::env::set_var(key, home);
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for TestEnvironment {
+        fn drop(&mut self) {
+            for (key, value) in self.saved.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn a_config_is_only_usable_when_it_is_a_non_empty_object() {
@@ -261,13 +374,19 @@ mod tests {
         std::fs::write(dir.path().join("settings.json"), "{ not json").unwrap();
         assert!(!settings_file_usable(dir.path()), "corrupt file");
 
-        std::fs::write(dir.path().join("settings.json"), r#"{"vrchat_group_id":"grp_x"}"#).unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{"vrchat_group_id":"grp_x"}"#,
+        )
+        .unwrap();
         assert!(settings_file_usable(dir.path()));
     }
 
     #[test]
     fn an_explicit_home_wins_under_either_env_var() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
 
         std::env::set_var("CELESTE_HOME", dir.path());
@@ -289,22 +408,96 @@ mod tests {
     /// the old KozyBlake/Scarlet folder is found and adopted.
     #[test]
     fn a_pre_rename_data_folder_is_discovered() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let fake_home = tempfile::tempdir().unwrap();
-        std::env::remove_var("SCARLET_HOME");
-        std::env::remove_var("CELESTE_HOME");
-        std::env::set_var("XDG_DATA_HOME", fake_home.path());
-        std::env::set_var("HOME", fake_home.path());
+        let _environment = TestEnvironment::isolated(fake_home.path());
 
         let legacy = fake_home.path().join(GROUP).join(LEGACY_NAME);
         std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("settings.json"), r#"{"vrchat_group_id":"grp_x"}"#).unwrap();
+        std::fs::write(
+            legacy.join("settings.json"),
+            r#"{"vrchat_group_id":"grp_x"}"#,
+        )
+        .unwrap();
 
         let resolved = resolve_data_dir();
         assert_eq!(resolved.source, DataDirSource::Discovered);
         assert_eq!(resolved.path, legacy);
 
-        std::env::remove_var("XDG_DATA_HOME");
+    }
+
+    #[test]
+    fn an_upstream_sybyline_scarlet_folder_is_discovered() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let fake_home = tempfile::tempdir().unwrap();
+        let _environment = TestEnvironment::isolated(fake_home.path());
+
+        let legacy = fake_home.path().join(UPSTREAM_GROUP).join(LEGACY_NAME);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(
+            legacy.join("settings.json"),
+            r#"{"vrchat_group_id":"grp_upstream"}"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_data_dir();
+        assert_eq!(resolved.source, DataDirSource::Discovered);
+        assert_eq!(resolved.path, legacy);
+
+    }
+
+    #[test]
+    fn a_stale_remembered_folder_does_not_hide_a_legacy_install() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let fake_home = tempfile::tempdir().unwrap();
+        let _environment = TestEnvironment::isolated(fake_home.path());
+
+        let default = default_data_dir();
+        std::fs::create_dir_all(&default).unwrap();
+        std::fs::write(
+            default.join(POINTER_FILE),
+            fake_home
+                .path()
+                .join("missing")
+                .to_string_lossy()
+                .as_bytes(),
+        )
+        .unwrap();
+        let legacy = fake_home.path().join(UPSTREAM_GROUP).join(LEGACY_NAME);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("settings.json"), r#"{"legacy":true}"#).unwrap();
+
+        let resolved = resolve_data_dir();
+        assert_eq!(resolved.source, DataDirSource::Discovered);
+        assert_eq!(resolved.path, legacy);
+
+    }
+
+    #[test]
+    fn migration_copy_keeps_durable_data_and_leaves_the_source_untouched() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join("gaud")).unwrap();
+        std::fs::create_dir_all(source.path().join("logs")).unwrap();
+        std::fs::write(source.path().join("settings.json"), "{\"legacy\":true}").unwrap();
+        std::fs::write(source.path().join("moderation_tags.json"), "[]").unwrap();
+        std::fs::write(source.path().join("gaud").join("entry.json"), "{}").unwrap();
+        std::fs::write(source.path().join("logs").join("scarlet_log.txt"), "bulk").unwrap();
+
+        let copied = copy_data_dir(source.path(), destination.path()).unwrap();
+
+        assert_eq!(copied, 3);
+        assert!(destination.path().join("settings.json").is_file());
+        assert!(destination.path().join("moderation_tags.json").is_file());
+        assert!(destination.path().join("gaud").join("entry.json").is_file());
+        assert!(!destination.path().join("logs").exists());
+        assert!(source.path().join("settings.json").is_file());
     }
 
     /// The behaviour that made this necessary: with no config anywhere, the
@@ -312,31 +505,33 @@ mod tests {
     /// the process's working directory.
     #[test]
     fn a_first_run_resolves_to_the_platform_directory_not_the_working_directory() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let fake_home = tempfile::tempdir().unwrap();
-        std::env::remove_var("SCARLET_HOME");
-        std::env::remove_var("CELESTE_HOME");
-        std::env::set_var("XDG_DATA_HOME", fake_home.path());
-        std::env::set_var("HOME", fake_home.path());
+        let _environment = TestEnvironment::isolated(fake_home.path());
 
         let resolved = resolve_data_dir();
         assert_eq!(resolved.source, DataDirSource::FirstRun);
         assert_eq!(resolved.path, fake_home.path().join(GROUP).join(NAME));
         assert_ne!(resolved.path, std::env::current_dir().unwrap());
 
-        std::env::remove_var("XDG_DATA_HOME");
     }
 
     #[test]
     fn a_remembered_choice_is_used_on_the_next_run() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let fake_home = tempfile::tempdir().unwrap();
         let chosen = tempfile::tempdir().unwrap();
-        std::env::remove_var("SCARLET_HOME");
-        std::env::remove_var("CELESTE_HOME");
-        std::env::set_var("XDG_DATA_HOME", fake_home.path());
-        std::env::set_var("HOME", fake_home.path());
+        let _environment = TestEnvironment::isolated(fake_home.path());
 
+        std::fs::write(
+            chosen.path().join("settings.json"),
+            r#"{"vrchat_group_id":"grp_remembered"}"#,
+        )
+        .unwrap();
         remember_data_dir(chosen.path()).unwrap();
         let resolved = resolve_data_dir();
         assert_eq!(resolved.source, DataDirSource::Remembered);
@@ -344,6 +539,5 @@ mod tests {
 
         forget_data_dir().unwrap();
         assert_eq!(resolve_data_dir().source, DataDirSource::FirstRun);
-        std::env::remove_var("XDG_DATA_HOME");
     }
 }

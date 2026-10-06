@@ -6,6 +6,10 @@
 //! (data-dir resolution/migration, the settings/executor wiring).
 
 pub const GROUP: &str = "KozyBlake";
+/// The organization name used by upstream Scarlet before the KozyBlake
+/// fork. Data discovery keeps this because community installs can still
+/// live under `SybylineNetwork/Scarlet` on Windows or Linux.
+pub const UPSTREAM_GROUP: &str = "SybylineNetwork";
 pub const NAME: &str = "Celeste";
 /// The name this fork shipped under before it was renamed. Kept because
 /// anything that has to *find* an existing install — the data-folder

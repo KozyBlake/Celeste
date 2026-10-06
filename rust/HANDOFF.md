@@ -403,3 +403,24 @@ then posts deduplicated incidents and recoveries for Discord gateway failures
 and VRChat session authorization loss; recovery notices include outage length
 and retry count. Discord failures that cannot be delivered during the outage
 are retained in memory and reported after the gateway becomes ready again.
+
+## Update 2026-10-05: Scarlet migration and Windows validation
+
+First-run discovery now covers both `SybylineNetwork/Scarlet` and
+`KozyBlake/Scarlet` across Linux- and Windows-style locations. GUI startup
+offers to copy a detected install into Celeste's platform directory, lets the
+operator choose a different Scarlet folder when detection is wrong, and leaves
+the source untouched. Stale remembered-folder pointers no longer suppress
+legacy discovery. The shared copy routine excludes only regenerable
+logs/caches/backups and is also used by Settings' data-folder move action.
+
+`.github/workflows/rust-windows.yml` runs the workspace tests and release build
+on a native Windows runner and uploads `celeste-testing.exe`; the external-
+service and desktop checks that CI cannot perform are listed in
+`WINDOWS-TESTING.md`. Shared executable discovery now honors Windows
+`PATHEXT`, fixing PowerShell/SAPI detection for both local and Discord TTS,
+and Windows home resolution prefers `USERPROFILE` over a stray Unix-style
+`HOME`. Release executables embed the polished Celeste icon and use the GUI
+subsystem; debug builds retain their diagnostic console. Windows MSVC builds
+also statically link their C runtime so the artifact does not assume a Visual
+C++ redistributable is already installed.

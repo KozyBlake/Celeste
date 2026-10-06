@@ -573,21 +573,8 @@ fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&path) {
-        let candidate = directory.join(executable);
-        if is_executable(&candidate) {
-            return Some(candidate);
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let candidate = directory.join(format!("{executable}.exe"));
-            if is_executable(&candidate) {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    scarlet_core::tts_voices::find_executable(executable)
+        .filter(|candidate| is_executable(candidate))
 }
 
 #[cfg(unix)]

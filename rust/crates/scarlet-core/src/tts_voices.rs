@@ -131,7 +131,7 @@ fn push_flite(out: &mut Vec<String>, command: &str) {
 /// the list (`registerPico`).
 #[cfg(target_os = "linux")]
 fn push_pico(out: &mut Vec<String>) {
-    if which("pico2wave").is_none() {
+    if find_executable("pico2wave").is_none() {
         return;
     }
     let names: Vec<String> = ["en-US", "en-GB", "de-DE", "es-ES", "fr-FR", "it-IT"]
@@ -209,8 +209,8 @@ fn is_simple_voice_token(token: &str) -> bool {
 
 #[allow(dead_code)]
 fn run(command: &str, args: &[&str]) -> Option<String> {
-    which(command)?;
-    let output = std::process::Command::new(command).args(args).output().ok()?;
+    let program = find_executable(command)?;
+    let output = std::process::Command::new(program).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -218,11 +218,39 @@ fn run(command: &str, args: &[&str]) -> Option<String> {
 }
 
 #[allow(dead_code)]
-fn which(command: &str) -> Option<std::path::PathBuf> {
+/// Finds a command exactly as it would be installed on the current platform.
+///
+/// Windows' command launcher applies `PATHEXT`, but a direct filesystem check
+/// does not. Looking only for `powershell` therefore misses the standard
+/// `powershell.exe` even though `Command::new("powershell")` would run it.
+/// Keep this shared so desktop and Discord TTS make the same decision.
+pub fn find_executable(command: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
+    let names = executable_names(command);
     std::env::split_paths(&path)
-        .map(|dir| dir.join(command))
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|candidate| candidate.is_file())
+}
+
+fn executable_names(command: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let mut names = vec![command.to_owned()];
+        if std::path::Path::new(command).extension().is_none() {
+            let extensions = std::env::var("PATHEXT")
+                .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+            names.extend(
+                extensions
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|extension| !extension.is_empty())
+                    .map(|extension| format!("{command}{extension}")),
+            );
+        }
+        names
+    }
+    #[cfg(not(windows))]
+    vec![command.to_owned()]
 }
 
 #[cfg(test)]
@@ -235,6 +263,19 @@ mod tests {
         assert_eq!(id.engine, "espeak-ng");
         assert_eq!(id.voice, "en-us");
         assert_eq!(id.as_id(), "espeak-ng/en-us");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_executable_lookup_applies_pathext() {
+        let original = std::env::var_os("PATHEXT");
+        std::env::set_var("PATHEXT", ".EXE;.CMD");
+        let names = executable_names("powershell");
+        match original {
+            Some(value) => std::env::set_var("PATHEXT", value),
+            None => std::env::remove_var("PATHEXT"),
+        }
+        assert_eq!(names, ["powershell", "powershell.EXE", "powershell.CMD"]);
     }
 
     /// A voice saved before engine prefixes existed must keep selecting the
@@ -320,7 +361,7 @@ pub fn render_command(voice: &str, text: &str, output: &std::path::Path) -> Opti
 
     let (program, args): (std::path::PathBuf, Vec<OsString>) = match parsed.engine.as_str() {
         "espeak-ng" | "espeak" => {
-            let program = which(&parsed.engine)?;
+            let program = find_executable(&parsed.engine)?;
             let mut args = vec![arg("-w"), out];
             if !name.is_empty() {
                 args.push(arg("-v"));
@@ -330,7 +371,7 @@ pub fn render_command(voice: &str, text: &str, output: &std::path::Path) -> Opti
             (program, args)
         }
         "flite" => {
-            let program = which("flite")?;
+            let program = find_executable("flite")?;
             let mut args = Vec::new();
             if !name.is_empty() {
                 args.push(arg("-voice"));
@@ -340,7 +381,7 @@ pub fn render_command(voice: &str, text: &str, output: &std::path::Path) -> Opti
             (program, args)
         }
         "pico2wave" => {
-            let program = which("pico2wave")?;
+            let program = find_executable("pico2wave")?;
             let mut args = Vec::new();
             if !name.is_empty() {
                 args.push(arg("-l"));
@@ -350,7 +391,7 @@ pub fn render_command(voice: &str, text: &str, output: &std::path::Path) -> Opti
             (program, args)
         }
         "say" => {
-            let program = which("say")?;
+            let program = find_executable("say")?;
             let mut args = vec![arg("--data-format=LEI16@22050"), arg("-o"), out];
             if !name.is_empty() {
                 args.push(arg("-v"));

@@ -1,0 +1,5 @@
+[target.'cfg(all(windows, target_env = "msvc"))']
+# Keep the downloadable Windows executable independent of a separately
+# installed Visual C++ redistributable. Windows SDK/system DLLs remain normal
+# operating-system dependencies.
+rustflags = ["-C", "target-feature=+crt-static"]
