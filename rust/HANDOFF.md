@@ -495,6 +495,8 @@ that VRChat/Discord credentials must be available for re-entry and that the
 result must be checked after restart. The queued request persists the selected
 mode (and remains backward-compatible with the first plain-path request
 format). Import work reports real fractional progress and filenames to the
-startup splash. After restart, a blocking in-app result window reports success
+startup splash. After restart, a full-page in-app result screen reports success
 or failure, backup location and counts, repeats the credential warning, and
-must be acknowledged before setup or the main UI continues.
+must be acknowledged before setup or the main UI continues. It is deliberately
+not an `egui::Window`: the first version looked like a window nested inside the
+Celeste window.

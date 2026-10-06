@@ -3191,30 +3191,64 @@ impl ScarletApp {
 
     }
 
-    fn legacy_import_result_window(&mut self, ctx: &egui::Context) {
+    fn legacy_import_result_page(&mut self, ctx: &egui::Context) {
         if let Some((success, message)) = self.legacy_import_result.clone() {
-            let mut close = false;
             let title = if success {
                 "Scarlet import completed"
             } else {
                 "Scarlet import failed"
             };
-            egui::Window::new(title)
-                .collapsible(false)
-                .resizable(true)
-                .default_width(560.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            let mut close = false;
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::none()
+                        .fill(crate::theme::INK)
+                        .inner_margin(egui::Margin::same(32.0)),
+                )
                 .show(ctx, |ui| {
-                    ui.label(message);
-                    ui.add_space(10.0);
-                    if success {
-                        ui.colored_label(
-                            egui::Color32::YELLOW,
-                            "Credentials were intentionally not transferred. Re-enter VRChat or Discord credentials if prompted, then double-check the imported lists and history before relying on them.",
-                        );
-                    }
-                    ui.add_space(10.0);
-                    close = ui.button(if success { "I’ve checked the result" } else { "Close" }).clicked();
+                    ui.add_space(36.0);
+                    let width = ui.available_width().min(720.0);
+                    let side = ((ui.available_width() - width) / 2.0).max(0.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(side);
+                        ui.vertical(|ui| {
+                            ui.set_width(width);
+                            ui.label(
+                                egui::RichText::new(if success {
+                                    "MIGRATION COMPLETE"
+                                } else {
+                                    "MIGRATION NEEDS ATTENTION"
+                                })
+                                .small()
+                                .strong()
+                                .color(if success {
+                                    crate::theme::OK
+                                } else {
+                                    crate::theme::WARN
+                                }),
+                            );
+                            ui.heading(title);
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.add_space(16.0);
+                            ui.label(message);
+                            if success {
+                                ui.add_space(18.0);
+                                ui.colored_label(
+                                    crate::theme::WARN,
+                                    "Credentials were intentionally not transferred. Re-enter VRChat or Discord credentials if prompted, then double-check the imported lists and history before relying on them.",
+                                );
+                            }
+                            ui.add_space(24.0);
+                            close = ui
+                                .add(self.primary_button(if success {
+                                    "I’ve checked the result"
+                                } else {
+                                    "Continue"
+                                }))
+                                .clicked();
+                        });
+                    });
                 });
             if close {
                 self.legacy_import_result = None;
@@ -4027,10 +4061,7 @@ impl eframe::App for ScarletApp {
         // guarantees the user sees the credential reminder and verifies the
         // result instead of having it buried behind another setup page.
         if self.legacy_import_result.is_some() {
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none().fill(crate::theme::INK))
-                .show(ctx, |_ui| {});
-            self.legacy_import_result_window(ctx);
+            self.legacy_import_result_page(ctx);
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
             return;
         }
