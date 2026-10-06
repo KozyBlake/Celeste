@@ -33,6 +33,7 @@ use crate::state::UiState;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Instance,
+    Clients,
     Settings,
     Cli,
 }
@@ -107,6 +108,43 @@ fn resolve_world_id(input: &str) -> Option<String> {
     let candidate = input.get(start..start + 41)?;
     let uuid = candidate.strip_prefix("wrld_")?;
     (uuid.len() == 36 && uuid.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() })).then(|| candidate.to_string())
+}
+
+fn decode_url_component(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = |byte: u8| match byte {
+                b'0'..=b'9' => Some(byte - b'0'),
+                b'a'..=b'f' => Some(byte - b'a' + 10),
+                b'A'..=b'F' => Some(byte - b'A' + 10),
+                _ => None,
+            };
+            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
+                output.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(if bytes[index] == b'+' { b' ' } else { bytes[index] });
+        index += 1;
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn resolve_instance_location(input: &str) -> Option<String> {
+    let input = input.trim();
+    if scarlet_vrchat::managed_clients::split_location(input).is_some() {
+        return Some(input.to_string());
+    }
+    let world = resolve_world_id(input)?;
+    let instance_start = input.find("instanceId=")? + "instanceId=".len();
+    let encoded = &input[instance_start..];
+    let encoded = encoded.split(['&', '#']).next()?;
+    let instance = decode_url_component(encoded);
+    (!instance.trim().is_empty()).then(|| format!("{world}:{instance}"))
 }
 
 /// Ask for either a live Scarlet folder or a portable archive. Archive data
@@ -525,6 +563,7 @@ pub struct ScarletApp {
     pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
     tts: Arc<crate::tts::TtsService>,
     tts_route: Arc<crate::tts::TtsSinkAdapter>,
+    managed_clients: Arc<scarlet_vrchat::managed_clients::ManagedClientStore>,
     tab: Tab,
     /// Java uses `DO_NOTHING_ON_CLOSE` and asks before quitting
     /// (`ScarletUI.java:1281-1288`, `uiModalExit` at `:1391-1401`), so the
@@ -595,6 +634,8 @@ pub struct ScarletApp {
     diagnostics_open: bool,
     credits_open: bool,
     visual_style_installed: bool,
+    managed_client_edit: Option<scarlet_vrchat::managed_clients::ManagedClientSlot>,
+    managed_client_error: Option<String>,
 }
 
 impl ScarletApp {
@@ -614,6 +655,7 @@ impl ScarletApp {
         pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
         two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
         two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
+        managed_clients: Arc<scarlet_vrchat::managed_clients::ManagedClientStore>,
     ) -> Self {
         let scarlet_data = shared.scarlet_data.clone();
         let staff_list = shared.staff_list.clone();
@@ -729,6 +771,7 @@ impl ScarletApp {
             pronoun_lists,
             tts,
             tts_route,
+            managed_clients,
             tab: Tab::Instance,
             exit_prompt_open: false,
             exit_confirmed: false,
@@ -771,6 +814,8 @@ impl ScarletApp {
             diagnostics_open: false,
             credits_open: false,
             visual_style_installed: false,
+            managed_client_edit: None,
+            managed_client_error: None,
         }
     }
 
@@ -1207,7 +1252,7 @@ impl ScarletApp {
         if !show_cli && self.tab == Tab::Cli {
             self.tab = Tab::Instance;
         }
-        let tabs = [(Tab::Instance, "Instance"), (Tab::Settings, "Settings"), (Tab::Cli, "CLI")];
+        let tabs = [(Tab::Instance, "Instance"), (Tab::Clients, "Clients"), (Tab::Settings, "Settings"), (Tab::Cli, "CLI")];
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (tab, label) in tabs {
@@ -2671,6 +2716,309 @@ impl ScarletApp {
                     }
                 });
         });
+    }
+
+    fn managed_clients_tab(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.heading("Managed VRChat clients");
+                ui.label(
+                    egui::RichText::new(
+                        "Keep explicitly assigned moderator accounts in exact group instances.",
+                    )
+                    .weak(),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(self.primary_button("+ Add coverage slot"))
+                    .clicked()
+                {
+                    let used = self
+                        .managed_clients
+                        .list()
+                        .into_iter()
+                        .map(|slot| slot.profile)
+                        .collect::<std::collections::HashSet<_>>();
+                    // Start at 1: profile 0 belongs to a manually launched
+                    // client and to the legacy instance follow, and the slot
+                    // validator rejects it.
+                    let profile = (1..).find(|profile| !used.contains(profile)).unwrap_or(1);
+                    self.managed_client_edit = Some(
+                        scarlet_vrchat::managed_clients::ManagedClientSlot {
+                            profile,
+                            ..Default::default()
+                        },
+                    );
+                    self.managed_client_error = None;
+                }
+            });
+        });
+        ui.add_space(8.0);
+        Self::inset_frame().show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(crate::theme::INFO, "Normal Steam/EAC launch only");
+                ui.separator();
+                ui.label("A VRChat-wide API outage pauses recovery instead of restarting every client.");
+                ui.separator();
+                ui.label("Automatic instance replacement is opt-in per slot.");
+            });
+        });
+        ui.add_space(10.0);
+
+        if self.managed_client_edit.is_some() {
+            let mut save_requested = false;
+            let mut cancel_requested = false;
+            Self::card_frame().show(ui, |ui| {
+                let slot = self.managed_client_edit.as_mut().expect("checked above");
+                ui.label(egui::RichText::new(if self.managed_clients.list().iter().any(|saved| saved.id == slot.id) {
+                    "Edit coverage slot"
+                } else {
+                    "New coverage slot"
+                }).strong().size(crate::theme::TEXT_HEADING));
+                ui.add_space(7.0);
+                egui::Grid::new("managed_client_fields")
+                    .num_columns(2)
+                    .spacing([16.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Slot name");
+                        ui.add(egui::TextEdit::singleline(&mut slot.label).desired_width(420.0));
+                        ui.end_row();
+                        ui.label("Local profile");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut slot.profile).range(1..=999).speed(1));
+                            ui.weak("VRChat --profile number; each slot must be unique (0 is reserved)");
+                        });
+                        ui.end_row();
+                        ui.label("Expected account ID");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut slot.expected_user_id)
+                                .desired_width(420.0)
+                                .hint_text("usr_… (required for safe location verification)"),
+                        );
+                        ui.end_row();
+                        ui.label("Account label");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut slot.expected_display_name)
+                                .desired_width(420.0)
+                                .hint_text("Optional display name for operators"),
+                        );
+                        ui.end_row();
+                        ui.label("Assigned instance");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut slot.desired_location)
+                                .desired_width(420.0)
+                                .hint_text("wrld_…:instance… or VRChat launch URL"),
+                        );
+                        ui.end_row();
+                    });
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut slot.enabled, "Manage this slot");
+                    ui.checkbox(&mut slot.auto_restart, "Restart after crash/disconnect");
+                    ui.checkbox(
+                        &mut slot.auto_recreate_instance,
+                        "Create a replacement when its instance expires",
+                    );
+                });
+
+                if slot.auto_recreate_instance {
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(7.0);
+                    ui.label(egui::RichText::new("Replacement instance template").strong());
+                    ui.weak("Celeste uses this only after the exact assigned group instance disappears.");
+                    ui.add_space(5.0);
+                    egui::Grid::new("managed_client_template")
+                        .num_columns(2)
+                        .spacing([16.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.label("World URL or ID");
+                            ui.add(egui::TextEdit::singleline(&mut slot.template.world_id).desired_width(420.0));
+                            ui.end_row();
+                            ui.label("Who can join");
+                            egui::ComboBox::from_id_salt("managed_access")
+                                .selected_text(match slot.template.group_access_type.as_str() {
+                                    "plus" => "Group Plus",
+                                    "members" => "Group Members",
+                                    _ => "Group Public",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut slot.template.group_access_type, "public".into(), "Group Public");
+                                    ui.selectable_value(&mut slot.template.group_access_type, "plus".into(), "Group Plus");
+                                    ui.selectable_value(&mut slot.template.group_access_type, "members".into(), "Group Members");
+                                });
+                            ui.end_row();
+                            ui.label("Region");
+                            egui::ComboBox::from_id_salt("managed_region")
+                                .selected_text(match slot.template.region.as_str() {
+                                    "use" => "US East",
+                                    "eu" => "Europe",
+                                    "jp" => "Japan",
+                                    _ => "US West",
+                                })
+                                .show_ui(ui, |ui| {
+                                    for (value, label) in [("us", "US West"), ("use", "US East"), ("eu", "Europe"), ("jp", "Japan")] {
+                                        ui.selectable_value(&mut slot.template.region, value.into(), label);
+                                    }
+                                });
+                            ui.end_row();
+                            ui.label("Instance name");
+                            ui.add(egui::TextEdit::singleline(&mut slot.template.display_name).char_limit(32).desired_width(300.0));
+                            ui.end_row();
+                        });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut slot.template.queue_enabled, "Enable queue when full");
+                        ui.checkbox(&mut slot.template.age_gate, "Require age-verified 18+");
+                    });
+                }
+
+                if let Some(error) = &self.managed_client_error {
+                    ui.add_space(7.0);
+                    ui.colored_label(crate::theme::DANGER, error);
+                }
+                ui.add_space(9.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Save slot").clicked() {
+                        save_requested = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel_requested = true;
+                    }
+                });
+            });
+            ui.add_space(10.0);
+
+            if save_requested {
+                let mut slot = self.managed_client_edit.clone().expect("edit exists");
+                if !slot.desired_location.trim().is_empty() {
+                    match resolve_instance_location(&slot.desired_location) {
+                        Some(location) => slot.desired_location = location,
+                        None => {
+                            self.managed_client_error = Some(
+                                "Paste a full wrld_…:instance… location or VRChat launch URL.".into(),
+                            );
+                            return;
+                        }
+                    }
+                }
+                if !slot.template.world_id.trim().is_empty() {
+                    match resolve_world_id(&slot.template.world_id) {
+                        Some(world) => slot.template.world_id = world,
+                        None => {
+                            self.managed_client_error = Some(
+                                "The replacement template needs a valid wrld_ ID or world URL.".into(),
+                            );
+                            return;
+                        }
+                    }
+                }
+                match self.managed_clients.upsert(slot) {
+                    Ok(()) => {
+                        self.managed_client_edit = None;
+                        self.managed_client_error = None;
+                    }
+                    Err(error) => self.managed_client_error = Some(error.to_string()),
+                }
+            } else if cancel_requested {
+                self.managed_client_edit = None;
+                self.managed_client_error = None;
+            }
+        }
+
+        let slots = self.managed_clients.list();
+        if slots.is_empty() {
+            Self::card_frame().show(ui, |ui| {
+                ui.set_min_height(120.0);
+                ui.vertical_centered(|ui| {
+                    ui.add_space(24.0);
+                    ui.label(egui::RichText::new("No managed clients yet").strong().size(crate::theme::TEXT_HEADING));
+                    ui.label("Add one slot for each VRChat account/instance Celeste should keep covered.");
+                });
+            });
+            return;
+        }
+
+        let mut edit = None;
+        let mut toggle = None;
+        let mut stop = None;
+        let mut remove = None;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for slot in slots {
+                Self::card_frame().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(&slot.label).strong().size(crate::theme::TEXT_HEADING));
+                            let account = if slot.expected_display_name.trim().is_empty() {
+                                slot.expected_user_id.as_str()
+                            } else {
+                                slot.expected_display_name.as_str()
+                            };
+                            ui.label(egui::RichText::new(format!("Profile {}  |  {}", slot.profile, if account.is_empty() { "account not assigned" } else { account })).small().weak());
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.colored_label(
+                                if slot.enabled { crate::theme::OK } else { crate::theme::TEXT_MUTED },
+                                if slot.enabled { "Managed" } else { "Disabled" },
+                            );
+                        });
+                    });
+                    ui.add_space(7.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(&slot.last_status).strong());
+                        let pids = scarlet_vrchat::launch::profile_pids(slot.profile);
+                        ui.separator();
+                        ui.label(if pids.is_empty() { "Process stopped".into() } else { format!("PID {}", pids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")) });
+                    });
+                    if !slot.desired_location.is_empty() {
+                        ui.add(egui::Label::new(egui::RichText::new(&slot.desired_location).monospace().small()).truncate())
+                            .on_hover_text(&slot.desired_location);
+                    }
+                    if !slot.last_error.is_empty() {
+                        ui.colored_label(crate::theme::WARN, &slot.last_error);
+                    }
+                    ui.add_space(7.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Edit").clicked() { edit = Some(slot.clone()); }
+                        if ui.button(if slot.enabled { "Disable" } else { "Enable" }).clicked() {
+                            toggle = Some(slot.clone());
+                        }
+                        if ui.button("Stop & disable").on_hover_text("Stops only this numeric VRChat profile").clicked() {
+                            stop = Some(slot.clone());
+                        }
+                        if ui.button("Forget slot").on_hover_text("Stops managing it; does not close VRChat").clicked() {
+                            remove = Some(slot.id.clone());
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+            }
+        });
+        if let Some(slot) = edit {
+            self.managed_client_edit = Some(slot);
+            self.managed_client_error = None;
+        }
+        if let Some(mut slot) = toggle {
+            slot.enabled = !slot.enabled;
+            if let Err(error) = self.managed_clients.upsert(slot) {
+                self.managed_client_error = Some(error.to_string());
+            }
+        }
+        if let Some(mut slot) = stop {
+            slot.enabled = false;
+            if let Err(error) = self.managed_clients.upsert(slot.clone()) {
+                self.managed_client_error = Some(error.to_string());
+            } else if let Err(error) = scarlet_vrchat::launch::stop_profile(slot.profile) {
+                self.managed_client_error = Some(error.to_string());
+            }
+        }
+        if let Some(id) = remove {
+            if let Err(error) = self.managed_clients.remove(&id) {
+                self.managed_client_error = Some(error.to_string());
+            }
+        }
     }
 
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
@@ -4346,6 +4694,7 @@ impl eframe::App for ScarletApp {
             )
             .show(ctx, |ui| match self.tab {
             Tab::Instance => self.instance_tab(ui),
+            Tab::Clients => self.managed_clients_tab(ui),
             Tab::Settings => self.settings_tab(ui),
             Tab::Cli => self.cli_tab(ui),
         });
@@ -4532,6 +4881,7 @@ pub fn run(
     pronoun_lists: Arc<scarlet_core::pronoun_lists::PronounLists>,
     two_factor_tx: std::sync::mpsc::Sender<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
     two_factor_rx: std::sync::mpsc::Receiver<(Arc<scarlet_vrchat::client::VrChatClient>, Vec<String>)>,
+    managed_clients: Arc<scarlet_vrchat::managed_clients::ManagedClientStore>,
 ) -> eframe::Result<()> {
     let bounds = shared.settings.ui_bounds.get_or_null().filter(|bounds| {
         bounds.width > 0 && bounds.height > 0
@@ -4570,6 +4920,7 @@ pub fn run(
                 pronoun_lists,
                 two_factor_tx,
                 two_factor_rx,
+                managed_clients,
             )))
         }),
     )
@@ -4901,6 +5252,17 @@ mod tests {
         assert_eq!(resolve_world_id(id).as_deref(), Some(id));
         assert_eq!(resolve_world_id(&format!("https://vrchat.com/home/world/{id}/info")).as_deref(), Some(id));
         assert_eq!(resolve_world_id("wrld_not-a-uuid"), None);
+    }
+
+    #[test]
+    fn instance_location_resolver_accepts_raw_and_launch_urls() {
+        let world = "wrld_01234567-89ab-cdef-0123-456789abcdef";
+        let location = format!("{world}:12345~group(grp_1)~region(us)");
+        assert_eq!(resolve_instance_location(&location).as_deref(), Some(location.as_str()));
+        let url = format!(
+            "https://vrchat.com/home/launch?worldId={world}&instanceId=12345%7Egroup%28grp_1%29%7Eregion%28us%29"
+        );
+        assert_eq!(resolve_instance_location(&url).as_deref(), Some(location.as_str()));
     }
 
     #[test]

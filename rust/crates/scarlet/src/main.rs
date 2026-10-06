@@ -34,6 +34,8 @@ use std::sync::Arc;
 
 use scarlet_core::settings::Settings;
 
+mod managed_supervisor;
+
 fn main() -> anyhow::Result<()> {
     // A splash helper is the same executable on a deliberately tiny code
     // path. Keeping its eframe event loop in a separate process is reliable
@@ -104,6 +106,7 @@ fn main() -> anyhow::Result<()> {
 
     startup_splash.status("Loading settings and caches...");
     let settings = Arc::new(Settings::open(&data_dir));
+    let managed_clients = Arc::new(scarlet_vrchat::managed_clients::ManagedClientStore::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(scarlet_core::identity::VERSION) {
         tracing::info!("Version changed since last run (or first run)");
     }
@@ -163,6 +166,13 @@ fn main() -> anyhow::Result<()> {
             scarlet_core::watched_entities::is_valid_avatar_id,
         )),
     };
+
+    managed_supervisor::spawn(
+        runtime.handle(),
+        shared.vrchat_client.clone(),
+        settings.clone(),
+        managed_clients.clone(),
+    );
 
     // Java calls `maybeSaveData` once per main-loop iteration
     // (`Scarlet.java:1841`, `:3467-3472`) and `saveAll` during an orderly
@@ -421,6 +431,7 @@ fn main() -> anyhow::Result<()> {
             pronoun_lists,
             two_factor_tx,
             two_factor_rx,
+            managed_clients,
         ) {
             tracing::error!("UI error: {}", err);
         }

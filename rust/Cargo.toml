@@ -55,6 +55,7 @@ base64 = "0.22"
 regex = "1"
 csv = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 zip = { version = "8.2", default-features = false, features = ["deflate-flate2", "bzip2", "lzma", "xz", "zstd"] }
 sevenz-rust = { version = "0.6.1", default-features = false, features = ["bzip2", "zstd"] }
 tar = { version = "0.4", default-features = false }

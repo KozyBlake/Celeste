@@ -164,10 +164,11 @@ pub async fn launch_client_into_instance_if_enabled(
             })
         }
     };
-    let user_id = client.get_current_user().await.ok().map(|user| user.id);
     let location = location.to_string();
     if let Err(error) = tokio::task::spawn_blocking(move || {
-        scarlet_vrchat::launch::launch_desktop(user_id.as_deref(), &location, secure_name.as_deref())
+        // The legacy single-client follow option owns local profile zero.
+        // Managed multi-client slots use their own explicit numeric profile.
+        scarlet_vrchat::launch::relaunch_desktop(0, &location, secure_name.as_deref())
     })
     .await
     .unwrap_or_else(|error| Err(std::io::Error::other(error.to_string())))

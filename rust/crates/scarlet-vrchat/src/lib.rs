@@ -14,6 +14,7 @@ pub mod client;
 pub mod entity_cache;
 pub mod log_tail;
 pub mod launch;
+pub mod managed_clients;
 pub mod models;
 pub mod rate_limit;
 pub mod totp;
