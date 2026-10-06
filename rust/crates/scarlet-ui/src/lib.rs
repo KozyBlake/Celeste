@@ -23,6 +23,7 @@ pub mod app;
 pub mod data_dir_prompt;
 pub mod platform;
 pub mod setup;
+pub mod splash;
 pub mod state;
 pub mod theme;
 pub mod tts;

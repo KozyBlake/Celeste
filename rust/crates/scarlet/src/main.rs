@@ -35,6 +35,20 @@ use std::sync::Arc;
 use scarlet_core::settings::Settings;
 
 fn main() -> anyhow::Result<()> {
+    // A splash helper is the same executable on a deliberately tiny code
+    // path. Keeping its eframe event loop in a separate process is reliable
+    // on both Windows and Linux, where creating a splash event loop and then
+    // trying to create the main one in this process is not.
+    if let Some(status_file) = std::env::var_os(scarlet_ui::splash::STATUS_ENV) {
+        scarlet_ui::splash::run(std::path::PathBuf::from(status_file))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        return Ok(());
+    }
+
+    let headless = scarlet_ui::platform::is_headless();
+    let mut startup_splash = StartupSplashController::spawn(!headless);
+    startup_splash.status("Finding Celeste data...");
+
     // Where Celeste's data lives. This used to fall back to the process's
     // working directory, which is why running the binary from a checkout
     // scattered settings.json, secure-prefs.json, logs/ and backups/ into
@@ -42,7 +56,6 @@ fn main() -> anyhow::Result<()> {
     // resolves a per-user data directory instead; `scarlet_core::paths`
     // ports that, and adds the "ask on a first run" step.
     let resolved = scarlet_core::paths::resolve_data_dir();
-    let headless = scarlet_ui::platform::is_headless();
     let data_dir = if headless {
         if matches!(resolved.source, scarlet_core::paths::DataDirSource::Discovered) {
             // A discovered directory is Java Scarlet. Never open its
@@ -57,6 +70,7 @@ fn main() -> anyhow::Result<()> {
     };
     std::fs::create_dir_all(&data_dir)?;
 
+    startup_splash.status("Opening logs and checking imports...");
     let _log_guard = scarlet_core::log::init(&data_dir)?;
     install_panic_hook();
 
@@ -85,6 +99,7 @@ fn main() -> anyhow::Result<()> {
     // keystroke, a request rate VRChat suspends accounts over.
     scarlet_vrchat::entity_cache::install(&data_dir);
 
+    startup_splash.status("Loading settings and caches...");
     let settings = Arc::new(Settings::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(scarlet_core::identity::VERSION) {
         tracing::info!("Version changed since last run (or first run)");
@@ -119,6 +134,7 @@ fn main() -> anyhow::Result<()> {
     let voice_manager = songbird::Songbird::serenity();
     let (process_controller, mut process_requests) = scarlet_discord::data::ProcessController::new();
 
+    startup_splash.status("Loading moderation data...");
     let shared = scarlet_discord::data::SharedState {
         vrchat_client: Arc::new(tokio::sync::RwLock::new(None)),
         avatar_search: avatar_search.clone(),
@@ -214,6 +230,7 @@ fn main() -> anyhow::Result<()> {
     // The VRChat log tailer feeds the ported event listener, which drives
     // the instance table. `spawn_tailer` reports and then stops on a machine
     // with no VRChat client, so this costs nothing there.
+    startup_splash.status("Starting VRChat monitoring...");
     let tailer_events = scarlet_vrchat::log_tail::spawn_tailer(&runtime.handle().clone());
     let audit_emitter = Arc::new(scarlet_discord::events::audit_emitter::DiscordAuditEmitter::new(
         discord_http,
@@ -390,6 +407,7 @@ fn main() -> anyhow::Result<()> {
         // setup wizard, if it needs to run, shares this one
         // `eframe::run_native` call; Discord connects once the wizard
         // resolves a token, or immediately if setup already ran.
+        startup_splash.finish();
         if let Err(err) = scarlet_ui::run(
             ui_state,
             shared,
@@ -412,6 +430,76 @@ fn main() -> anyhow::Result<()> {
     shutdown_data.save_all();
 
     Ok(())
+}
+
+/// Owns the short-lived companion splash process and its status file. The
+/// drop marker also closes the splash if startup returns early with an error
+/// or unwinds through this scope.
+struct StartupSplashController {
+    status_file: Option<std::path::PathBuf>,
+    child: Option<std::process::Child>,
+    finished: bool,
+}
+
+impl StartupSplashController {
+    fn spawn(enabled: bool) -> Self {
+        if !enabled {
+            return Self { status_file: None, child: None, finished: true };
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let status_file = std::env::temp_dir().join(format!(
+            "celeste-splash-{}-{unique}.status",
+            std::process::id()
+        ));
+        if std::fs::write(&status_file, "Starting Celeste...").is_err() {
+            return Self { status_file: None, child: None, finished: true };
+        }
+
+        let child = std::env::current_exe().ok().and_then(|executable| {
+            std::process::Command::new(executable)
+                .env(scarlet_ui::splash::STATUS_ENV, &status_file)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()
+        });
+        if child.is_none() {
+            let _ = std::fs::remove_file(&status_file);
+            return Self { status_file: None, child: None, finished: true };
+        }
+
+        Self { status_file: Some(status_file), child, finished: false }
+    }
+
+    fn status(&self, status: &str) {
+        if let Some(path) = &self.status_file {
+            let _ = std::fs::write(path, status);
+        }
+    }
+
+    fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        if let Some(path) = &self.status_file {
+            let _ = std::fs::write(path, scarlet_ui::splash::DONE_STATUS);
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for StartupSplashController {
+    fn drop(&mut self) {
+        self.finish();
+        if let Some(child) = &mut self.child {
+            let _ = child.try_wait();
+        }
+    }
 }
 
 /// Send panics through the normal tracing subscriber so failures in spawned
