@@ -115,6 +115,26 @@ mod tests {
 
     /// Repo-root `SETTINGS.md`, relative to this crate. Test-only: the
     /// build itself never reads outside `rust/`.
+    /// Collapse CRLF to LF so a Windows checkout compares equal to
+    /// generated text. Lone CR is left alone; nothing here emits it.
+    fn normalize_newlines(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+
+    /// The generator must not emit CRLF itself, or regenerating on Windows
+    /// would write a file that then differs on Linux - the same bug with
+    /// the platforms swapped.
+    #[test]
+    fn the_generated_reference_uses_unix_newlines() {
+        let dir = std::env::temp_dir().join(format!("celeste-doc-eol-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = super::super::Settings::open(&dir);
+        let markdown = render(&settings.registry.all());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!markdown.contains('\r'), "render() must emit LF only");
+        assert_eq!(normalize_newlines("a\r\nb\r\n"), "a\nb\n");
+    }
+
     fn settings_md() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../SETTINGS.md")
     }
@@ -145,6 +165,14 @@ mod tests {
             // not a failure; there is simply nothing to compare against.
             return;
         };
+
+        // Compare the text, not the line endings. Git materializes a
+        // checkout with CRLF on Windows runners while `render` always
+        // emits LF, so a byte comparison fails there for a file whose
+        // content is identical - which is what the Windows CI job hit.
+        // The regenerate branch above still writes LF.
+        let committed = normalize_newlines(&committed);
+        let generated = normalize_newlines(&generated);
 
         assert_eq!(
             committed, generated,
