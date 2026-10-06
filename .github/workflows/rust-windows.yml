@@ -27,6 +27,22 @@ jobs:
       - name: Show Rust toolchain
         run: rustc -Vv; cargo -V
 
+      # GitHub-hosted runners start with an empty disk. Preserve both the
+      # downloaded crates and Cargo's compiled dependency graph between
+      # runs. runner.os keeps Windows objects separate from a future Linux
+      # workflow; Cargo.lock changes invalidate the dependency cache.
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-cargo-v1-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-v1-
+
       - name: Run Windows test suite
         run: cargo test --workspace --locked
 
