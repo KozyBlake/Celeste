@@ -19,109 +19,18 @@ use std::path::{Path, PathBuf};
 
 use scarlet_core::paths::{DataDirSource, ResolvedDataDir};
 
-/// Resolves the GUI startup folder, offering a safe copy-based migration
-/// when Celeste discovers an existing Java Scarlet installation. Headless
-/// callers intentionally continue using `resolve_data_dir` directly.
+/// Resolves the GUI startup folder. Legacy migration is offered inside the
+/// first-run setup window after the app opens; only storage location belongs
+/// in this pre-window native prompt.
 pub fn choose_startup_data_dir(resolved: &ResolvedDataDir) -> PathBuf {
     let default_dir = scarlet_core::paths::default_data_dir();
     match &resolved.source {
-        DataDirSource::Discovered => choose_detected_migration(&resolved.path, &default_dir),
-        DataDirSource::FirstRun => choose_first_run(&default_dir),
+        // Discovery found Java Scarlet, not an established Celeste folder.
+        // Start Celeste in its own location so the setup wizard can offer an
+        // additive import without ever treating Java settings as live.
+        DataDirSource::Discovered => default_dir,
+        DataDirSource::FirstRun => ask_where_to_store_data(&default_dir),
         _ => resolved.path.clone(),
-    }
-}
-
-fn choose_detected_migration(detected: &Path, default_dir: &Path) -> PathBuf {
-    let result = rfd::MessageDialog::new()
-        .set_title("Celeste - Scarlet data found")
-        .set_description(format!(
-            "Celeste found an existing Scarlet data folder:\n\n{}\n\n\
-             Import its moderation tags, watched lists, staff lists and history into:\n\n{}\n\n\
-             The Scarlet folder will not be changed. Settings and encrypted credentials are not imported.\n\n\
-             Yes: import this folder\nNo: choose a different Scarlet folder\nCancel: start Celeste without importing",
-            detected.display(),
-            default_dir.display(),
-        ))
-        .set_buttons(rfd::MessageButtons::YesNoCancel)
-        .show();
-
-    match result {
-        rfd::MessageDialogResult::Yes => import_legacy_folder(detected, default_dir),
-        rfd::MessageDialogResult::No => choose_legacy_folder(default_dir).map_or_else(
-            || default_dir.to_path_buf(),
-            |source| import_legacy_folder(&source, default_dir),
-        ),
-        _ => default_dir.to_path_buf(),
-    }
-}
-
-fn choose_first_run(default_dir: &Path) -> PathBuf {
-    let import = rfd::MessageDialog::new()
-        .set_title("Celeste - import Scarlet data")
-        .set_description(
-            "Do you have an existing Scarlet data folder to import?\n\n\
-             Celeste can add its moderation tags, watched lists, staff lists and history while leaving Scarlet untouched.\n\n\
-             Settings and credentials are not imported and will be requested during setup.",
-        )
-        .set_buttons(rfd::MessageButtons::YesNo)
-        .show();
-    if import == rfd::MessageDialogResult::Yes {
-        if let Some(source) = choose_legacy_folder(default_dir) {
-            return import_legacy_folder(&source, default_dir);
-        }
-    }
-    ask_where_to_store_data(default_dir)
-}
-
-fn choose_legacy_folder(default_dir: &Path) -> Option<PathBuf> {
-    let selected = rfd::FileDialog::new()
-        .set_title("Choose the Scarlet data folder")
-        .set_directory(default_dir.parent().unwrap_or(default_dir))
-        .pick_folder()?;
-    if scarlet_core::paths::settings_file_usable(&selected) {
-        return Some(selected);
-    }
-    rfd::MessageDialog::new()
-        .set_title("Celeste - not a Scarlet data folder")
-        .set_description(format!(
-            "{} does not contain a readable, non-empty settings.json. Nothing was imported.",
-            selected.display(),
-        ))
-        .set_level(rfd::MessageLevel::Error)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-    None
-}
-
-fn import_legacy_folder(source: &Path, destination: &Path) -> PathBuf {
-    if source == destination {
-        return destination.to_path_buf();
-    }
-    match scarlet_core::legacy_import::merge(source, destination) {
-        Ok(report) => {
-            rfd::MessageDialog::new()
-                .set_title("Celeste - Scarlet data imported")
-                .set_description(format!(
-                    "Added {} record(s) across {} file(s) into:\n{}\n\nThe original folder remains untouched. Celeste setup will now request settings and credentials.",
-                    report.records_added,
-                    report.files_changed,
-                    destination.display(),
-                ))
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
-            destination.to_path_buf()
-        }
-        Err(error) => {
-            rfd::MessageDialog::new()
-                .set_title("Celeste - import failed")
-                .set_description(format!(
-                    "Celeste could not import the Scarlet data: {error}\n\nThe original folder was not changed. Celeste will start with its own data folder.",
-                ))
-                .set_level(rfd::MessageLevel::Error)
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
-            destination.to_path_buf()
-        }
     }
 }
 

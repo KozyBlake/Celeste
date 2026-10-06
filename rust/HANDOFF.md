@@ -433,6 +433,14 @@ manual folder picker. The operation is queued across an automatic restart so
 it runs before any destination store is opened and cannot be overwritten by
 shutdown saving.
 
+First-time users get the same choice as a full page inside the setup wizard,
+immediately after the vibe-coded disclosure and before Discord/VRChat setup.
+It displays the detected path and offers **Import detected data**, **Choose
+Scarlet folder...**, or **Continue without importing**. The old pre-window
+legacy-import message dialogs were removed; only the data-location chooser
+still needs to run before the main window because it decides where settings
+are opened.
+
 The importer creates `backups/before-scarlet-import-<timestamp>`, leaves the
 Scarlet source untouched, and merges staff/secret-staff, moderation tags,
 watched groups/users/avatars, custom pronoun lists, Discord permission rules,

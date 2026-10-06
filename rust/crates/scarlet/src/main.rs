@@ -44,7 +44,14 @@ fn main() -> anyhow::Result<()> {
     let resolved = scarlet_core::paths::resolve_data_dir();
     let headless = scarlet_ui::platform::is_headless();
     let data_dir = if headless {
-        resolved.path.clone()
+        if matches!(resolved.source, scarlet_core::paths::DataDirSource::Discovered) {
+            // A discovered directory is Java Scarlet. Never open its
+            // settings directly; GUI setup can import it additively, while
+            // headless Celeste starts clean in its own platform directory.
+            scarlet_core::paths::default_data_dir()
+        } else {
+            resolved.path.clone()
+        }
     } else {
         scarlet_ui::data_dir_prompt::choose_startup_data_dir(&resolved)
     };

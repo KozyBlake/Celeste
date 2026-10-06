@@ -3961,6 +3961,15 @@ impl eframe::App for ScarletApp {
             Some(crate::setup::SetupOutcome::AlreadyDone) => {
                 self.wizard = None;
             }
+            Some(crate::setup::SetupOutcome::RestartForImport) => {
+                if self.process_controller.restart() {
+                    self.state.append_cli_output(
+                        "Scarlet import queued. Restarting Celeste before setup continues...",
+                    );
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                return;
+            }
             Some(crate::setup::SetupOutcome::InProgress) => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
                 return;

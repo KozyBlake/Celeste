@@ -55,6 +55,10 @@ use scarlet_vrchat::client::{
 
 enum Stage {
     VibecodedNotice,
+    LegacyImport {
+        detected: Option<std::path::PathBuf>,
+        error: Option<String>,
+    },
     Discord {
         token: String,
         guild_id: String,
@@ -87,6 +91,8 @@ enum Stage {
 enum Action {
     None,
     VibecodedContinue,
+    LegacyImport(std::path::PathBuf),
+    LegacySkip,
     DiscordContinue {
         token: Option<String>,
         guild_id: Option<String>,
@@ -142,6 +148,8 @@ pub enum SetupOutcome {
     /// Just finished (this frame). Act on `discord_token` exactly once —
     /// e.g. spawn the Discord client — then start rendering the normal UI.
     JustFinished { discord_token: Option<String> },
+    /// A legacy import was queued and must run before any stores reopen.
+    RestartForImport,
     /// Already finished (on a previous frame, or never needed to run).
     AlreadyDone,
 }
@@ -173,6 +181,7 @@ pub struct SetupWizard {
     /// A normalized authenticator setup key awaiting successful code
     /// verification. It is encrypted only after VRChat accepts the code.
     pending_totp_secret: Option<String>,
+    restart_for_import: bool,
 }
 
 impl SetupWizard {
@@ -206,6 +215,7 @@ impl SetupWizard {
             login_rx: None,
             two_factor_rx: None,
             pending_totp_secret: None,
+            restart_for_import: false,
         };
         wizard.stage = if !wizard.vibecoded_ack.get() {
             Stage::VibecodedNotice
@@ -258,6 +268,7 @@ impl SetupWizard {
     fn stage_name(&self) -> &'static str {
         match self.stage {
             Stage::VibecodedNotice => "vibecoded_notice",
+            Stage::LegacyImport { .. } => "legacy_import",
             Stage::Discord { .. } => "discord",
             Stage::VrChatCredentials { .. } => "vrchat_credentials",
             Stage::VrChatTwoFactor {
@@ -289,6 +300,15 @@ impl SetupWizard {
     /// ask VRChat's API a second time and could re-trigger 2FA.
     pub fn vrchat_client(&self) -> Option<Arc<VrChatClient>> {
         self.vrchat_client.clone()
+    }
+
+    fn legacy_import_stage(&self) -> Stage {
+        Stage::LegacyImport {
+            detected: scarlet_core::paths::find_legacy_data_dirs(&self.settings.data_dir)
+                .into_iter()
+                .next(),
+            error: None,
+        }
     }
 
     fn compute_stage_after_vibecoded(&self) -> Stage {
@@ -557,6 +577,22 @@ impl SetupWizard {
         match action {
             Action::None => {}
             Action::VibecodedContinue => {
+                self.stage = self.legacy_import_stage();
+            }
+            Action::LegacyImport(source) => {
+                match scarlet_core::legacy_import::queue(&self.settings.data_dir, &source) {
+                    Ok(()) => {
+                        self.vibecoded_ack.set(Some(true), "setup-wizard");
+                        self.restart_for_import = true;
+                    }
+                    Err(import_error) => {
+                        if let Stage::LegacyImport { error, .. } = &mut self.stage {
+                            *error = Some(import_error.to_string());
+                        }
+                    }
+                }
+            }
+            Action::LegacySkip => {
                 self.vibecoded_ack.set(Some(true), "setup-wizard");
                 self.stage = self.compute_stage_after_vibecoded();
             }
@@ -620,6 +656,9 @@ impl SetupWizard {
     }
 
     pub fn render(&mut self, ctx: &egui::Context) -> SetupOutcome {
+        if self.restart_for_import {
+            return SetupOutcome::RestartForImport;
+        }
         if self.done {
             return SetupOutcome::AlreadyDone;
         }
@@ -633,6 +672,9 @@ impl SetupWizard {
                 ui.set_max_width(480.0);
                 match &mut self.stage {
                     Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
+                    Stage::LegacyImport { detected, error } => {
+                        render_legacy_import_stage(ui, detected, error, &mut action)
+                    }
                     Stage::Discord { token, guild_id } => {
                         render_discord_stage(ui, token, guild_id, &mut action)
                     }
@@ -674,6 +716,10 @@ impl SetupWizard {
 
         self.apply_action(action);
 
+        if self.restart_for_import {
+            return SetupOutcome::RestartForImport;
+        }
+
         if !self.done && matches!(self.stage, Stage::Done) {
             self.done = true;
             SetupOutcome::JustFinished {
@@ -706,6 +752,67 @@ fn render_vibecoded_notice(ui: &mut egui::Ui, action: &mut Action) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     });
+}
+
+fn render_legacy_import_stage(
+    ui: &mut egui::Ui,
+    detected: &mut Option<std::path::PathBuf>,
+    error: &Option<String>,
+    action: &mut Action,
+) {
+    ui.heading("Bring your Scarlet data into Celeste");
+    ui.add_space(8.0);
+    ui.label(
+        "If you used Java Scarlet before, Celeste can add its staff lists, watched entities, \
+         moderation tags, Discord permissions, account links and history. Existing Celeste \
+         records win conflicts. Scarlet is left untouched, and settings and credentials are \
+         intentionally entered fresh in the next setup steps.",
+    );
+    ui.add_space(12.0);
+    if let Some(path) = detected.as_ref() {
+        ui.label("Detected Scarlet folder:");
+        ui.add(
+            egui::Label::new(egui::RichText::new(path.display().to_string()).monospace())
+                .truncate(),
+        )
+        .on_hover_text(path.display().to_string());
+    } else {
+        ui.label(
+            egui::RichText::new("No Scarlet folder was detected automatically.")
+                .color(egui::Color32::GRAY),
+        );
+    }
+    if let Some(error) = error {
+        ui.add_space(8.0);
+        ui.colored_label(egui::Color32::RED, error);
+    }
+    ui.add_space(16.0);
+    ui.horizontal_wrapped(|ui| {
+        if let Some(path) = detected.as_ref() {
+            if ui.button("Import detected data").clicked() {
+                *action = Action::LegacyImport(path.clone());
+            }
+        }
+        if ui.button("Choose Scarlet folder...").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Choose the Scarlet data folder")
+                .pick_folder()
+            {
+                *action = Action::LegacyImport(path);
+            }
+        }
+        if ui.button("Continue without importing").clicked() {
+            *action = Action::LegacySkip;
+        }
+    });
+    ui.add_space(10.0);
+    ui.label(
+        egui::RichText::new(
+            "Importing creates a backup and restarts Celeste before setup continues.",
+        )
+        .small()
+        .weak(),
+    );
 }
 
 fn render_discord_stage(
@@ -961,13 +1068,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vibecoded_continue_advances_to_discord_when_not_yet_prompted() {
+    async fn vibecoded_continue_opens_the_first_run_import_window() {
         let dir = tempfile::tempdir().unwrap();
         let settings = Arc::new(Settings::open(dir.path()));
         let mut wizard = wizard(&settings);
         wizard.apply_action(Action::VibecodedContinue);
+        assert_eq!(wizard.stage_name(), "legacy_import");
+        assert!(!settings.vibecoded_notice_acknowledged.get());
+        wizard.apply_action(Action::LegacySkip);
         assert_eq!(wizard.stage_name(), "discord");
         assert!(settings.vibecoded_notice_acknowledged.get());
+    }
+
+    #[tokio::test]
+    async fn first_run_import_is_queued_before_setup_continues() {
+        let destination = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("settings.json"), r#"{"legacy":true}"#).unwrap();
+        std::fs::write(source.path().join("staff_list.json"), r#"["usr_legacy"]"#).unwrap();
+        let settings = Arc::new(Settings::open(destination.path()));
+        let mut wizard = wizard(&settings);
+
+        wizard.apply_action(Action::VibecodedContinue);
+        wizard.apply_action(Action::LegacyImport(source.path().to_path_buf()));
+
+        assert!(wizard.restart_for_import);
+        assert!(settings.vibecoded_notice_acknowledged.get());
+        let report = scarlet_core::legacy_import::run_pending(destination.path())
+            .expect("an import was queued")
+            .unwrap();
+        assert_eq!(report.records_added, 1);
+        assert_eq!(
+            std::fs::read_to_string(destination.path().join("staff_list.json")).unwrap(),
+            "[\n  \"usr_legacy\"\n]"
+        );
     }
 
     #[tokio::test]
@@ -977,6 +1111,8 @@ mod tests {
         settings.discord_setup_prompted.set(Some(true), "test");
         let mut wizard = wizard(&settings);
         wizard.apply_action(Action::VibecodedContinue);
+        assert_eq!(wizard.stage_name(), "legacy_import");
+        wizard.apply_action(Action::LegacySkip);
         // Vrchat isn't configured yet either, so it should land there, not "done".
         assert_eq!(wizard.stage_name(), "vrchat_credentials");
     }

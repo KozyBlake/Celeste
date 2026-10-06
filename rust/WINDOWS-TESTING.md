@@ -43,10 +43,11 @@ as a user with one of these existing folders:
 
 Verify the following before calling the Windows build releasable:
 
-1. Celeste detects the legacy folder, offers the correct path, and imports its
-   reusable data without changing the Scarlet source or importing settings.
-2. Cancelling detection starts clean; choosing **No** allows a different
-   Scarlet folder to be selected manually.
+1. A fresh Celeste install shows the Scarlet import page inside its setup
+   window, displays the correct detected path, and imports reusable data
+   without changing the Scarlet source or importing settings.
+2. **Choose Scarlet folder...** accepts a different valid installation, while
+   **Continue without importing** proceeds directly to normal setup.
 3. From an already configured Celeste install, use **Settings → System →
    Import Scarlet data...**. Confirm Celeste restarts, creates a timestamped
    backup, preserves existing Celeste records, and adds non-conflicting
