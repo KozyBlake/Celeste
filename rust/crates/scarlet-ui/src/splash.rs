@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub const DONE_STATUS: &str = "__CELESTE_STARTUP_DONE__";
+const PROGRESS_STATUS: &str = "__CELESTE_PROGRESS__";
 const MIN_VISIBLE: Duration = Duration::from_millis(900);
 const MAX_LIFETIME: Duration = Duration::from_secs(90);
 const BUNDLED_ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
@@ -42,6 +43,7 @@ struct StartupSplash {
     status: String,
     started: Instant,
     done: bool,
+    progress: Option<f32>,
     texture: Option<egui::TextureHandle>,
 }
 
@@ -52,6 +54,7 @@ impl StartupSplash {
             status: "Starting Celeste...".to_string(),
             started: Instant::now(),
             done: false,
+            progress: None,
             texture: None,
         }
     }
@@ -62,6 +65,7 @@ impl eframe::App for StartupSplash {
         match read_status(&self.status_file) {
             Some(status) if status.starts_with(DONE_STATUS) => {
                 self.done = true;
+                self.progress = Some(1.0);
                 if let Some(final_status) = status.strip_prefix(DONE_STATUS) {
                     let final_status = final_status.trim();
                     if !final_status.is_empty() {
@@ -69,7 +73,19 @@ impl eframe::App for StartupSplash {
                     }
                 }
             }
-            Some(status) if !status.is_empty() => self.status = status,
+            Some(status) if status.starts_with(PROGRESS_STATUS) => {
+                let mut lines = status.lines();
+                let _ = lines.next();
+                self.progress = lines.next().and_then(|value| value.parse::<f32>().ok());
+                let label = lines.collect::<Vec<_>>().join("\n");
+                if !label.is_empty() {
+                    self.status = label;
+                }
+            }
+            Some(status) if !status.is_empty() => {
+                self.progress = None;
+                self.status = status;
+            }
             _ => {}
         }
 
@@ -134,6 +150,14 @@ impl eframe::App for StartupSplash {
                         .color(crate::theme::TEXT_MUTED),
                     );
                     ui.add_space(16.0);
+                    if let Some(progress) = self.progress {
+                        ui.add(
+                            egui::ProgressBar::new(progress.clamp(0.0, 1.0))
+                                .desired_width(300.0)
+                                .show_percentage(),
+                        );
+                        ui.add_space(8.0);
+                    }
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         ui.add_space((available - 260.0).max(0.0) / 2.0);

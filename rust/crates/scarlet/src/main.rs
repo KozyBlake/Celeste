@@ -77,7 +77,10 @@ fn main() -> anyhow::Result<()> {
     // Existing-install imports are queued from Settings and applied during
     // restart before any store has cached the destination files. Otherwise
     // shutdown saving could overwrite the newly merged records.
-    if let Some(result) = scarlet_core::legacy_import::run_pending(&data_dir) {
+    if let Some(result) = scarlet_core::legacy_import::run_pending_with_progress(
+        &data_dir,
+        |fraction, label| startup_splash.progress(fraction, label),
+    ) {
         match result {
             Ok(report) => tracing::info!("{}", report.summary()),
             Err(error) => tracing::error!(%error, "Queued Scarlet import failed"),
@@ -439,12 +442,13 @@ struct StartupSplashController {
     status_file: Option<std::path::PathBuf>,
     child: Option<std::process::Child>,
     finished: bool,
+    progress: std::cell::Cell<f32>,
 }
 
 impl StartupSplashController {
     fn spawn(enabled: bool) -> Self {
         if !enabled {
-            return Self { status_file: None, child: None, finished: true };
+            return Self { status_file: None, child: None, finished: true, progress: std::cell::Cell::new(-1.0) };
         }
 
         let unique = std::time::SystemTime::now()
@@ -456,7 +460,7 @@ impl StartupSplashController {
             std::process::id()
         ));
         if std::fs::write(&status_file, "Starting Celeste...").is_err() {
-            return Self { status_file: None, child: None, finished: true };
+            return Self { status_file: None, child: None, finished: true, progress: std::cell::Cell::new(-1.0) };
         }
 
         let child = std::env::current_exe().ok().and_then(|executable| {
@@ -470,15 +474,32 @@ impl StartupSplashController {
         });
         if child.is_none() {
             let _ = std::fs::remove_file(&status_file);
-            return Self { status_file: None, child: None, finished: true };
+            return Self { status_file: None, child: None, finished: true, progress: std::cell::Cell::new(-1.0) };
         }
 
-        Self { status_file: Some(status_file), child, finished: false }
+        Self { status_file: Some(status_file), child, finished: false, progress: std::cell::Cell::new(-1.0) }
     }
 
     fn status(&self, status: &str) {
         if let Some(path) = &self.status_file {
-            let _ = std::fs::write(path, status);
+            let progress = self.progress.get();
+            let value = if progress >= 0.0 {
+                format!("__CELESTE_PROGRESS__\n{progress}\n{status}")
+            } else {
+                status.to_string()
+            };
+            let _ = std::fs::write(path, value);
+        }
+    }
+
+    fn progress(&self, fraction: f32, status: &str) {
+        let fraction = fraction.clamp(0.0, 1.0);
+        self.progress.set(fraction);
+        if let Some(path) = &self.status_file {
+            let _ = std::fs::write(
+                path,
+                format!("__CELESTE_PROGRESS__\n{fraction}\n{status}"),
+            );
         }
     }
 

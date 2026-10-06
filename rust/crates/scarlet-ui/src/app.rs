@@ -533,6 +533,7 @@ pub struct ScarletApp {
     cache_cleanup_rx: Option<std::sync::mpsc::Receiver<scarlet_core::cache_cleanup::CleanupReport>>,
     cache_cleanup_notice: Option<String>,
     settings_notice: Option<String>,
+    legacy_import_result: Option<(bool, String)>,
     ui_scale_open: bool,
     ui_scale_percent: f32,
     ui_scale: f32,
@@ -593,12 +594,12 @@ impl ScarletApp {
             .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
             // Java's `Swing.DEFAULT_ACCENT` is crimson; the port had its own blue.
             .unwrap_or(crate::theme::DEFAULT_ACCENT);
-        let mut settings_notice = tts.engine_name().is_none().then(||
+        let settings_notice = tts.engine_name().is_none().then(||
             "Local text-to-speech is unavailable because no supported speech engine was found. Install eSpeak NG/eSpeak, Speech Dispatcher, or Flite on Linux; use macOS 'say'; or ensure PowerShell is available on Windows. Discord voice TTS can still work when configured.".to_string()
         );
-        if let Some((_success, message)) = scarlet_core::legacy_import::take_result(&data_dir) {
-            state.append_cli_output(&message);
-            settings_notice = Some(message);
+        let legacy_import_result = scarlet_core::legacy_import::take_result(&data_dir);
+        if let Some((_success, message)) = &legacy_import_result {
+            state.append_cli_output(message.as_str());
         }
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
@@ -708,6 +709,7 @@ impl ScarletApp {
             cache_cleanup_rx: None,
             cache_cleanup_notice: None,
             settings_notice,
+            legacy_import_result,
             ui_scale_open: false,
             ui_scale_percent: ui_scale * 100.0,
             ui_scale,
@@ -3186,6 +3188,38 @@ impl ScarletApp {
                 });
             if close { self.settings_notice = None; }
         }
+
+    }
+
+    fn legacy_import_result_window(&mut self, ctx: &egui::Context) {
+        if let Some((success, message)) = self.legacy_import_result.clone() {
+            let mut close = false;
+            let title = if success {
+                "Scarlet import completed"
+            } else {
+                "Scarlet import failed"
+            };
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(true)
+                .default_width(560.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(message);
+                    ui.add_space(10.0);
+                    if success {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "Credentials were intentionally not transferred. Re-enter VRChat or Discord credentials if prompted, then double-check the imported lists and history before relying on them.",
+                        );
+                    }
+                    ui.add_space(10.0);
+                    close = ui.button(if success { "I’ve checked the result" } else { "Close" }).clicked();
+                });
+            if close {
+                self.legacy_import_result = None;
+            }
+        }
     }
 
     fn diagnostics_report(&self) -> String {
@@ -3403,27 +3437,80 @@ impl ScarletApp {
             self.settings_notice = Some(message);
             return;
         }
-        let confirmed = crate::dialogs::message(
-            "Celeste - import Scarlet data",
-            format!(
-                "Add reusable data from:\n{}\n\ninto Celeste:\n{}\n\nExisting Celeste records win conflicts. Scarlet contributes missing staff, watched entities, moderation tags, Discord permissions, account links and history. Settings and credentials are skipped, and the Scarlet folder is never changed.\n\nCeleste must restart to perform this safely.",
-                source.display(),
-                self.data_dir.display(),
-            ),
-            rfd::MessageButtons::OkCancel,
-            rfd::MessageLevel::Info,
-        );
-        if !matches!(confirmed, Ok(rfd::MessageDialogResult::Ok)) {
-            if let Err(error) = confirmed {
-                let message = format!("Could not open the Scarlet import confirmation: {error}");
+        let plan = match scarlet_core::legacy_import::inspect(&source, &self.data_dir) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let message = format!("Could not inspect Scarlet data: {error}");
                 self.state.append_cli_output(&message);
                 self.settings_notice = Some(message);
+                return;
             }
-            return;
-        }
-        match scarlet_core::legacy_import::queue(&self.data_dir, &source) {
+        };
+        let security_warning = "SECURITY REMINDER: VRChat and Discord credentials are never transferred. Make sure you have them available to enter again, and double-check that the imported data is correct after Celeste restarts.";
+        let mode = if plan.overlapping_files.is_empty() {
+            let confirmed = crate::dialogs::message(
+                "Celeste - import Scarlet data",
+                format!(
+                    "Add reusable data from:\n{}\n\ninto Celeste:\n{}\n\n{security_warning}\n\nA backup is created first. Settings and credentials are skipped, the Scarlet folder is never changed, and Celeste must restart to import safely.",
+                    source.display(),
+                    self.data_dir.display(),
+                ),
+                rfd::MessageButtons::OkCancel,
+                rfd::MessageLevel::Warning,
+            );
+            match confirmed {
+                Ok(rfd::MessageDialogResult::Ok) => scarlet_core::legacy_import::ImportMode::Merge,
+                Ok(_) => return,
+                Err(error) => {
+                    let message = format!("Could not open the Scarlet import confirmation: {error}");
+                    self.state.append_cli_output(&message);
+                    self.settings_notice = Some(message);
+                    return;
+                }
+            }
+        } else {
+            let overlaps = plan
+                .overlapping_files
+                .iter()
+                .map(|file| format!("• {file}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let choice = crate::dialogs::message(
+                "Celeste - overlapping Scarlet data",
+                format!(
+                    "Celeste found {} overlapping recognized data location(s):\n\n{overlaps}\n\nChoose Merge to add records Scarlet has while preserving existing Celeste values. Choose Replace to copy Scarlet's recognized data over those overlaps. A full backup is created first.\n\n{security_warning}\n\nSettings and credentials are excluded in both modes.",
+                    plan.overlapping_files.len(),
+                ),
+                rfd::MessageButtons::YesNoCancelCustom(
+                    "Merge (recommended)".to_string(),
+                    "Replace overlaps".to_string(),
+                    "Cancel".to_string(),
+                ),
+                rfd::MessageLevel::Warning,
+            );
+            match choice {
+                Ok(rfd::MessageDialogResult::Custom(label)) if label.starts_with("Merge") => {
+                    scarlet_core::legacy_import::ImportMode::Merge
+                }
+                Ok(rfd::MessageDialogResult::Custom(label)) if label.starts_with("Replace") => {
+                    scarlet_core::legacy_import::ImportMode::Replace
+                }
+                // Some native backends return semantic results for custom
+                // buttons rather than their labels.
+                Ok(rfd::MessageDialogResult::Yes) => scarlet_core::legacy_import::ImportMode::Merge,
+                Ok(rfd::MessageDialogResult::No) => scarlet_core::legacy_import::ImportMode::Replace,
+                Ok(_) => return,
+                Err(error) => {
+                    let message = format!("Could not open the Scarlet import choice: {error}");
+                    self.state.append_cli_output(&message);
+                    self.settings_notice = Some(message);
+                    return;
+                }
+            }
+        };
+        match scarlet_core::legacy_import::queue(&self.data_dir, &source, mode) {
             Ok(()) => {
-                let message = "Scarlet import queued. Restarting Celeste to merge it safely...";
+                let message = "Scarlet import queued. Restarting Celeste to apply it safely...";
                 self.state.append_cli_output(message);
                 self.settings_notice = Some(message.to_string());
                 if !self.process_controller.restart() {
@@ -3934,6 +4021,19 @@ impl eframe::App for ScarletApp {
         ctx.set_zoom_factor(self.ui_scale);
         self.install_visual_style(ctx);
         self.persist_window_bounds(ctx);
+
+        // A migration result is a blocking handoff: show it before either
+        // the remaining first-run wizard or the normal application. That
+        // guarantees the user sees the credential reminder and verifies the
+        // result instead of having it buried behind another setup page.
+        if self.legacy_import_result.is_some() {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(crate::theme::INK))
+                .show(ctx, |_ui| {});
+            self.legacy_import_result_window(ctx);
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            return;
+        }
 
         // The setup wizard, while running, replaces the entire window
         // (toolbar/tabs/table included) the same way a blocking Swing

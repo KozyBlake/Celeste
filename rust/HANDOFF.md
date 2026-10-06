@@ -477,3 +477,24 @@ panic as a visible error instead of losing the process. Existing-user Scarlet
 import, first-run Scarlet selection, data-folder selection/move, and their
 confirmation/error messages all use the bridge. Watched-group file import was
 already using `AsyncFileDialog` on Celeste's runtime and remains asynchronous.
+
+## Update 2026-10-06: reviewed Scarlet import
+
+Scarlet migration now inventories overlapping recognized reusable data before
+queueing its restart. The operator chooses one policy for those overlaps:
+**Merge (recommended)** adds missing Scarlet records and preserves Celeste
+values, while **Replace overlaps** copies Scarlet's recognized top-level data
+files and individual `usr`/`gaud`/`ex` records over Celeste's copies. Both
+modes create the same full pre-import backup; neither ever imports settings,
+sessions, Discord connection configuration or credentials. Unknown JSON is
+not copied blindly because it may be configuration or incompatible Java-only
+state.
+
+Both the setup-wizard page and existing-user import warning now explicitly say
+that VRChat/Discord credentials must be available for re-entry and that the
+result must be checked after restart. The queued request persists the selected
+mode (and remains backward-compatible with the first plain-path request
+format). Import work reports real fractional progress and filenames to the
+startup splash. After restart, a blocking in-app result window reports success
+or failure, backup location and counts, repeats the credential warning, and
+must be acknowledged before setup or the main UI continues.

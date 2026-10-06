@@ -57,6 +57,8 @@ enum Stage {
     VibecodedNotice,
     LegacyImport {
         detected: Option<std::path::PathBuf>,
+        overlaps: Vec<String>,
+        mode: scarlet_core::legacy_import::ImportMode,
         error: Option<String>,
     },
     Discord {
@@ -91,7 +93,10 @@ enum Stage {
 enum Action {
     None,
     VibecodedContinue,
-    LegacyImport(std::path::PathBuf),
+    LegacyImport(
+        std::path::PathBuf,
+        scarlet_core::legacy_import::ImportMode,
+    ),
     LegacySkip,
     DiscordContinue {
         token: Option<String>,
@@ -303,10 +308,18 @@ impl SetupWizard {
     }
 
     fn legacy_import_stage(&self) -> Stage {
+        let detected = scarlet_core::paths::find_legacy_data_dirs(&self.settings.data_dir)
+            .into_iter()
+            .next();
+        let overlaps = detected
+            .as_deref()
+            .and_then(|source| scarlet_core::legacy_import::inspect(source, &self.settings.data_dir).ok())
+            .map(|plan| plan.overlapping_files)
+            .unwrap_or_default();
         Stage::LegacyImport {
-            detected: scarlet_core::paths::find_legacy_data_dirs(&self.settings.data_dir)
-                .into_iter()
-                .next(),
+            detected,
+            overlaps,
+            mode: scarlet_core::legacy_import::ImportMode::Merge,
             error: None,
         }
     }
@@ -579,8 +592,8 @@ impl SetupWizard {
             Action::VibecodedContinue => {
                 self.stage = self.legacy_import_stage();
             }
-            Action::LegacyImport(source) => {
-                match scarlet_core::legacy_import::queue(&self.settings.data_dir, &source) {
+            Action::LegacyImport(source, mode) => {
+                match scarlet_core::legacy_import::queue(&self.settings.data_dir, &source, mode) {
                     Ok(()) => {
                         self.vibecoded_ack.set(Some(true), "setup-wizard");
                         self.restart_for_import = true;
@@ -672,8 +685,16 @@ impl SetupWizard {
                 ui.set_max_width(480.0);
                 match &mut self.stage {
                     Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
-                    Stage::LegacyImport { detected, error } => {
-                        render_legacy_import_stage(ui, detected, error, &mut action)
+                    Stage::LegacyImport { detected, overlaps, mode, error } => {
+                        render_legacy_import_stage(
+                            ui,
+                            &self.settings.data_dir,
+                            detected,
+                            overlaps,
+                            mode,
+                            error,
+                            &mut action,
+                        )
                     }
                     Stage::Discord { token, guild_id } => {
                         render_discord_stage(ui, token, guild_id, &mut action)
@@ -756,7 +777,10 @@ fn render_vibecoded_notice(ui: &mut egui::Ui, action: &mut Action) {
 
 fn render_legacy_import_stage(
     ui: &mut egui::Ui,
+    destination: &std::path::Path,
     detected: &mut Option<std::path::PathBuf>,
+    overlaps: &mut Vec<String>,
+    mode: &mut scarlet_core::legacy_import::ImportMode,
     error: &mut Option<String>,
     action: &mut Action,
 ) {
@@ -767,6 +791,11 @@ fn render_legacy_import_stage(
          moderation tags, Discord permissions, account links and history. Existing Celeste \
          records win conflicts. Scarlet is left untouched, and settings and credentials are \
          intentionally entered fresh in the next setup steps.",
+    );
+    ui.add_space(8.0);
+    ui.colored_label(
+        egui::Color32::YELLOW,
+        "Security reminder: VRChat and Discord credentials are never transferred. Make sure you have them available to enter again, and double-check the imported data after Celeste restarts.",
     );
     ui.add_space(12.0);
     if let Some(path) = detected.as_ref() {
@@ -786,16 +815,46 @@ fn render_legacy_import_stage(
         ui.add_space(8.0);
         ui.colored_label(egui::Color32::RED, error);
     }
+    if !overlaps.is_empty() {
+        ui.add_space(10.0);
+        ui.strong(format!("{} overlapping data location(s) found", overlaps.len()));
+        egui::ScrollArea::vertical().max_height(90.0).show(ui, |ui| {
+            for file in overlaps.iter() {
+                ui.label(format!("• {file}"));
+            }
+        });
+        ui.radio_value(
+            mode,
+            scarlet_core::legacy_import::ImportMode::Merge,
+            "Add missing Scarlet records; keep existing Celeste values (recommended)",
+        );
+        ui.radio_value(
+            mode,
+            scarlet_core::legacy_import::ImportMode::Replace,
+            "Replace overlapping recognized data with Scarlet's copy",
+        );
+        ui.label(
+            egui::RichText::new("A full Celeste backup is created before either option. Settings and credentials are always excluded.")
+                .small()
+                .weak(),
+        );
+    }
     ui.add_space(16.0);
     ui.horizontal_wrapped(|ui| {
         if let Some(path) = detected.as_ref() {
             if ui.button("Import detected data").clicked() {
-                *action = Action::LegacyImport(path.clone());
+                *action = Action::LegacyImport(path.clone(), *mode);
             }
         }
         if ui.button("Choose Scarlet folder...").clicked() {
             match crate::dialogs::pick_folder("Choose the Scarlet data folder", None) {
-                Ok(Some(path)) => *action = Action::LegacyImport(path),
+                Ok(Some(path)) => {
+                    *overlaps = scarlet_core::legacy_import::inspect(&path, destination)
+                        .map(|plan| plan.overlapping_files)
+                        .unwrap_or_default();
+                    *detected = Some(path);
+                    *error = None;
+                }
                 Ok(None) => {}
                 Err(dialog_error) => {
                     *error = Some(format!("Could not open the folder picker: {dialog_error}"));
@@ -1091,7 +1150,10 @@ mod tests {
         let mut wizard = wizard(&settings);
 
         wizard.apply_action(Action::VibecodedContinue);
-        wizard.apply_action(Action::LegacyImport(source.path().to_path_buf()));
+        wizard.apply_action(Action::LegacyImport(
+            source.path().to_path_buf(),
+            scarlet_core::legacy_import::ImportMode::Merge,
+        ));
 
         assert!(wizard.restart_for_import);
         assert!(settings.vibecoded_notice_acknowledged.get());
