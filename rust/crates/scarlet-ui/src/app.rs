@@ -2548,6 +2548,38 @@ impl ScarletApp {
         search.clear();
     }
 
+    /// The action cards contain buttons rather than registry-backed values,
+    /// so they need their own search metadata. Without this, searching for an
+    /// action such as "import" hid the very button the user was looking for.
+    fn settings_action_matches(category: SettingCategory, query: &str) -> bool {
+        let searchable = match category {
+            SettingCategory::General => {
+                "appearance ui scale accent colour color pronoun validation good bad list reload"
+            }
+            SettingCategory::System => {
+                "system data folder open move import scarlet legacy migration cache cleanup restart celeste reset vrchat credentials session"
+            }
+            SettingCategory::Discord => {
+                "discord reset connection token guild server setup"
+            }
+            SettingCategory::Integrations => {
+                "integrations avatar search database provider manage"
+            }
+            _ => return false,
+        };
+        searchable.contains(query)
+    }
+
+    fn has_settings_actions(category: SettingCategory) -> bool {
+        matches!(
+            category,
+            SettingCategory::General
+                | SettingCategory::System
+                | SettingCategory::Discord
+                | SettingCategory::Integrations
+        )
+    }
+
     fn render_notification_matrix(ui: &mut egui::Ui, descriptors: &[std::sync::Arc<dyn SettingDescriptor>]) {
         const ROWS: [(&str, Option<&str>, Option<&str>); 9] = [
             ("Watched user", Some("tts_announce_watched_users"), Some("toast_notify_watched_users")),
@@ -2624,7 +2656,15 @@ impl ScarletApp {
             ui.label(egui::RichText::new("SETTINGS").strong().small().weak());
             ui.add_space(5.0);
             for category in SettingCategory::ALL {
-                let count = visible.iter().filter(|d| d.category() == category).count();
+                let mut count = visible.iter().filter(|d| d.category() == category).count();
+                // Count the category's action card as an available result.
+                // This avoids labels such as "System (0)" while that page
+                // contains important controls including legacy import.
+                if (query.is_empty() && Self::has_settings_actions(category))
+                    || (!query.is_empty() && Self::settings_action_matches(category, &query))
+                {
+                    count += 1;
+                }
                 let label = if count == 0 {
                     egui::RichText::new(format!("{}  ({count})", category.label())).weak()
                 } else {
@@ -2711,6 +2751,14 @@ impl ScarletApp {
                 visible.clone()
             };
             let show_notification_matrix = query.is_empty() && category == SettingCategory::Notifications;
+            let matching_action_categories: Vec<_> = if query.is_empty() {
+                Vec::new()
+            } else {
+                SettingCategory::ALL
+                    .into_iter()
+                    .filter(|category| Self::settings_action_matches(*category, &query))
+                    .collect()
+            };
             if show_notification_matrix {
                 rows.retain(|descriptor| !Self::notification_matrix_id(descriptor.id()));
             }
@@ -2739,7 +2787,10 @@ impl ScarletApp {
                     .unwrap_or(SECTION_ORDER.len())
             });
 
-            if rows.is_empty() && !show_notification_matrix {
+            if rows.is_empty()
+                && !show_notification_matrix
+                && matching_action_categories.is_empty()
+            {
                 ui.add_space(12.0);
                 ui.weak(if query.is_empty() {
                     "No settings in this category.".to_string()
@@ -2814,6 +2865,10 @@ impl ScarletApp {
                 }
                 if query.is_empty() {
                     self.render_settings_actions(ui, category);
+                } else {
+                    for action_category in matching_action_categories {
+                        self.render_settings_actions(ui, action_category);
+                    }
                 }
                 ui.add_space(4.0);
             });
@@ -4571,6 +4626,26 @@ mod tests {
 
         assert_eq!(current, SettingCategory::Discord);
         assert!(search.is_empty());
+    }
+
+    #[test]
+    fn settings_search_finds_non_registry_actions() {
+        assert!(ScarletApp::settings_action_matches(
+            SettingCategory::System,
+            "import"
+        ));
+        assert!(ScarletApp::settings_action_matches(
+            SettingCategory::System,
+            "scarlet"
+        ));
+        assert!(!ScarletApp::settings_action_matches(
+            SettingCategory::General,
+            "import"
+        ));
+        assert!(ScarletApp::has_settings_actions(SettingCategory::System));
+        assert!(!ScarletApp::has_settings_actions(
+            SettingCategory::Moderation
+        ));
     }
 
     #[test]
