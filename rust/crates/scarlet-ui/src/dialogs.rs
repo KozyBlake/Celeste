@@ -51,6 +51,16 @@ pub fn message(
     run(dialog.show())
 }
 
+pub fn error_message(title: &str, description: impl Into<String>) -> Result<(), String> {
+    message(
+        title,
+        description,
+        rfd::MessageButtons::Ok,
+        rfd::MessageLevel::Error,
+    )
+    .map(|_| ())
+}
+
 fn run<F, T>(future: F) -> Result<T, String>
 where
     F: Future<Output = T>,

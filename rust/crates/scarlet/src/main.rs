@@ -36,7 +36,23 @@ use scarlet_core::settings::Settings;
 
 mod managed_supervisor;
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => show_startup_failure(&format!("{error:#}")),
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "Celeste encountered an unknown panic.".to_string());
+            show_startup_failure(&message);
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     // A splash helper is the same executable on a deliberately tiny code
     // path. Keeping its eframe event loop in a separate process is reliable
     // on both Windows and Linux, where creating a splash event loop and then
@@ -421,7 +437,7 @@ fn main() -> anyhow::Result<()> {
         // `eframe::run_native` call; Discord connects once the wizard
         // resolves a token, or immediately if setup already ran.
         startup_splash.finish();
-        if let Err(err) = scarlet_ui::run(
+        scarlet_ui::run(
             ui_state,
             shared,
             data_dir,
@@ -432,9 +448,8 @@ fn main() -> anyhow::Result<()> {
             two_factor_tx,
             two_factor_rx,
             managed_clients,
-        ) {
-            tracing::error!("UI error: {}", err);
-        }
+        )
+        .map_err(|error| anyhow::anyhow!("the main Celeste window could not open: {error}"))?;
     }
 
     // Headless mode has no eframe close callback, and this also provides a
@@ -444,6 +459,28 @@ fn main() -> anyhow::Result<()> {
     shutdown_data.save_all();
 
     Ok(())
+}
+
+/// Release builds are Windows GUI applications, so stderr is not visible.
+/// Preserve a bootstrap failure outside the normal logger and show it using
+/// the same native dialog backend as the data-folder question.
+fn show_startup_failure(message: &str) {
+    eprintln!("Celeste could not start: {message}");
+    let report = format!(
+        "Celeste could not start.\n\n{message}\n\nA copy of this error was written to startup-error.txt in Celeste's default data folder."
+    );
+    let path = scarlet_core::paths::default_data_dir().join("startup-error.txt");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let details = format!(
+        "{}\nVersion: {}\nOS: {}\nError: {message}\n",
+        chrono::Local::now().to_rfc3339(),
+        scarlet_core::identity::VERSION,
+        std::env::consts::OS,
+    );
+    let _ = std::fs::write(&path, details);
+    let _ = scarlet_ui::dialogs::error_message("Celeste could not start", report);
 }
 
 /// Owns the short-lived companion splash process and its status file. The
