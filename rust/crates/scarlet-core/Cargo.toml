@@ -27,6 +27,12 @@ unicode-script.workspace = true
 unicode-normalization.workspace = true
 unicode-general-category.workspace = true
 deunicode.workspace = true
+zip.workspace = true
+sevenz-rust.workspace = true
+tar.workspace = true
+flate2.workspace = true
+bzip2.workspace = true
+lzma-rust2.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

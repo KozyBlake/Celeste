@@ -109,6 +109,53 @@ fn resolve_world_id(input: &str) -> Option<String> {
     (uuid.len() == 36 && uuid.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() })).then(|| candidate.to_string())
 }
 
+/// Ask for either a live Scarlet folder or a portable archive. Archive data
+/// is extracted to Celeste-owned staging immediately so the normal overlap
+/// review can use the exact same import path as a folder.
+fn pick_legacy_import_source(
+    data_dir: &std::path::Path,
+) -> Result<Option<(std::path::PathBuf, Option<std::path::PathBuf>)>, String> {
+    let choice = crate::dialogs::message(
+        "Celeste - choose Scarlet data",
+        "Choose how to locate the legacy Scarlet data. Archives may be ZIP, 7Z, TAR, TAR.GZ, TAR.BZ2, or TAR.XZ.",
+        rfd::MessageButtons::YesNoCancelCustom(
+            "Choose folder".to_string(),
+            "Choose archive".to_string(),
+            "Cancel".to_string(),
+        ),
+        rfd::MessageLevel::Info,
+    )?;
+    let parent = Some(data_dir.parent().unwrap_or(data_dir));
+    match choice {
+        rfd::MessageDialogResult::Custom(label) if label.contains("folder") => {
+            crate::dialogs::pick_folder("Choose the Scarlet data folder", parent)
+                .map(|path| path.map(|path| (path, None)))
+        }
+        rfd::MessageDialogResult::Custom(label) if label.contains("archive") => {
+            let Some(archive) = crate::dialogs::pick_archive("Choose a Scarlet data archive", parent)? else {
+                return Ok(None);
+            };
+            let staged = scarlet_core::legacy_archive::prepare(&archive, data_dir)
+                .map_err(|error| format!("could not read {}: {error}", archive.display()))?;
+            Ok(Some((staged, Some(archive))))
+        }
+        // Native backends are inconsistent about whether custom labels come
+        // back as Custom/Yes/No. Preserve the visual left-to-right mapping.
+        rfd::MessageDialogResult::Yes => crate::dialogs::pick_folder(
+            "Choose the Scarlet data folder", parent,
+        ).map(|path| path.map(|path| (path, None))),
+        rfd::MessageDialogResult::No => {
+            let Some(archive) = crate::dialogs::pick_archive("Choose a Scarlet data archive", parent)? else {
+                return Ok(None);
+            };
+            let staged = scarlet_core::legacy_archive::prepare(&archive, data_dir)
+                .map_err(|error| format!("could not read {}: {error}", archive.display()))?;
+            Ok(Some((staged, Some(archive))))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn validate_instance_display_name(name: &str) -> Result<Option<String>, String> {
     let name = name.trim();
     if name.len() > 32 || name.contains(['.', '/', '\\']) {
@@ -3410,11 +3457,11 @@ impl ScarletApp {
         let detected = scarlet_core::paths::find_legacy_data_dirs(&self.data_dir)
             .into_iter()
             .next();
-        let source = if let Some(detected) = detected {
+        let selection = if let Some(detected) = detected {
             let result = crate::dialogs::message(
                 "Celeste - Scarlet data found",
                 format!(
-                    "Celeste found a legacy Scarlet folder:\n\n{}\n\nUse this folder?\n\nYes: use it\nNo: choose another folder\nCancel: do nothing",
+                    "Celeste found a legacy Scarlet folder:\n\n{}\n\nUse this folder?\n\nYes: use it\nNo: choose a folder or archive\nCancel: do nothing",
                     detected.display(),
                 ),
                 rfd::MessageButtons::YesNoCancel,
@@ -3427,14 +3474,11 @@ impl ScarletApp {
                     self.settings_notice = Some(message);
                     return;
                 }
-                Ok(rfd::MessageDialogResult::Yes) => Some(detected),
-                Ok(rfd::MessageDialogResult::No) => match crate::dialogs::pick_folder(
-                    "Choose the Scarlet data folder",
-                    Some(self.data_dir.parent().unwrap_or(&self.data_dir)),
-                ) {
-                    Ok(path) => path,
+                Ok(rfd::MessageDialogResult::Yes) => Some((detected, None)),
+                Ok(rfd::MessageDialogResult::No) => match pick_legacy_import_source(&self.data_dir) {
+                    Ok(selection) => selection,
                     Err(error) => {
-                        let message = format!("Could not open the Scarlet folder picker: {error}");
+                        let message = format!("Could not choose Scarlet data: {error}");
                         self.state.append_cli_output(&message);
                         self.settings_notice = Some(message);
                         return;
@@ -3443,20 +3487,17 @@ impl ScarletApp {
                 Ok(_) => None,
             }
         } else {
-            match crate::dialogs::pick_folder(
-                "Choose the Scarlet data folder",
-                Some(self.data_dir.parent().unwrap_or(&self.data_dir)),
-            ) {
-                Ok(path) => path,
+            match pick_legacy_import_source(&self.data_dir) {
+                Ok(selection) => selection,
                 Err(error) => {
-                    let message = format!("Could not open the Scarlet folder picker: {error}");
+                    let message = format!("Could not choose Scarlet data: {error}");
                     self.state.append_cli_output(&message);
                     self.settings_notice = Some(message);
                     return;
                 }
             }
         };
-        let Some(source) = source else { return };
+        let Some((source, archive)) = selection else { return };
         if !scarlet_core::paths::settings_file_usable(&source) {
             let message = format!(
                 "{} does not contain a readable, non-empty settings.json, so it was not imported.",
@@ -3469,6 +3510,9 @@ impl ScarletApp {
                 rfd::MessageLevel::Error,
             );
             self.settings_notice = Some(message);
+            if archive.is_some() {
+                scarlet_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
+            }
             return;
         }
         let plan = match scarlet_core::legacy_import::inspect(&source, &self.data_dir) {
@@ -3477,6 +3521,9 @@ impl ScarletApp {
                 let message = format!("Could not inspect Scarlet data: {error}");
                 self.state.append_cli_output(&message);
                 self.settings_notice = Some(message);
+                if archive.is_some() {
+                    scarlet_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
+                }
                 return;
             }
         };
@@ -3486,7 +3533,7 @@ impl ScarletApp {
                 "Celeste - import Scarlet data",
                 format!(
                     "Add reusable data from:\n{}\n\ninto Celeste:\n{}\n\n{security_warning}\n\nA backup is created first. Settings and credentials are skipped, the Scarlet folder is never changed, and Celeste must restart to import safely.",
-                    source.display(),
+                    archive.as_deref().unwrap_or(&source).display(),
                     self.data_dir.display(),
                 ),
                 rfd::MessageButtons::OkCancel,
@@ -3494,11 +3541,19 @@ impl ScarletApp {
             );
             match confirmed {
                 Ok(rfd::MessageDialogResult::Ok) => scarlet_core::legacy_import::ImportMode::Merge,
-                Ok(_) => return,
+                Ok(_) => {
+                    if archive.is_some() {
+                        scarlet_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
+                    }
+                    return;
+                }
                 Err(error) => {
                     let message = format!("Could not open the Scarlet import confirmation: {error}");
                     self.state.append_cli_output(&message);
                     self.settings_notice = Some(message);
+                    if archive.is_some() {
+                        scarlet_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
+                    }
                     return;
                 }
             }
@@ -3533,16 +3588,31 @@ impl ScarletApp {
                 // buttons rather than their labels.
                 Ok(rfd::MessageDialogResult::Yes) => scarlet_core::legacy_import::ImportMode::Merge,
                 Ok(rfd::MessageDialogResult::No) => scarlet_core::legacy_import::ImportMode::Replace,
-                Ok(_) => return,
+                Ok(_) => {
+                    if archive.is_some() {
+                        scarlet_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
+                    }
+                    return;
+                }
                 Err(error) => {
                     let message = format!("Could not open the Scarlet import choice: {error}");
                     self.state.append_cli_output(&message);
                     self.settings_notice = Some(message);
+                    if archive.is_some() {
+                        scarlet_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
+                    }
                     return;
                 }
             }
         };
-        match scarlet_core::legacy_import::queue(&self.data_dir, &source, mode) {
+        let queued = if let Some(archive) = archive.as_deref() {
+            scarlet_core::legacy_import::queue_prepared_archive(
+                &self.data_dir, &source, archive, mode,
+            )
+        } else {
+            scarlet_core::legacy_import::queue(&self.data_dir, &source, mode)
+        };
+        match queued {
             Ok(()) => {
                 let message = "Scarlet import queued. Restarting Celeste to apply it safely...";
                 self.state.append_cli_output(message);
@@ -3558,6 +3628,9 @@ impl ScarletApp {
                 let message = format!("Could not queue the Scarlet import: {error}");
                 self.state.append_cli_output(&message);
                 self.settings_notice = Some(message);
+                if archive.is_some() {
+                    scarlet_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
+                }
             }
         }
     }

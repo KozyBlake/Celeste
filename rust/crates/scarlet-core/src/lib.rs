@@ -13,6 +13,7 @@ pub mod instance_roster;
 pub mod java_hash;
 pub mod json_cache;
 pub mod legacy_import;
+pub mod legacy_archive;
 pub mod log;
 pub mod maths;
 pub mod misc_utils;

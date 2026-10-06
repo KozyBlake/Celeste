@@ -19,7 +19,10 @@ pub const STATUS_ENV: &str = "CELESTE_SPLASH_STATUS_FILE";
 pub fn run(status_file: PathBuf) -> eframe::Result<()> {
     let icon = decode_icon(BUNDLED_ICON);
     let mut viewport = egui::ViewportBuilder::default()
-        .with_app_id("dev.kozyblake.celeste.splash")
+        // Match the installed desktop file and the main window. On Wayland,
+        // KDE resolves the title-bar/taskbar icon from this application id;
+        // the old splash-only id fell back to winit's generic "W" icon.
+        .with_app_id(scarlet_core::identity::DESKTOP_APP_ID)
         .with_inner_size([440.0, 300.0])
         .with_resizable(false)
         .with_maximize_button(false)
@@ -29,7 +32,7 @@ pub fn run(status_file: PathBuf) -> eframe::Result<()> {
     }
 
     eframe::run_native(
-        "Celeste is starting",
+        "Celeste — Starting",
         eframe::NativeOptions {
             viewport,
             ..Default::default()
@@ -88,6 +91,11 @@ impl eframe::App for StartupSplash {
             }
             _ => {}
         }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(operation_title(
+            &self.status,
+            self.done,
+        )));
 
         if self.done && self.started.elapsed() >= MIN_VISIBLE {
                 let _ = std::fs::remove_file(&self.status_file);
@@ -191,6 +199,18 @@ fn decode_icon(bytes: &[u8]) -> Option<egui::IconData> {
     })
 }
 
+fn operation_title(status: &str, done: bool) -> String {
+    if done {
+        return "Celeste — Ready".to_string();
+    }
+    let operation = status.trim().trim_end_matches('.');
+    if operation.is_empty() {
+        "Celeste — Starting".to_string()
+    } else {
+        format!("Celeste — {operation}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +228,14 @@ mod tests {
         let path = dir.path().join("status");
         std::fs::write(&path, "  Loading settings...\n").unwrap();
         assert_eq!(read_status(&path).as_deref(), Some("Loading settings..."));
+    }
+
+    #[test]
+    fn title_tracks_the_current_startup_operation() {
+        assert_eq!(
+            operation_title("Importing watched_groups.json...", false),
+            "Celeste — Importing watched_groups.json"
+        );
+        assert_eq!(operation_title("Celeste is ready.", true), "Celeste — Ready");
     }
 }

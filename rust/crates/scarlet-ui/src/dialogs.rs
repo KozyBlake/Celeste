@@ -21,6 +21,22 @@ pub fn pick_folder(
     run(dialog.pick_folder()).map(|picked| picked.map(|folder| folder.path().to_path_buf()))
 }
 
+pub fn pick_archive(
+    title: &str,
+    directory: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new()
+        .set_title(title)
+        .add_filter("Supported archives", scarlet_core::legacy_archive::PICKER_EXTENSIONS)
+        .add_filter("ZIP archives", &["zip"])
+        .add_filter("7-Zip archives", &["7z"])
+        .add_filter("TAR archives", &["tar", "tar.gz", "tgz", "tar.bz2", "tbz2", "tar.xz", "txz"]);
+    if let Some(directory) = directory {
+        dialog = dialog.set_directory(directory);
+    }
+    run(dialog.pick_file()).map(|picked| picked.map(|file| file.path().to_path_buf()))
+}
+
 pub fn message(
     title: &str,
     description: impl Into<String>,

@@ -47,6 +47,10 @@ struct ImportRequest {
     source: PathBuf,
     #[serde(default)]
     mode: ImportMode,
+    #[serde(default)]
+    display_source: Option<PathBuf>,
+    #[serde(default)]
+    cleanup_staging: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -88,6 +92,28 @@ struct StoredResult {
 }
 
 pub fn queue(data_dir: &Path, source: &Path, mode: ImportMode) -> Result<()> {
+    queue_request(data_dir, source, source, mode, false)
+}
+
+/// Queue a source previously created by [`crate::legacy_archive::prepare`].
+/// The completion report names the user's archive, while the private staging
+/// directory is removed after the import attempt.
+pub fn queue_prepared_archive(
+    data_dir: &Path,
+    staged_source: &Path,
+    archive: &Path,
+    mode: ImportMode,
+) -> Result<()> {
+    queue_request(data_dir, staged_source, archive, mode, true)
+}
+
+fn queue_request(
+    data_dir: &Path,
+    source: &Path,
+    display_source: &Path,
+    mode: ImportMode,
+    cleanup_staging: bool,
+) -> Result<()> {
     anyhow::ensure!(
         source != data_dir,
         "the Scarlet and Celeste folders are the same"
@@ -100,7 +126,12 @@ pub fn queue(data_dir: &Path, source: &Path, mode: ImportMode) -> Result<()> {
     std::fs::create_dir_all(data_dir)?;
     std::fs::write(
         data_dir.join(REQUEST_FILE),
-        serde_json::to_string_pretty(&ImportRequest { source: source.to_path_buf(), mode })?,
+        serde_json::to_string_pretty(&ImportRequest {
+            source: source.to_path_buf(),
+            mode,
+            display_source: Some(display_source.to_path_buf()),
+            cleanup_staging,
+        })?,
     )?;
     Ok(())
 }
@@ -122,15 +153,21 @@ pub fn run_pending_with_progress(
     let request_data = serde_json::from_str::<ImportRequest>(&text).unwrap_or_else(|_| ImportRequest {
         source: PathBuf::from(text.trim()),
         mode: ImportMode::Merge,
+        display_source: None,
+        cleanup_staging: false,
     });
     let source = request_data.source;
-    let result = import_with_progress(&source, data_dir, request_data.mode, &mut progress);
+    let display_source = request_data.display_source.unwrap_or_else(|| source.clone());
+    let mut result = import_with_progress(&source, data_dir, request_data.mode, &mut progress);
+    if let Ok(report) = &mut result {
+        report.source = display_source.clone();
+    }
     let stored = match &result {
         Ok(report) => StoredResult { message: report.summary(), success: true },
         Err(error) => StoredResult {
             message: format!(
                 "Scarlet import failed: {error}. Celeste settings were not changed and the source folder remains untouched: {}",
-                source.display()
+                display_source.display()
             ),
             success: false,
         },
@@ -139,6 +176,9 @@ pub fn run_pending_with_progress(
         let _ = std::fs::write(data_dir.join(RESULT_FILE), text);
     }
     let _ = std::fs::remove_file(request);
+    if request_data.cleanup_staging {
+        crate::legacy_archive::cleanup_staging(&source, data_dir);
+    }
     Some(result)
 }
 
@@ -241,7 +281,7 @@ fn create_backup_if_needed(destination: &Path) -> Result<Option<PathBuf>> {
         .any(|entry| {
             !matches!(
                 entry.file_name().to_string_lossy().as_ref(),
-                "logs" | "caches" | "backups" | REQUEST_FILE | RESULT_FILE
+                "logs" | "caches" | "backups" | ".legacy-import-staging" | REQUEST_FILE | RESULT_FILE
             )
         });
     if !has_existing_data {
@@ -593,5 +633,25 @@ mod tests {
             inspect(source.path(), destination.path()).unwrap().overlapping_files,
             ["usr/ (1 record)"]
         );
+    }
+
+    #[test]
+    fn queued_archive_reports_the_archive_and_removes_only_its_staging_folder() {
+        let destination = tempfile::tempdir().unwrap();
+        let staging_parent = destination.path().join(".legacy-import-staging");
+        let staging = staging_parent.join("test-stage");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("settings.json"), r#"{"legacy":true}"#).unwrap();
+        std::fs::write(staging.join("staff_list.json"), r#"["usr_old"]"#).unwrap();
+        let archive = destination.path().join("original.7z");
+        std::fs::write(&archive, "kept").unwrap();
+
+        queue_prepared_archive(destination.path(), &staging, &archive, ImportMode::Merge).unwrap();
+        let report = run_pending(destination.path()).unwrap().unwrap();
+
+        assert_eq!(report.source, archive);
+        assert!(!staging.exists());
+        assert!(report.source.exists());
+        assert_eq!(std::fs::read_to_string(destination.path().join("staff_list.json")).unwrap(), "[\n  \"usr_old\"\n]");
     }
 }

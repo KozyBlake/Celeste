@@ -57,6 +57,7 @@ enum Stage {
     VibecodedNotice,
     LegacyImport {
         detected: Option<std::path::PathBuf>,
+        archive: Option<std::path::PathBuf>,
         overlaps: Vec<String>,
         mode: scarlet_core::legacy_import::ImportMode,
         error: Option<String>,
@@ -95,6 +96,7 @@ enum Action {
     VibecodedContinue,
     LegacyImport(
         std::path::PathBuf,
+        Option<std::path::PathBuf>,
         scarlet_core::legacy_import::ImportMode,
     ),
     LegacySkip,
@@ -318,6 +320,7 @@ impl SetupWizard {
             .unwrap_or_default();
         Stage::LegacyImport {
             detected,
+            archive: None,
             overlaps,
             mode: scarlet_core::legacy_import::ImportMode::Merge,
             error: None,
@@ -592,8 +595,15 @@ impl SetupWizard {
             Action::VibecodedContinue => {
                 self.stage = self.legacy_import_stage();
             }
-            Action::LegacyImport(source, mode) => {
-                match scarlet_core::legacy_import::queue(&self.settings.data_dir, &source, mode) {
+            Action::LegacyImport(source, archive, mode) => {
+                let queued = if let Some(archive) = archive.as_deref() {
+                    scarlet_core::legacy_import::queue_prepared_archive(
+                        &self.settings.data_dir, &source, archive, mode,
+                    )
+                } else {
+                    scarlet_core::legacy_import::queue(&self.settings.data_dir, &source, mode)
+                };
+                match queued {
                     Ok(()) => {
                         self.vibecoded_ack.set(Some(true), "setup-wizard");
                         self.restart_for_import = true;
@@ -606,6 +616,9 @@ impl SetupWizard {
                 }
             }
             Action::LegacySkip => {
+                if let Stage::LegacyImport { detected: Some(source), archive: Some(_), .. } = &self.stage {
+                    scarlet_core::legacy_archive::cleanup_staging(source, &self.settings.data_dir);
+                }
                 self.vibecoded_ack.set(Some(true), "setup-wizard");
                 self.stage = self.compute_stage_after_vibecoded();
             }
@@ -685,11 +698,12 @@ impl SetupWizard {
                 ui.set_max_width(480.0);
                 match &mut self.stage {
                     Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
-                    Stage::LegacyImport { detected, overlaps, mode, error } => {
+                    Stage::LegacyImport { detected, archive, overlaps, mode, error } => {
                         render_legacy_import_stage(
                             ui,
                             &self.settings.data_dir,
                             detected,
+                            archive,
                             overlaps,
                             mode,
                             error,
@@ -779,6 +793,7 @@ fn render_legacy_import_stage(
     ui: &mut egui::Ui,
     destination: &std::path::Path,
     detected: &mut Option<std::path::PathBuf>,
+    archive: &mut Option<std::path::PathBuf>,
     overlaps: &mut Vec<String>,
     mode: &mut scarlet_core::legacy_import::ImportMode,
     error: &mut Option<String>,
@@ -798,8 +813,8 @@ fn render_legacy_import_stage(
         "Security reminder: VRChat and Discord credentials are never transferred. Make sure you have them available to enter again, and double-check the imported data after Celeste restarts.",
     );
     ui.add_space(12.0);
-    if let Some(path) = detected.as_ref() {
-        ui.label("Detected Scarlet folder:");
+    if let Some(path) = archive.as_ref().or(detected.as_ref()) {
+        ui.label(if archive.is_some() { "Selected Scarlet archive:" } else { "Detected Scarlet folder:" });
         ui.add(
             egui::Label::new(egui::RichText::new(path.display().to_string()).monospace())
                 .truncate(),
@@ -843,22 +858,50 @@ fn render_legacy_import_stage(
     ui.horizontal_wrapped(|ui| {
         if let Some(path) = detected.as_ref() {
             if ui.button("Import detected data").clicked() {
-                *action = Action::LegacyImport(path.clone(), *mode);
+                *action = Action::LegacyImport(path.clone(), archive.clone(), *mode);
             }
         }
         if ui.button("Choose Scarlet folder...").clicked() {
             match crate::dialogs::pick_folder("Choose the Scarlet data folder", None) {
                 Ok(Some(path)) => {
+                    if archive.take().is_some() {
+                        if let Some(staged) = detected.as_deref() {
+                            scarlet_core::legacy_archive::cleanup_staging(staged, destination);
+                        }
+                    }
                     *overlaps = scarlet_core::legacy_import::inspect(&path, destination)
                         .map(|plan| plan.overlapping_files)
                         .unwrap_or_default();
                     *detected = Some(path);
+                    *archive = None;
                     *error = None;
                 }
                 Ok(None) => {}
                 Err(dialog_error) => {
                     *error = Some(format!("Could not open the folder picker: {dialog_error}"));
                 }
+            }
+        }
+        if ui.button("Choose archive...").clicked() {
+            match crate::dialogs::pick_archive("Choose a Scarlet data archive", None) {
+                Ok(Some(path)) => match scarlet_core::legacy_archive::prepare(&path, destination) {
+                    Ok(staged) => {
+                        if archive.take().is_some() {
+                            if let Some(previous) = detected.as_deref() {
+                                scarlet_core::legacy_archive::cleanup_staging(previous, destination);
+                            }
+                        }
+                        *overlaps = scarlet_core::legacy_import::inspect(&staged, destination)
+                            .map(|plan| plan.overlapping_files)
+                            .unwrap_or_default();
+                        *detected = Some(staged);
+                        *archive = Some(path);
+                        *error = None;
+                    }
+                    Err(import_error) => *error = Some(format!("Could not read the archive: {import_error}")),
+                },
+                Ok(None) => {}
+                Err(dialog_error) => *error = Some(format!("Could not open the archive picker: {dialog_error}")),
             }
         }
         if ui.button("Continue without importing").clicked() {
@@ -1152,6 +1195,7 @@ mod tests {
         wizard.apply_action(Action::VibecodedContinue);
         wizard.apply_action(Action::LegacyImport(
             source.path().to_path_buf(),
+            None,
             scarlet_core::legacy_import::ImportMode::Merge,
         ));
 

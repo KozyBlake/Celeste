@@ -500,3 +500,22 @@ or failure, backup location and counts, repeats the credential warning, and
 must be acknowledged before setup or the main UI continues. It is deliberately
 not an `egui::Window`: the first version looked like a window nested inside the
 Celeste window.
+
+## Update 2026-10-06: archive import and splash identity
+
+Both first-run setup and Settings → System can now import a Scarlet data
+archive as well as a live folder. Supported formats are ZIP, 7Z, TAR,
+TAR.GZ/TGZ, TAR.BZ2/TBZ2 and TAR.XZ/TXZ. Extraction is implemented inside
+Celeste for consistent Windows/Linux behavior. It finds a nested Scarlet root,
+extracts only the recognized migration files, rejects traversal/drive paths and
+duplicate destinations, and enforces entry-count, per-file and total expanded
+size limits. The private staging directory is excluded from the pre-import
+backup and removed after the queued import; the user's archive is untouched and
+is named in the completion report. RAR and password-protected archives are
+deliberately unsupported and receive an explicit error.
+
+The companion splash now uses the same `io.github.KozyBlake.Celeste`
+application id as the installed desktop file and main window, fixing KDE's
+generic winit `W` fallback. Its native title tracks the current status (for
+example `Celeste — Importing watched_groups.json`) and ends at
+`Celeste — Ready` instead of remaining `Celeste is starting` throughout.
