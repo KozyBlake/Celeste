@@ -7,17 +7,14 @@ fn main() {
         let mut resource = winresource::WindowsResource::new();
         resource
             .set_icon("../../assets/celeste.ico")
-            .set(
-                "FileDescription",
-                "A VRChat moderation logger based on Scarlet, but coded in Rust.",
-            )
+            .set("FileDescription", "Celeste")
             .set("ProductName", "Celeste")
             .set("InternalName", "Celeste")
             .set("OriginalFilename", "celeste.exe")
             .set("CompanyName", "KozyBlake")
             .set(
                 "Comments",
-                "VRChat moderation, logging, and group operations",
+                "A VRChat moderation logger based on Scarlet, but coded in Rust.",
             );
         resource
             .compile()
