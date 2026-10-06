@@ -454,12 +454,14 @@ instead of copying the whole legacy directory.
 ## Update 2026-10-05: adaptive startup splash
 
 Graphical launches now start a short-lived companion copy of the Celeste
-executable that can display the polished Celeste logo, version, spinner and
-real startup milestones. It waits 250 ms before creating its window, so a
-fast launch writes the completion marker and produces no splash or artificial
-delay. Slow launches report data discovery, import checks, settings/cache
-loading, moderation-data loading and VRChat-monitor startup, then close as the
-main eframe window opens. The companion process avoids the cross-platform
+executable that displays the polished Celeste logo, version, spinner and real
+startup milestones. It remains visible for at least 900 ms, ending with
+**Celeste is ready**, so the splash is readable even on Blake's very fast
+machine; the parent bounds the complete handoff at two seconds so a broken
+display backend cannot block the real application. Launches report data
+discovery, import checks, settings/cache loading, moderation-data loading and
+VRChat-monitor startup, then close before the main eframe window opens. The
+companion process avoids the cross-platform
 winit limitation around creating a splash event loop and then a second main
 event loop in one process. It times itself out after 90 seconds if the parent
 is killed; headless launches never spawn it.

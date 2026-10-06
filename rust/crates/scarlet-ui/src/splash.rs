@@ -9,28 +9,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub const DONE_STATUS: &str = "__CELESTE_STARTUP_DONE__";
-const SHOW_AFTER: Duration = Duration::from_millis(250);
+const MIN_VISIBLE: Duration = Duration::from_millis(900);
 const MAX_LIFETIME: Duration = Duration::from_secs(90);
 const BUNDLED_ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
 
 pub const STATUS_ENV: &str = "CELESTE_SPLASH_STATUS_FILE";
 
-/// Wait briefly before creating a window. Fast parent launches write the
-/// done marker during this grace period and never flash a splash on screen.
 pub fn run(status_file: PathBuf) -> eframe::Result<()> {
-    let waiting_since = Instant::now();
-    while waiting_since.elapsed() < SHOW_AFTER {
-        if read_status(&status_file).as_deref() == Some(DONE_STATUS) {
-            let _ = std::fs::remove_file(status_file);
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    if read_status(&status_file).as_deref() == Some(DONE_STATUS) {
-        let _ = std::fs::remove_file(status_file);
-        return Ok(());
-    }
-
     let icon = decode_icon(BUNDLED_ICON);
     let mut viewport = egui::ViewportBuilder::default()
         .with_app_id("dev.kozyblake.celeste.splash")
@@ -56,6 +41,7 @@ struct StartupSplash {
     status_file: PathBuf,
     status: String,
     started: Instant,
+    done: bool,
     texture: Option<egui::TextureHandle>,
 }
 
@@ -65,6 +51,7 @@ impl StartupSplash {
             status_file,
             status: "Starting Celeste...".to_string(),
             started: Instant::now(),
+            done: false,
             texture: None,
         }
     }
@@ -73,13 +60,23 @@ impl StartupSplash {
 impl eframe::App for StartupSplash {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         match read_status(&self.status_file) {
-            Some(status) if status == DONE_STATUS => {
-                let _ = std::fs::remove_file(&self.status_file);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                return;
+            Some(status) if status.starts_with(DONE_STATUS) => {
+                self.done = true;
+                if let Some(final_status) = status.strip_prefix(DONE_STATUS) {
+                    let final_status = final_status.trim();
+                    if !final_status.is_empty() {
+                        self.status = final_status.to_string();
+                    }
+                }
             }
             Some(status) if !status.is_empty() => self.status = status,
             _ => {}
+        }
+
+        if self.done && self.started.elapsed() >= MIN_VISIBLE {
+                let _ = std::fs::remove_file(&self.status_file);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
         }
 
         // Do not leave an orphaned window behind if the parent is killed in

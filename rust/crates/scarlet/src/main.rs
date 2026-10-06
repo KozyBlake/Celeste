@@ -487,18 +487,41 @@ impl StartupSplashController {
             return;
         }
         if let Some(path) = &self.status_file {
-            let _ = std::fs::write(path, scarlet_ui::splash::DONE_STATUS);
+            let _ = std::fs::write(
+                path,
+                format!("{}\nCeleste is ready.", scarlet_ui::splash::DONE_STATUS),
+            );
         }
         self.finished = true;
+
+        // Let the splash complete its short visible handoff before opening
+        // the main window. Bound the wait so a broken display backend can
+        // never hold Celeste's real startup hostage.
+        if let Some(mut child) = self.child.take() {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(path) = &self.status_file {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
 impl Drop for StartupSplashController {
     fn drop(&mut self) {
         self.finish();
-        if let Some(child) = &mut self.child {
-            let _ = child.try_wait();
-        }
     }
 }
 
