@@ -100,7 +100,7 @@ or from Discord with `/settings edit`.
 | TTS: Announce watched groups | `tts_announce_watched_groups` | boolean (default `true`) | Speaks a warning when someone representing a watched group joins. |
 | TTS: Announce watched users | `tts_announce_watched_users` | boolean (default `true`) | Speaks a warning when a watched user joins. |
 | TTS: Flag suspicious pronouns | `tts_flag_suspicious_pronouns` | boolean (default `true`) | Reads the pronoun itself aloud as part of the warning, rather than only saying one was flagged. |
-| TTS: Use default system audio device | `tts_use_default_audio_device` | boolean (default `false`) | Speaks through this computer's audio output. Turn off to speak into the configured Discord voice channel instead. |
+| TTS: Use default system audio device | `tts_use_default_audio_device` | boolean (default `true`) | Speaks through this computer's audio output. Turn off to speak into the configured Discord voice channel instead. |
 | TTS: Voice name | `tts_voice_name` | one of a list discovered at runtime | Which installed system voice to speak with. Leave empty for the default. |
 
 ## Discord
