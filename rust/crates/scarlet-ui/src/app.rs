@@ -2724,7 +2724,7 @@ impl ScarletApp {
                 ui.heading("Managed VRChat clients");
                 ui.label(
                     egui::RichText::new(
-                        "Keep explicitly assigned moderator accounts in exact group instances.",
+                        "Keep VRChat processes in exact group instances without signing those accounts into Celeste.",
                     )
                     .weak(),
                 );
@@ -2759,6 +2759,8 @@ impl ScarletApp {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(crate::theme::INFO, "Normal Steam/EAC launch only");
                 ui.separator();
+                ui.label("Celeste identifies each client by its numeric VRChat --profile value.");
+                ui.separator();
                 ui.label("A VRChat-wide API outage pauses recovery instead of restarting every client.");
                 ui.separator();
                 ui.label("Automatic instance replacement is opt-in per slot.");
@@ -2790,11 +2792,11 @@ impl ScarletApp {
                             ui.weak("VRChat --profile number; each slot must be unique (0 is reserved)");
                         });
                         ui.end_row();
-                        ui.label("Expected account ID");
+                        ui.label("Expected account ID (optional)");
                         ui.add(
                             egui::TextEdit::singleline(&mut slot.expected_user_id)
                                 .desired_width(420.0)
-                                .hint_text("usr_… (required for safe location verification)"),
+                                .hint_text("usr_…; no password or account sign-in required"),
                         );
                         ui.end_row();
                         ui.label("Account label");
@@ -2812,6 +2814,13 @@ impl ScarletApp {
                         );
                         ui.end_row();
                     });
+                ui.label(
+                    egui::RichText::new(
+                        "Without an account ID, Celeste can restart a stopped profile into its assigned instance, but it will not move a running process because it cannot safely confirm who or where it is.",
+                    )
+                    .small()
+                    .weak(),
+                );
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.checkbox(&mut slot.enabled, "Manage this slot");
@@ -2933,7 +2942,7 @@ impl ScarletApp {
                 ui.vertical_centered(|ui| {
                     ui.add_space(24.0);
                     ui.label(egui::RichText::new("No managed clients yet").strong().size(crate::theme::TEXT_HEADING));
-                    ui.label("Add one slot for each VRChat account/instance Celeste should keep covered.");
+                    ui.label("Add one slot for each numeric VRChat profile and instance Celeste should keep covered.");
                 });
             });
             return;
@@ -2954,7 +2963,7 @@ impl ScarletApp {
                             } else {
                                 slot.expected_display_name.as_str()
                             };
-                            ui.label(egui::RichText::new(format!("Profile {}  |  {}", slot.profile, if account.is_empty() { "account not assigned" } else { account })).small().weak());
+                            ui.label(egui::RichText::new(format!("Profile {}  |  {}", slot.profile, if account.is_empty() { "identity check disabled" } else { account })).small().weak());
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.colored_label(
@@ -4910,7 +4919,18 @@ pub fn run(
     eframe::run_native(
         scarlet_core::identity::APP_NAME,
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            if let Some(render_state) = &cc.wgpu_render_state {
+                let adapter = render_state.adapter.get_info();
+                tracing::info!(
+                    name = %adapter.name,
+                    backend = ?adapter.backend,
+                    device_type = ?adapter.device_type,
+                    driver = %adapter.driver,
+                    driver_info = %adapter.driver_info,
+                    "Celeste graphics adapter selected"
+                );
+            }
             Ok(Box::new(ScarletApp::new(
                 state,
                 shared,

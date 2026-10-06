@@ -176,8 +176,8 @@ async fn reconcile_slot(
                 store,
                 &slot.id,
                 None,
-                "Running; location not verified",
-                "Set the expected usr_ account ID before Celeste can safely move this profile",
+                "Running; crash recovery armed",
+                "Live location checks are off. Add the optional usr_ account ID to let Celeste verify and move this running profile",
             );
             return Ok(());
         }

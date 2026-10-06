@@ -644,7 +644,7 @@ impl Settings {
                 "tts_use_default_audio_device",
                 "TTS: Use default system audio device",
                 SettingCategory::Notifications,
-                false,
+                true,
             ),
             announce_watched_users: registry.boolean(
                 "tts_announce_watched_users",
@@ -1063,6 +1063,7 @@ mod tests {
         assert_eq!(settings.heuristic_period_days.get(), 3);
         assert_eq!(settings.outstanding_period_days.get(), 3);
         assert!(settings.cache_cleanup_enabled.get());
+        assert!(settings.tts_use_default_audio_device.get());
         assert_eq!(settings.cache_cleanup_days.get(), 7);
     }
 

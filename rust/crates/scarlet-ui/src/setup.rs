@@ -65,6 +65,7 @@ enum Stage {
     Discord {
         token: String,
         guild_id: String,
+        use_default_audio_device: bool,
     },
     VrChatCredentials {
         username: String,
@@ -103,6 +104,7 @@ enum Action {
     DiscordContinue {
         token: Option<String>,
         guild_id: Option<String>,
+        use_default_audio_device: bool,
     },
     VrChatCredentialsSubmit {
         username: String,
@@ -332,6 +334,7 @@ impl SetupWizard {
             Stage::Discord {
                 token: self.discord_token_reg.get_or_null().unwrap_or_default(),
                 guild_id: self.discord_guild_reg.get_or_null().unwrap_or_default(),
+                use_default_audio_device: self.settings.tts_use_default_audio_device.get(),
             }
         } else {
             self.compute_stage_after_discord()
@@ -622,13 +625,16 @@ impl SetupWizard {
                 self.vibecoded_ack.set(Some(true), "setup-wizard");
                 self.stage = self.compute_stage_after_vibecoded();
             }
-            Action::DiscordContinue { token, guild_id } => {
+            Action::DiscordContinue { token, guild_id, use_default_audio_device } => {
                 if let Some(token) = token {
                     self.discord_token_reg.set(Some(token));
                 }
                 if let Some(guild_id) = guild_id {
                     self.discord_guild_reg.set(Some(guild_id));
                 }
+                self.settings
+                    .tts_use_default_audio_device
+                    .set(Some(use_default_audio_device), "setup-wizard");
                 self.discord_setup_prompted.set(Some(true), "setup-wizard");
                 self.stage = self.compute_stage_after_discord();
             }
@@ -710,8 +716,14 @@ impl SetupWizard {
                             &mut action,
                         )
                     }
-                    Stage::Discord { token, guild_id } => {
-                        render_discord_stage(ui, token, guild_id, &mut action)
+                    Stage::Discord { token, guild_id, use_default_audio_device } => {
+                        render_discord_stage(
+                            ui,
+                            token,
+                            guild_id,
+                            use_default_audio_device,
+                            &mut action,
+                        )
                     }
                     Stage::VrChatCredentials {
                         username,
@@ -772,9 +784,9 @@ fn render_vibecoded_notice(ui: &mut egui::Ui, action: &mut Action) {
     ui.heading("Celeste \u{2014} a note before you start");
     ui.add_space(12.0);
     ui.label(
-        "This fork of Celeste is maintained by KozyBlake and developed largely with AI \
-         assistance \u{2014} a \"vibe-coded\" project. Code is written and reasoned through with \
-         an AI pair, then reviewed and built by KozyBlake.\n\n\
+        "Celeste is maintained by KozyBlake and is heavily based on Scarlet. It is developed \
+         largely with AI assistance \u{2014} a \"vibe-coded\" project. Code is written and \
+         reasoned through with an AI pair, then reviewed and built by KozyBlake.\n\n\
          That isn't for everyone, and that's completely fair. If you would rather not run a \
          vibe-coded project, you can close Celeste now \u{2014} no hard feelings.",
     );
@@ -922,6 +934,7 @@ fn render_discord_stage(
     ui: &mut egui::Ui,
     token: &mut String,
     guild_id: &mut String,
+    use_default_audio_device: &mut bool,
     action: &mut Action,
 ) {
     ui.heading("Discord setup");
@@ -945,6 +958,38 @@ fn render_discord_stage(
             ui.label("Guild (server) ID:");
             ui.add(egui::TextEdit::singleline(guild_id).desired_width(320.0));
         });
+    }
+    ui.add_space(10.0);
+    ui.strong("Where should voice callouts play?");
+    ui.radio_value(
+        use_default_audio_device,
+        true,
+        "This computer's default audio device (recommended)",
+    );
+    ui.add_enabled_ui(token_present, |ui| {
+        ui.radio_value(
+            use_default_audio_device,
+            false,
+            "The configured Discord voice channel",
+        );
+    });
+    if !token_present {
+        *use_default_audio_device = true;
+        ui.label(
+            egui::RichText::new(
+                "Discord voice requires a bot token. You can change this later in Settings → Notifications.",
+            )
+            .small()
+            .weak(),
+        );
+    } else {
+        ui.label(
+            egui::RichText::new(
+                "This can be changed later in Settings → Notifications. A Discord voice channel must also be assigned before Discord playback works.",
+            )
+            .small()
+            .weak(),
+        );
     }
     ui.add_space(12.0);
     let can_continue = !token_present || !guild_id.trim().is_empty();
@@ -971,6 +1016,7 @@ fn render_discord_stage(
             } else {
                 Some(guild_id.to_string())
             },
+            use_default_audio_device: *use_default_audio_device,
         };
     }
 }
@@ -1232,6 +1278,7 @@ mod tests {
         wizard.apply_action(Action::DiscordContinue {
             token: None,
             guild_id: None,
+            use_default_audio_device: true,
         });
         assert!(settings.discord_setup_prompted.get());
         assert_eq!(wizard.stored_discord_token(), None);
@@ -1246,6 +1293,7 @@ mod tests {
         wizard.apply_action(Action::DiscordContinue {
             token: Some("my-bot-token".to_string()),
             guild_id: Some("123456".to_string()),
+            use_default_audio_device: false,
         });
         assert_eq!(
             wizard.stored_discord_token().as_deref(),
@@ -1257,6 +1305,7 @@ mod tests {
                 .as_deref(),
             Some("123456")
         );
+        assert!(!settings.tts_use_default_audio_device.get());
     }
 
     #[tokio::test]
