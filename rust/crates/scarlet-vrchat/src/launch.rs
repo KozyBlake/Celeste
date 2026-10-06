@@ -54,10 +54,26 @@ pub fn build_launch_uri(location: &str, secure_name: Option<&str>) -> String {
 /// profile argument, but only when it is the sole VRChat process; guessing in
 /// a multi-client setup would risk terminating the wrong account.
 pub fn profile_pids(profile: u32) -> Vec<u32> {
+    profile_pids_for(&[profile]).remove(&profile).unwrap_or_default()
+}
+
+/// Scan the process table once for every requested numeric profile. UI and
+/// supervision callers that display several slots must use this instead of
+/// calling [`profile_pids`] in a loop; refreshing `sysinfo::System` is much
+/// more expensive than matching another profile argument.
+pub fn profile_pids_for(profiles: &[u32]) -> HashMap<u32, Vec<u32>> {
+    let mut matches = profiles
+        .iter()
+        .copied()
+        .map(|profile| (profile, Vec::new()))
+        .collect::<HashMap<_, _>>();
+    if matches.is_empty() {
+        return matches;
+    }
+
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All, true);
     let mut all = Vec::new();
-    let mut exact = Vec::new();
     for (pid, process) in system.processes() {
         let name = process.name().to_string_lossy().to_ascii_lowercase();
         if name != "vrchat.exe" && name != "vrchat" {
@@ -66,17 +82,25 @@ pub fn profile_pids(profile: u32) -> Vec<u32> {
         let pid = pid.as_u32();
         all.push(pid);
         let args = process.cmd().iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
-        let inline = format!("--profile={profile}");
-        let paired = args.windows(2).any(|pair| pair[0] == "--profile" && pair[1] == profile.to_string());
-        if args.iter().any(|arg| arg.as_ref() == inline) || paired {
-            exact.push(pid);
+        for (profile, pids) in &mut matches {
+            let inline = format!("--profile={profile}");
+            let paired = args
+                .windows(2)
+                .any(|pair| pair[0] == "--profile" && pair[1] == profile.to_string());
+            if args.iter().any(|arg| arg.as_ref() == inline) || paired {
+                pids.push(pid);
+            }
         }
     }
-    if exact.is_empty() && profile == 0 && all.len() == 1 {
-        all
-    } else {
-        exact
+
+    if all.len() == 1 {
+        if let Some(profile_zero) = matches.get_mut(&0) {
+            if profile_zero.is_empty() {
+                *profile_zero = all;
+            }
+        }
     }
+    matches
 }
 
 pub fn profile_is_running(profile: u32) -> bool {

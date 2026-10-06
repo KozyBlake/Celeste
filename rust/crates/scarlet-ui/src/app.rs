@@ -636,6 +636,10 @@ pub struct ScarletApp {
     visual_style_installed: bool,
     managed_client_edit: Option<scarlet_vrchat::managed_clients::ManagedClientSlot>,
     managed_client_error: Option<String>,
+    /// One throttled process-table snapshot shared by every enabled coverage
+    /// slot. Disabled slots deliberately do not monitor the machine.
+    managed_profile_pids: std::collections::HashMap<u32, Vec<u32>>,
+    managed_profile_scan_at: Option<std::time::Instant>,
 }
 
 impl ScarletApp {
@@ -816,6 +820,8 @@ impl ScarletApp {
             visual_style_installed: false,
             managed_client_edit: None,
             managed_client_error: None,
+            managed_profile_pids: std::collections::HashMap::new(),
+            managed_profile_scan_at: None,
         }
     }
 
@@ -2937,6 +2943,8 @@ impl ScarletApp {
 
         let slots = self.managed_clients.list();
         if slots.is_empty() {
+            self.managed_profile_pids.clear();
+            self.managed_profile_scan_at = None;
             Self::card_frame().show(ui, |ui| {
                 ui.set_min_height(120.0);
                 ui.vertical_centered(|ui| {
@@ -2946,6 +2954,25 @@ impl ScarletApp {
                 });
             });
             return;
+        }
+
+        let enabled_profiles = slots
+            .iter()
+            .filter(|slot| slot.enabled)
+            .map(|slot| slot.profile)
+            .collect::<Vec<_>>();
+        if enabled_profiles.is_empty() {
+            self.managed_profile_pids.clear();
+            self.managed_profile_scan_at = None;
+        } else {
+            let scan_due = self.managed_profile_scan_at.is_none_or(|last| {
+                last.elapsed() >= std::time::Duration::from_secs(3)
+            });
+            if scan_due {
+                self.managed_profile_pids =
+                    scarlet_vrchat::launch::profile_pids_for(&enabled_profiles);
+                self.managed_profile_scan_at = Some(std::time::Instant::now());
+            }
         }
 
         let mut edit = None;
@@ -2977,9 +3004,17 @@ impl ScarletApp {
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new(&slot.last_status).strong());
-                        let pids = scarlet_vrchat::launch::profile_pids(slot.profile);
                         ui.separator();
-                        ui.label(if pids.is_empty() { "Process stopped".into() } else { format!("PID {}", pids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")) });
+                        if slot.enabled {
+                            let pids = self
+                                .managed_profile_pids
+                                .get(&slot.profile)
+                                .map(Vec::as_slice)
+                                .unwrap_or_default();
+                            ui.label(if pids.is_empty() { "Process stopped".into() } else { format!("PID {}", pids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")) });
+                        } else {
+                            ui.weak("Process monitoring off");
+                        }
                     });
                     if !slot.desired_location.is_empty() {
                         ui.add(egui::Label::new(egui::RichText::new(&slot.desired_location).monospace().small()).truncate())
@@ -3013,6 +3048,8 @@ impl ScarletApp {
             slot.enabled = !slot.enabled;
             if let Err(error) = self.managed_clients.upsert(slot) {
                 self.managed_client_error = Some(error.to_string());
+            } else {
+                self.managed_profile_scan_at = None;
             }
         }
         if let Some(mut slot) = stop {
