@@ -36,8 +36,8 @@ fn choose_detected_migration(detected: &Path, default_dir: &Path) -> PathBuf {
         .set_title("Celeste - Scarlet data found")
         .set_description(format!(
             "Celeste found an existing Scarlet data folder:\n\n{}\n\n\
-             Import its settings, moderation tags, watched lists and history into:\n\n{}\n\n\
-             The Scarlet folder will not be changed. Encrypted Java credentials cannot be imported.\n\n\
+             Import its moderation tags, watched lists, staff lists and history into:\n\n{}\n\n\
+             The Scarlet folder will not be changed. Settings and encrypted credentials are not imported.\n\n\
              Yes: import this folder\nNo: choose a different Scarlet folder\nCancel: start Celeste without importing",
             detected.display(),
             default_dir.display(),
@@ -60,8 +60,8 @@ fn choose_first_run(default_dir: &Path) -> PathBuf {
         .set_title("Celeste - import Scarlet data")
         .set_description(
             "Do you have an existing Scarlet data folder to import?\n\n\
-             Celeste can transfer settings, moderation tags, watched lists and history while leaving Scarlet untouched.\n\n\
-             Java-encrypted credentials cannot be imported and will be requested during setup.",
+             Celeste can add its moderation tags, watched lists, staff lists and history while leaving Scarlet untouched.\n\n\
+             Settings and credentials are not imported and will be requested during setup.",
         )
         .set_buttons(rfd::MessageButtons::YesNo)
         .show();
@@ -97,12 +97,14 @@ fn import_legacy_folder(source: &Path, destination: &Path) -> PathBuf {
     if source == destination {
         return destination.to_path_buf();
     }
-    match scarlet_core::paths::copy_data_dir(source, destination) {
-        Ok(copied) => {
+    match scarlet_core::legacy_import::merge(source, destination) {
+        Ok(report) => {
             rfd::MessageDialog::new()
                 .set_title("Celeste - Scarlet data imported")
                 .set_description(format!(
-                    "Imported {copied} file(s) into:\n{}\n\nThe original folder remains untouched. Celeste setup will now request any credentials that could not be transferred.",
+                    "Added {} record(s) across {} file(s) into:\n{}\n\nThe original folder remains untouched. Celeste setup will now request settings and credentials.",
+                    report.records_added,
+                    report.files_changed,
                     destination.display(),
                 ))
                 .set_buttons(rfd::MessageButtons::Ok)
@@ -113,12 +115,12 @@ fn import_legacy_folder(source: &Path, destination: &Path) -> PathBuf {
             rfd::MessageDialog::new()
                 .set_title("Celeste - import failed")
                 .set_description(format!(
-                    "Celeste could not copy the Scarlet data: {error}\n\nThe original folder was not changed. Celeste will use it directly for this run so the data is still available.",
+                    "Celeste could not import the Scarlet data: {error}\n\nThe original folder was not changed. Celeste will start with its own data folder.",
                 ))
                 .set_level(rfd::MessageLevel::Error)
                 .set_buttons(rfd::MessageButtons::Ok)
                 .show();
-            source.to_path_buf()
+            destination.to_path_buf()
         }
     }
 }

@@ -408,11 +408,11 @@ are retained in memory and reported after the gateway becomes ready again.
 
 First-run discovery now covers both `SybylineNetwork/Scarlet` and
 `KozyBlake/Scarlet` across Linux- and Windows-style locations. GUI startup
-offers to copy a detected install into Celeste's platform directory, lets the
-operator choose a different Scarlet folder when detection is wrong, and leaves
-the source untouched. Stale remembered-folder pointers no longer suppress
-legacy discovery. The shared copy routine excludes only regenerable
-logs/caches/backups and is also used by Settings' data-folder move action.
+offers to merge reusable data from a detected install into Celeste's platform
+directory, lets the operator choose a different Scarlet folder when detection
+is wrong, and leaves the source untouched. Stale remembered-folder pointers
+no longer suppress legacy discovery. Settings' data-folder move action uses a
+shared copy routine that excludes only regenerable logs/caches/backups.
 
 `.github/workflows/rust-windows.yml` runs the workspace tests and release build
 on a native Windows runner and uploads `celeste-testing.exe`; the external-
@@ -424,3 +424,21 @@ and Windows home resolution prefers `USERPROFILE` over a stray Unix-style
 subsystem; debug builds retain their diagnostic console. Windows MSVC builds
 also statically link their C runtime so the artifact does not assume a Visual
 C++ redistributable is already installed.
+
+## Update 2026-10-05: additive import for existing Celeste installations
+
+Settings → System now has **Import Scarlet data...**. It offers the first
+auto-detected `KozyBlake/Scarlet` or `SybylineNetwork/Scarlet` folder, or a
+manual folder picker. The operation is queued across an automatic restart so
+it runs before any destination store is opened and cannot be overwritten by
+shutdown saving.
+
+The importer creates `backups/before-scarlet-import-<timestamp>`, leaves the
+Scarlet source untouched, and merges staff/secret-staff, moderation tags,
+watched groups/users/avatars, custom pronoun lists, Discord permission rules,
+Discord↔VRChat links, user metadata, audit history and custom events. Existing
+Celeste records win conflicts while missing records, nested fields and array
+items are added. Settings, Discord connection configuration, sessions and
+encrypted credentials are intentionally skipped; users coming from Java must
+configure those in Celeste. First-run migration now uses these same rules
+instead of copying the whole legacy directory.

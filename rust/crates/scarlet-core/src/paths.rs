@@ -108,7 +108,6 @@ pub fn settings_file_usable(dir: &Path) -> bool {
 /// Port of `findAllUsableDataDirs`: every known data location, in Java's
 /// order, that holds a usable config and isn't `primary`.
 pub fn find_all_usable_data_dirs(primary: &Path) -> Vec<PathBuf> {
-    let home = home_dir();
     let mut candidates: Vec<PathBuf> = Vec::new();
     // Current Celeste first, then both known Java Scarlet publishers. The
     // upstream build used SybylineNetwork/Scarlet; the maintained fork used
@@ -118,17 +117,7 @@ pub fn find_all_usable_data_dirs(primary: &Path) -> Vec<PathBuf> {
         (GROUP, LEGACY_NAME),
         (UPSTREAM_GROUP, LEGACY_NAME),
     ] {
-        if let Some(xdg) = non_empty_env("XDG_DATA_HOME") {
-            candidates.push(PathBuf::from(xdg).join(group).join(name));
-        }
-        candidates.push(home.join(".local/share").join(group).join(name));
-        if let Some(local_app_data) = non_empty_env("LOCALAPPDATA") {
-            candidates.push(PathBuf::from(local_app_data).join(group).join(name));
-        }
-        candidates.push(home.join("AppData/Local").join(group).join(name));
-        candidates.push(home.join(format!(".{group}")).join(name));
-        // A bare ~/<name>, used by older SCARLET_HOME layouts and early builds.
-        candidates.push(home.join(name));
+        candidates.extend(known_data_dir_candidates(group, name));
     }
     if let Some(exe_dir) = executable_dir() {
         candidates.push(exe_dir);
@@ -149,6 +138,45 @@ pub fn find_all_usable_data_dirs(primary: &Path) -> Vec<PathBuf> {
         found.push(candidate);
     }
     found
+}
+
+/// Finds only Java-era Scarlet installations. This powers the Settings
+/// importer without offering another Celeste directory as a legacy source.
+pub fn find_legacy_data_dirs(primary: &Path) -> Vec<PathBuf> {
+    let candidates = [(GROUP, LEGACY_NAME), (UPSTREAM_GROUP, LEGACY_NAME)]
+        .into_iter()
+        .flat_map(|(group, name)| known_data_dir_candidates(group, name));
+    let primary_key = canonical_key(primary);
+    let mut seen = vec![primary_key];
+    let mut found = Vec::new();
+    for candidate in candidates {
+        if !settings_file_usable(&candidate) {
+            continue;
+        }
+        let key = canonical_key(&candidate);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        found.push(candidate);
+    }
+    found
+}
+
+fn known_data_dir_candidates(group: &str, name: &str) -> Vec<PathBuf> {
+    let home = home_dir();
+    let mut candidates = Vec::new();
+    if let Some(xdg) = non_empty_env("XDG_DATA_HOME") {
+        candidates.push(PathBuf::from(xdg).join(group).join(name));
+    }
+    candidates.push(home.join(".local/share").join(group).join(name));
+    if let Some(local_app_data) = non_empty_env("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local_app_data).join(group).join(name));
+    }
+    candidates.push(home.join("AppData/Local").join(group).join(name));
+    candidates.push(home.join(format!(".{group}")).join(name));
+    candidates.push(home.join(name));
+    candidates
 }
 
 /// The directory a previous run was told to use, if any.

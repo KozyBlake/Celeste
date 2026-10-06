@@ -43,20 +43,24 @@ as a user with one of these existing folders:
 
 Verify the following before calling the Windows build releasable:
 
-1. Celeste detects the legacy folder, offers the correct path, and copies its
-   durable data without changing the Scarlet source.
+1. Celeste detects the legacy folder, offers the correct path, and imports its
+   reusable data without changing the Scarlet source or importing settings.
 2. Cancelling detection starts clean; choosing **No** allows a different
    Scarlet folder to be selected manually.
-3. Setup accepts Discord and VRChat credentials, including both authenticator
+3. From an already configured Celeste install, use **Settings → System →
+   Import Scarlet data...**. Confirm Celeste restarts, creates a timestamped
+   backup, preserves existing Celeste records, and adds non-conflicting
+   Scarlet lists, permissions, links and history.
+4. Setup accepts Discord and VRChat credentials, including both authenticator
    and email two-factor flows, then restores the session after restart.
-4. VRChat's newest `output_log_*.txt` under
+5. VRChat's newest `output_log_*.txt` under
    `%USERPROFILE%\AppData\LocalLow\VRChat\VRChat` updates the instance roster.
-5. Discord commands, moderation threads, tags, voice connection and TTS work
+6. Discord commands, moderation threads, tags, voice connection and TTS work
    against a test server.
-6. File import dialogs, data-folder opening/moving, VRChat launch/relaunch,
+7. File import dialogs, data-folder opening/moving, VRChat launch/relaunch,
    window resizing, icon/taskbar identity and settings persistence behave
    normally.
-7. Closing and restarting Celeste preserves settings and produces useful logs
+8. Closing and restarting Celeste preserves settings and produces useful logs
    in the selected data folder.
 
 If something fails, preserve the Celeste log and the exact Windows version,

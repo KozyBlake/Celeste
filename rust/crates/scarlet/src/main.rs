@@ -53,6 +53,16 @@ fn main() -> anyhow::Result<()> {
     let _log_guard = scarlet_core::log::init(&data_dir)?;
     install_panic_hook();
 
+    // Existing-install imports are queued from Settings and applied during
+    // restart before any store has cached the destination files. Otherwise
+    // shutdown saving could overwrite the newly merged records.
+    if let Some(result) = scarlet_core::legacy_import::run_pending(&data_dir) {
+        match result {
+            Ok(report) => tracing::info!("{}", report.summary()),
+            Err(error) => tracing::error!(%error, "Queued Scarlet import failed"),
+        }
+    }
+
     tracing::info!("App: {} {}", scarlet_core::identity::APP_NAME, scarlet_core::identity::VERSION);
     tracing::info!("Data folder resolved to: {} ({:?})", data_dir.display(), resolved.source);
     for other in &resolved.other_candidates {

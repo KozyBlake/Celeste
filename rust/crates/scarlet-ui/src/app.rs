@@ -593,9 +593,13 @@ impl ScarletApp {
             .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
             // Java's `Swing.DEFAULT_ACCENT` is crimson; the port had its own blue.
             .unwrap_or(crate::theme::DEFAULT_ACCENT);
-        let settings_notice = tts.engine_name().is_none().then(||
+        let mut settings_notice = tts.engine_name().is_none().then(||
             "Local text-to-speech is unavailable because no supported speech engine was found. Install eSpeak NG/eSpeak, Speech Dispatcher, or Flite on Linux; use macOS 'say'; or ensure PowerShell is available on Windows. Discord voice TTS can still work when configured.".to_string()
         );
+        if let Some((_success, message)) = scarlet_core::legacy_import::take_result(&data_dir) {
+            state.append_cli_output(&message);
+            settings_notice = Some(message);
+        }
 
         let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
 
@@ -2883,13 +2887,17 @@ impl ScarletApp {
                         if ui.button("Move data folder...").clicked() {
                             self.begin_move_data_dir();
                         }
+                        if ui.button("Import Scarlet data...").clicked() {
+                            self.begin_legacy_import();
+                        }
                     });
                     ui.label(
                         egui::RichText::new(
                             "Settings, logins, staff lists and watched entities live here. \
                              Moving copies them to the new folder and remembers it for next \
                              launch; the old folder is left in place so you can check the \
-                             move worked before deleting it.",
+                             move worked before deleting it. Importing Scarlet is additive: \
+                             existing Celeste records win, while settings and credentials are skipped.",
                         )
                         .small()
                         .weak(),
@@ -3263,6 +3271,80 @@ impl ScarletApp {
             }
             Err(error) => {
                 let message = format!("Could not move the data folder: {error}");
+                self.state.append_cli_output(&message);
+                self.settings_notice = Some(message);
+            }
+        }
+    }
+
+    fn begin_legacy_import(&mut self) {
+        let detected = scarlet_core::paths::find_legacy_data_dirs(&self.data_dir)
+            .into_iter()
+            .next();
+        let source = if let Some(detected) = detected {
+            match rfd::MessageDialog::new()
+                .set_title("Celeste - Scarlet data found")
+                .set_description(format!(
+                    "Celeste found a legacy Scarlet folder:\n\n{}\n\nUse this folder?\n\nYes: use it\nNo: choose another folder\nCancel: do nothing",
+                    detected.display(),
+                ))
+                .set_buttons(rfd::MessageButtons::YesNoCancel)
+                .show()
+            {
+                rfd::MessageDialogResult::Yes => Some(detected),
+                rfd::MessageDialogResult::No => rfd::FileDialog::new()
+                    .set_title("Choose the Scarlet data folder")
+                    .set_directory(self.data_dir.parent().unwrap_or(&self.data_dir))
+                    .pick_folder(),
+                _ => None,
+            }
+        } else {
+            rfd::FileDialog::new()
+                .set_title("Choose the Scarlet data folder")
+                .set_directory(self.data_dir.parent().unwrap_or(&self.data_dir))
+                .pick_folder()
+        };
+        let Some(source) = source else { return };
+        if !scarlet_core::paths::settings_file_usable(&source) {
+            let message = format!(
+                "{} does not contain a readable, non-empty settings.json, so it was not imported.",
+                source.display()
+            );
+            rfd::MessageDialog::new()
+                .set_title("Celeste - not a Scarlet data folder")
+                .set_description(&message)
+                .set_level(rfd::MessageLevel::Error)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            self.settings_notice = Some(message);
+            return;
+        }
+        let confirmed = rfd::MessageDialog::new()
+            .set_title("Celeste - import Scarlet data")
+            .set_description(format!(
+                "Add reusable data from:\n{}\n\ninto Celeste:\n{}\n\nExisting Celeste records win conflicts. Scarlet contributes missing staff, watched entities, moderation tags, Discord permissions, account links and history. Settings and credentials are skipped, and the Scarlet folder is never changed.\n\nCeleste must restart to perform this safely.",
+                source.display(),
+                self.data_dir.display(),
+            ))
+            .set_buttons(rfd::MessageButtons::OkCancel)
+            .show();
+        if confirmed != rfd::MessageDialogResult::Ok {
+            return;
+        }
+        match scarlet_core::legacy_import::queue(&self.data_dir, &source) {
+            Ok(()) => {
+                let message = "Scarlet import queued. Restarting Celeste to merge it safely...";
+                self.state.append_cli_output(message);
+                self.settings_notice = Some(message.to_string());
+                if !self.process_controller.restart() {
+                    self.settings_notice = Some(
+                        "Scarlet import is queued, but a restart is already pending. It will run on the next launch."
+                            .to_string(),
+                    );
+                }
+            }
+            Err(error) => {
+                let message = format!("Could not queue the Scarlet import: {error}");
                 self.state.append_cli_output(&message);
                 self.settings_notice = Some(message);
             }
