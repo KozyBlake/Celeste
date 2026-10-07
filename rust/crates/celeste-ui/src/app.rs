@@ -2571,7 +2571,15 @@ impl CelesteApp {
     fn setting_group(id: &str) -> &'static str {
         if matches!(id, "ui_language" | "ui_left_player_dim_percent" | "ui_accent_headers") {
             "Appearance"
-        } else if id.starts_with("ui_") || matches!(id, "vibecoded_notice_acknowledged" | "discord_setup_prompted") {
+        } else if id.starts_with("ui_")
+            || matches!(
+                id,
+                "vibecoded_notice_acknowledged"
+                    | "setup_profile_prompted"
+                    | "discord_setup_prompted"
+                    | "vrchat_setup_prompted"
+            )
+        {
             "Interface"
         } else if id.starts_with("enforce_instances")
             || matches!(id, "vrchat_client_launch_on_instance_create" | "instance_follow_fast_poll_seconds")
@@ -2659,6 +2667,9 @@ impl CelesteApp {
             SettingCategory::System => {
                 "system data folder open move import scarlet legacy migration cache cleanup restart celeste reset vrchat credentials session"
             }
+            SettingCategory::Notifications => {
+                "audio sound output device speaker headphones mixer control panel windows settings pavucontrol pipewire pulse tts"
+            }
             SettingCategory::Discord => {
                 "discord reset connection token guild server setup"
             }
@@ -2675,6 +2686,7 @@ impl CelesteApp {
             category,
             SettingCategory::General
                 | SettingCategory::System
+                | SettingCategory::Notifications
                 | SettingCategory::Discord
                 | SettingCategory::Integrations
         )
@@ -3321,7 +3333,7 @@ impl CelesteApp {
     /// Java registers these as `FileValuedVoid` rows. They are UI actions,
     /// not stored values, so keep them beside the registry-backed controls.
     fn render_settings_actions(&mut self, ui: &mut egui::Ui, category: SettingCategory) {
-        if !matches!(category, SettingCategory::General | SettingCategory::System | SettingCategory::Discord | SettingCategory::Integrations) {
+        if !matches!(category, SettingCategory::General | SettingCategory::System | SettingCategory::Notifications | SettingCategory::Discord | SettingCategory::Integrations) {
             return;
         }
         ui.add_space(2.0);
@@ -3419,6 +3431,53 @@ impl CelesteApp {
                         if let Err(error) = open::that(&self.data_dir) { self.state.append_cli_output(format!("Could not open data folder: {error}")); }
                     }
                 }
+                SettingCategory::Notifications => {
+                    ui.label("Audio output troubleshooting");
+                    ui.label(
+                        egui::RichText::new(
+                            "Celeste uses the operating system's current default output device. If callouts play through the wrong speakers or headset, choose the intended default device here, then test TTS again.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.add_space(5.0);
+                    if ui.button("Test TTS output").clicked() {
+                        self.tts_route.submit_routed(
+                            "settings-test",
+                            "Celeste text to speech is using this audio output.",
+                        );
+                        self.state.append_cli_output("Submitted an audio-output test.");
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        #[cfg(target_os = "windows")]
+                        {
+                            if ui.button("Open Windows Sound Settings").clicked() {
+                                self.report_audio_settings_result(crate::platform::open_audio_settings(
+                                    crate::platform::AudioSettingsPanel::System,
+                                ));
+                            }
+                            if ui.button("Open classic Sound panel").clicked() {
+                                self.report_audio_settings_result(crate::platform::open_audio_settings(
+                                    crate::platform::AudioSettingsPanel::Classic,
+                                ));
+                            }
+                        }
+                        #[cfg(target_os = "linux")]
+                        if ui.button("Open system sound controls").clicked() {
+                            self.report_audio_settings_result(crate::platform::open_audio_settings(
+                                crate::platform::AudioSettingsPanel::System,
+                            ));
+                        }
+                    });
+                    #[cfg(target_os = "linux")]
+                    ui.label(
+                        egui::RichText::new(
+                            "Celeste tries your desktop's sound settings first, then pavucontrol and pwvucontrol. It will tell you if none are installed.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
                 SettingCategory::Discord => {
                     if ui.button("Reset Discord connection settings").on_hover_text("Clears the stored bot token and guild ID; setup will ask again next launch.").clicked() {
                         if let Some(settings) = &self.settings {
@@ -3444,6 +3503,14 @@ impl CelesteApp {
             }
             if category == SettingCategory::System {
                 ui.separator();
+                if ui.button("Set up VRChat on next launch").clicked() {
+                    if let Some(settings) = &self.settings {
+                        settings.vrchat_setup_prompted.set(Some(false), "ui");
+                        self.state.append_cli_output(
+                            "VRChat setup will open the next time Celeste starts. Existing credentials were left unchanged.",
+                        );
+                    }
+                }
                 if ui.button("Reset VRChat credentials and session").clicked() {
                     if let Some(settings) = &self.settings {
                         use celeste_core::settings::registry::registry_string_encrypted;
@@ -3451,6 +3518,7 @@ impl CelesteApp {
                         registry_string_encrypted(settings.encrypted.clone(), celeste_vrchat::client::PASSWORD_KEY).clear();
                         registry_string_encrypted(settings.encrypted.clone(), celeste_vrchat::client::TOTP_SECRET_KEY).clear();
                         celeste_vrchat::client::clear_session(settings);
+                        settings.vrchat_setup_prompted.set(Some(false), "ui");
                         let slot = self.vrchat_slot.clone();
                         self.runtime_handle.spawn(async move { *slot.write().await = None; });
                         self.state.refresh_vrchat_api_status("VRChat: credentials reset");
@@ -3460,6 +3528,15 @@ impl CelesteApp {
             }
         });
         ui.add_space(10.0);
+    }
+
+    fn report_audio_settings_result(&mut self, result: Result<&'static str, String>) {
+        let message = match result {
+            Ok(panel) => format!("Opened {panel}. Choose the output device you want Celeste to use."),
+            Err(error) => error,
+        };
+        self.state.append_cli_output(&message);
+        self.settings_notice = Some(message);
     }
 
     fn open_avatar_provider_manager(&mut self) {
@@ -4593,7 +4670,10 @@ impl eframe::App for CelesteApp {
         };
 
         match outcome {
-            Some(crate::setup::SetupOutcome::JustFinished { discord_token }) => {
+            Some(crate::setup::SetupOutcome::JustFinished {
+                discord_token,
+                open_settings,
+            }) => {
                 self.staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
 
                 match wizard_vrchat_client {
@@ -4644,7 +4724,18 @@ impl eframe::App for CelesteApp {
                     ));
                 }
                 self.wizard = None;
+                if open_settings {
+                    self.tab = Tab::Settings;
+                }
                 // Fall through to render the normal UI below on this same frame.
+            }
+            Some(crate::setup::SetupOutcome::TestTts) => {
+                self.tts_route.submit_routed(
+                    "setup-test",
+                    "Celeste text to speech is working.",
+                );
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                return;
             }
             Some(crate::setup::SetupOutcome::AlreadyDone) => {
                 self.wizard = None;

@@ -129,7 +129,9 @@ pub fn describe(id: &str) -> Option<&'static str> {
 
         // ── Remembered answers, not really settings ──────────────────────
         "vibecoded_notice_acknowledged" => "Remembers that you have read the first-run notice.",
+        "setup_profile_prompted" => "Remembers that you selected an initial setup type.",
         "discord_setup_prompted" => "Remembers that you have been offered Discord setup.",
+        "vrchat_setup_prompted" => "Remembers that you have been offered VRChat setup.",
         "discord_kick_ban_prompted" => "Remembers that you have been asked about the Discord moderation commands.",
 
         // ── Mobile companion (out of scope; hidden in the UI) ────────────

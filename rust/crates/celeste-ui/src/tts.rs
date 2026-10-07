@@ -761,7 +761,9 @@ impl TtsSinkAdapter {
                 self.service.skip();
                 true
             }
-            OutputRoute::Unavailable => false,
+            // If Discord was selected but cannot currently be used, speech
+            // falls back to the local device rather than disappearing.
+            OutputRoute::Unavailable => self.service.skip(),
         }
     }
 
@@ -800,15 +802,14 @@ impl TtsSinkAdapter {
                 discord.submit(text, &voice);
                 self.publish_route_status();
             }
-            // Java logs exactly this and drops the utterance rather than
-            // falling back to the speakers, because "not the local device"
-            // is the thing the user asked for.
             OutputRoute::Unavailable => {
-                let problem = "TTS has no output route: Discord voice isn't available and \
-                               \"use default audio device\" is off.";
+                let problem = "Discord TTS is unavailable, so Celeste used this computer's default audio device instead. Check the bot token and configured voice channel.";
                 tracing::warn!("TTS({marker}): {problem}");
                 if let Some(ui) = self.ui.as_ref() {
                     ui.set_tts_status(Some(problem.to_string()));
+                }
+                if let Err(err) = self.service.submit(text, voice) {
+                    tracing::debug!("TTS({marker}) fallback: {err}");
                 }
             }
         }

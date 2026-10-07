@@ -153,8 +153,10 @@ or from Discord with `/settings edit`.
 | Delete files older than (days) | `cache_cleanup_days` | integer `1`–`30` (default `7`) | How old a file has to be before cleanup removes it, in days. |
 | Auto-delete old cached files | `cache_cleanup_enabled` | boolean (default `true`) | Deletes old caches, logs and temporary audio on a schedule. |
 | Discord setup wizard has run | `discord_setup_prompted` | boolean (default `false`) | Remembers that you have been offered Discord setup. |
+| Initial setup type has been selected | `setup_profile_prompted` | boolean (default `false`) | Remembers that you selected an initial setup type. |
 | Acknowledged the "vibe-coded project" notice | `vibecoded_notice_acknowledged` | boolean (default `false`) | Remembers that you have read the first-run notice. |
+| VRChat setup wizard has run | `vrchat_setup_prompted` | boolean (default `false`) | Remembers that you have been offered VRChat setup. |
 
 ---
 
-100 settings in 6 categories.
+102 settings in 6 categories.

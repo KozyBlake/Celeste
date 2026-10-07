@@ -579,9 +579,15 @@ pub(crate) async fn vrchat_context(ctx: &Context) -> Result<ModerationContext, S
             .get::<crate::data::VrChatClientKey>()
             .cloned()
     }
-    .ok_or_else(|| "Celeste isn't logged in to VRChat right now.".to_string())?;
+    .ok_or_else(|| {
+        "Celeste isn't logged in to VRChat. Enable VRChat integration in Settings and restart Celeste to use this command."
+            .to_string()
+    })?;
     let client = { vrchat_slot.read().await.clone() }
-        .ok_or_else(|| "Celeste isn't logged in to VRChat right now.".to_string())?;
+        .ok_or_else(|| {
+            "Celeste isn't logged in to VRChat. Enable VRChat integration in Settings and restart Celeste to use this command."
+                .to_string()
+        })?;
 
     let group_id: Option<String> = settings
         .store

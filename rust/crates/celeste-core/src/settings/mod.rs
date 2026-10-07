@@ -143,7 +143,9 @@ pub struct Settings {
 
     // --- Scarlet.java: System ---
     pub vibecoded_notice_acknowledged: Arc<FileValued<bool>>,
+    pub setup_profile_prompted: Arc<FileValued<bool>>,
     pub discord_setup_prompted: Arc<FileValued<bool>>,
+    pub vrchat_setup_prompted: Arc<FileValued<bool>>,
 
     // --- ScarletDiscordJDA.java: Integrations (VRChat Help Desk reporting) ---
     pub requesting_email: Arc<FileValued<String>>,
@@ -498,12 +500,24 @@ impl Settings {
                 SettingCategory::System,
                 false,
             ),
+            setup_profile_prompted: registry.boolean(
+                "setup_profile_prompted",
+                "Initial setup type has been selected",
+                SettingCategory::System,
+                false,
+            ),
             // Not a direct Java field -- see celeste_ui::setup module docs
             // for why the Discord setup step is gated on this instead of
             // Java's own "is a token stored" check.
             discord_setup_prompted: registry.boolean(
                 "discord_setup_prompted",
                 "Discord setup wizard has run",
+                SettingCategory::System,
+                false,
+            ),
+            vrchat_setup_prompted: registry.boolean(
+                "vrchat_setup_prompted",
+                "VRChat setup wizard has run",
                 SettingCategory::System,
                 false,
             ),
