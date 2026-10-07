@@ -417,6 +417,13 @@ impl ProcessController {
         }
         true
     }
+
+    /// Read by the graphical event loop so it can close the renderer before
+    /// the binary relaunches. Calling `process::exit` from a Tokio worker
+    /// while EGL/WGL is painting can race the graphics driver and crash.
+    pub fn restart_queued(&self) -> bool {
+        self.queued.load(Ordering::Acquire)
+    }
 }
 
 pub struct ProcessControllerKey;
@@ -501,7 +508,9 @@ mod tests {
     #[tokio::test]
     async fn process_controller_queues_only_one_restart() {
         let (controller, mut requests) = ProcessController::new();
+        assert!(!controller.restart_queued());
         assert!(controller.restart());
+        assert!(controller.restart_queued());
         assert!(!controller.restart());
         assert_eq!(requests.recv().await, Some(ProcessRequest::Restart));
     }

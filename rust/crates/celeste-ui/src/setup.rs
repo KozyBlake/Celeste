@@ -101,6 +101,24 @@ enum SetupProfile {
     LocalLogger,
 }
 
+impl SetupProfile {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::VrChatOnly => "vrchat_only",
+            Self::DiscordOnly => "discord_only",
+            Self::LocalLogger => "local_logger",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupWindowLayout {
+    Compact,
+    Standard,
+    Tall,
+}
+
 impl Default for SetupProfile {
     fn default() -> Self {
         Self::Full
@@ -146,9 +164,12 @@ enum Action {
     GroupIdTryAnother,
     GroupIdSkip,
     FinishStart,
+    FinishTutorial,
     FinishReviewSettings,
     FinishOpenDataFolder,
     FinishTestTts,
+    #[cfg(target_os = "linux")]
+    FinishInstallDesktopLauncher,
     OpenSystemSoundSettings,
     #[cfg(target_os = "windows")]
     OpenClassicSoundPanel,
@@ -196,8 +217,11 @@ pub enum SetupOutcome {
     /// e.g. spawn the Discord client — then start rendering the normal UI.
     JustFinished {
         discord_token: Option<String>,
-        open_settings: bool,
+        start_tutorial: bool,
     },
+    /// Temporarily replace setup with the settings editor. The wizard stays
+    /// alive so Back returns to its finish page and no services start yet.
+    ReviewSettings,
     /// Keep setup open while the app routes a sample through its real TTS
     /// service, using the output choice just configured.
     TestTts,
@@ -239,9 +263,13 @@ pub struct SetupWizard {
     /// verification. It is encrypted only after VRChat accepts the code.
     pending_totp_secret: Option<String>,
     restart_for_import: bool,
-    open_settings_after_finish: bool,
+    review_settings_requested: bool,
     test_tts_requested: bool,
+    start_tutorial_after_finish: bool,
+    setup_window_layout: Option<SetupWindowLayout>,
     audio_settings_notice: Option<String>,
+    #[cfg(target_os = "linux")]
+    desktop_launcher_notice: Option<String>,
 }
 
 impl SetupWizard {
@@ -280,9 +308,13 @@ impl SetupWizard {
             group_validation_rx: None,
             pending_totp_secret: None,
             restart_for_import: false,
-            open_settings_after_finish: false,
+            review_settings_requested: false,
             test_tts_requested: false,
+            start_tutorial_after_finish: false,
+            setup_window_layout: None,
             audio_settings_notice: None,
+            #[cfg(target_os = "linux")]
+            desktop_launcher_notice: None,
         };
         // This flag was added after Celeste already had users. Existing
         // installations must not be mistaken for fresh installs and forced
@@ -307,6 +339,43 @@ impl SetupWizard {
             wizard.compute_stage_after_vibecoded()
         };
         wizard.done = matches!(wizard.stage, Stage::Done);
+        wizard
+    }
+
+    /// Reopens only the integration steps that are still missing when a
+    /// user changes their mind during the guided tour. Existing secrets and
+    /// configuration are preserved; this merely makes skipped prompts
+    /// eligible to appear again.
+    pub fn for_full_setup(
+        settings: &Arc<Settings>,
+        runtime_handle: tokio::runtime::Handle,
+    ) -> Self {
+        let discord_token = registry_string_encrypted(settings.encrypted.clone(), "discord.token")
+            .get_or_null()
+            .is_some_and(|token| !token.trim().is_empty());
+        let vrchat_configured =
+            registry_string_encrypted(settings.encrypted.clone(), "global:username")
+                .get_or_null()
+                .is_some_and(|value| !value.trim().is_empty())
+                && registry_string_encrypted(settings.encrypted.clone(), "global:password")
+                    .get_or_null()
+                    .is_some_and(|value| !value.is_empty());
+
+        settings
+            .store
+            .set_object("setup_profile", &"full".to_string());
+        settings
+            .setup_profile_prompted
+            .set(Some(true), "guided-tour-full-setup");
+        settings
+            .discord_setup_prompted
+            .set(Some(discord_token), "guided-tour-full-setup");
+        settings
+            .vrchat_setup_prompted
+            .set(Some(vrchat_configured), "guided-tour-full-setup");
+
+        let mut wizard = Self::new(settings, runtime_handle);
+        wizard.setup_profile = SetupProfile::Full;
         wizard
     }
 
@@ -388,13 +457,43 @@ impl SetupWizard {
         self.vrchat_client.clone()
     }
 
+    /// The settings review temporarily uses a larger editor layout. Force
+    /// the finish page to restore its own size when the user comes back.
+    pub fn resize_for_current_stage_next_frame(&mut self) {
+        self.setup_window_layout = None;
+    }
+
+    fn desired_window_layout(&self) -> (SetupWindowLayout, [f32; 2]) {
+        match &self.stage {
+            Stage::VibecodedNotice | Stage::VrChatCredentials { .. } => {
+                (SetupWindowLayout::Compact, [600.0, 400.0])
+            }
+            Stage::LegacyImport { overlaps, .. } if !overlaps.is_empty() => {
+                (SetupWindowLayout::Tall, [720.0, 680.0])
+            }
+            Stage::SetupProfile { .. }
+            | Stage::Discord { .. }
+            | Stage::VrChatTwoFactor { .. }
+            | Stage::VrChatGroupId { .. } => (SetupWindowLayout::Standard, [680.0, 560.0]),
+            // The completion page includes the guided-tour choice, data and
+            // audio checks and (on Linux) application-menu installation.
+            // Unlike the old sparse finish page, this height is occupied by
+            // structured content rather than empty space.
+            Stage::Finish => (SetupWindowLayout::Tall, [720.0, 720.0]),
+            Stage::LegacyImport { .. } => (SetupWindowLayout::Standard, [680.0, 560.0]),
+            Stage::Done => (SetupWindowLayout::Compact, [600.0, 400.0]),
+        }
+    }
+
     fn legacy_import_stage(&self) -> Stage {
         let detected = celeste_core::paths::find_legacy_data_dirs(&self.settings.data_dir)
             .into_iter()
             .next();
         let overlaps = detected
             .as_deref()
-            .and_then(|source| celeste_core::legacy_import::inspect(source, &self.settings.data_dir).ok())
+            .and_then(|source| {
+                celeste_core::legacy_import::inspect(source, &self.settings.data_dir).ok()
+            })
             .map(|plan| plan.overlapping_files)
             .unwrap_or_default();
         Stage::LegacyImport {
@@ -458,6 +557,8 @@ impl SetupWizard {
 
     fn begin_setup_profile(&mut self, profile: SetupProfile) {
         self.setup_profile = profile;
+        self.settings_store
+            .set_object("setup_profile", &profile.id().to_string());
         self.setup_profile_prompted.set(Some(true), "setup-wizard");
         self.stage = match profile {
             SetupProfile::Full => self.discord_stage(),
@@ -627,19 +728,39 @@ impl SetupWizard {
         }
         self.runtime_handle.spawn(async move {
             let result = async {
-                let current = client.get_current_user().await.map_err(|error| error.to_string())?;
-                let group = client
-                    .get_group(&group_id, true)
+                let current = client
+                    .get_current_user()
                     .await
-                    .map_err(|error| format!("Celeste could not find or read that group: {error}"))?;
+                    .map_err(|error| error.to_string())?;
+                let group = client.get_group(&group_id, true).await.map_err(|error| {
+                    format!("Celeste could not find or read that group: {error}")
+                })?;
 
                 let required = [
-                    (celeste_vrchat::client::PERMISSION_GROUP_AUDIT_VIEW, "view audit logs"),
-                    (celeste_vrchat::client::PERMISSION_GROUP_MEMBERS_VIEWALL, "view all members"),
-                    (celeste_vrchat::client::PERMISSION_GROUP_BANS_MANAGE, "manage bans"),
-                    (celeste_vrchat::client::PERMISSION_GROUP_INVITES_MANAGE, "manage invites"),
-                    (celeste_vrchat::client::PERMISSION_GROUP_INSTANCE_MANAGE, "manage instances"),
-                    (celeste_vrchat::client::PERMISSION_GROUP_INSTANCE_MODERATE, "moderate instances"),
+                    (
+                        celeste_vrchat::client::PERMISSION_GROUP_AUDIT_VIEW,
+                        "view audit logs",
+                    ),
+                    (
+                        celeste_vrchat::client::PERMISSION_GROUP_MEMBERS_VIEWALL,
+                        "view all members",
+                    ),
+                    (
+                        celeste_vrchat::client::PERMISSION_GROUP_BANS_MANAGE,
+                        "manage bans",
+                    ),
+                    (
+                        celeste_vrchat::client::PERMISSION_GROUP_INVITES_MANAGE,
+                        "manage invites",
+                    ),
+                    (
+                        celeste_vrchat::client::PERMISSION_GROUP_INSTANCE_MANAGE,
+                        "manage instances",
+                    ),
+                    (
+                        celeste_vrchat::client::PERMISSION_GROUP_INSTANCE_MODERATE,
+                        "moderate instances",
+                    ),
                 ];
                 let is_owner = group.owner_id.as_deref() == Some(current.id.as_str());
                 let granted = if is_owner {
@@ -648,7 +769,9 @@ impl SetupWizard {
                     let member = client
                         .get_group_member(&group_id, &current.id)
                         .await
-                        .map_err(|error| format!("Celeste could not check group membership: {error}"))?;
+                        .map_err(|error| {
+                            format!("Celeste could not check group membership: {error}")
+                        })?;
                     match member {
                         Some(member) => group
                             .roles
@@ -882,7 +1005,10 @@ impl SetupWizard {
             Action::LegacyImport(source, archive, mode) => {
                 let queued = if let Some(archive) = archive.as_deref() {
                     celeste_core::legacy_import::queue_prepared_archive(
-                        &self.settings.data_dir, &source, archive, mode,
+                        &self.settings.data_dir,
+                        &source,
+                        archive,
+                        mode,
                     )
                 } else {
                     celeste_core::legacy_import::queue(&self.settings.data_dir, &source, mode)
@@ -900,7 +1026,12 @@ impl SetupWizard {
                 }
             }
             Action::LegacySkip => {
-                if let Stage::LegacyImport { detected: Some(source), archive: Some(_), .. } = &self.stage {
+                if let Stage::LegacyImport {
+                    detected: Some(source),
+                    archive: Some(_),
+                    ..
+                } = &self.stage
+                {
                     celeste_core::legacy_archive::cleanup_staging(source, &self.settings.data_dir);
                 }
                 self.vibecoded_ack.set(Some(true), "setup-wizard");
@@ -908,7 +1039,11 @@ impl SetupWizard {
             }
             Action::SetupProfileContinue(profile) => self.begin_setup_profile(profile),
             Action::Back => self.go_back(),
-            Action::DiscordContinue { token, guild_id, use_default_audio_device } => {
+            Action::DiscordContinue {
+                token,
+                guild_id,
+                use_default_audio_device,
+            } => {
                 if let Some(token) = token {
                     self.discord_token_reg.set(Some(token));
                 }
@@ -1008,9 +1143,12 @@ impl SetupWizard {
                 self.stage = Stage::Finish;
             }
             Action::FinishStart => self.stage = Stage::Done,
-            Action::FinishReviewSettings => {
-                self.open_settings_after_finish = true;
+            Action::FinishTutorial => {
+                self.start_tutorial_after_finish = true;
                 self.stage = Stage::Done;
+            }
+            Action::FinishReviewSettings => {
+                self.review_settings_requested = true;
             }
             Action::FinishOpenDataFolder => {
                 if let Err(error) = open::that(&self.settings.data_dir) {
@@ -1018,22 +1156,38 @@ impl SetupWizard {
                 }
             }
             Action::FinishTestTts => self.test_tts_requested = true,
+            #[cfg(target_os = "linux")]
+            Action::FinishInstallDesktopLauncher => {
+                self.desktop_launcher_notice =
+                    Some(match crate::platform::install_desktop_launcher() {
+                        Ok(message) => message,
+                        Err(error) => error,
+                    });
+            }
             Action::OpenSystemSoundSettings => {
-                self.audio_settings_notice = Some(match crate::platform::open_audio_settings(
-                    crate::platform::AudioSettingsPanel::System,
-                ) {
-                    Ok(panel) => format!("Opened {panel}. Select the output device you want Celeste to use."),
-                    Err(error) => error,
-                });
+                self.audio_settings_notice = Some(
+                    match crate::platform::open_audio_settings(
+                        crate::platform::AudioSettingsPanel::System,
+                    ) {
+                        Ok(panel) => format!(
+                            "Opened {panel}. Select the output device you want Celeste to use."
+                        ),
+                        Err(error) => error,
+                    },
+                );
             }
             #[cfg(target_os = "windows")]
             Action::OpenClassicSoundPanel => {
-                self.audio_settings_notice = Some(match crate::platform::open_audio_settings(
-                    crate::platform::AudioSettingsPanel::Classic,
-                ) {
-                    Ok(panel) => format!("Opened {panel}. Select the output device you want Celeste to use."),
-                    Err(error) => error,
-                });
+                self.audio_settings_notice = Some(
+                    match crate::platform::open_audio_settings(
+                        crate::platform::AudioSettingsPanel::Classic,
+                    ) {
+                        Ok(panel) => format!(
+                            "Opened {panel}. Select the output device you want Celeste to use."
+                        ),
+                        Err(error) => error,
+                    },
+                );
             }
         }
     }
@@ -1046,40 +1200,59 @@ impl SetupWizard {
             return SetupOutcome::AlreadyDone;
         }
 
+        // Resize for the content on this particular page. Short prompts stay
+        // compact; only pages with choices or long validation text grow.
+        let (layout, size) = self.desired_window_layout();
+        if self.setup_window_layout != Some(layout) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size.into()));
+            self.setup_window_layout = Some(layout);
+        }
+
         self.poll_async_results();
 
         let mut action = Action::None;
+        let finish_stage = matches!(&self.stage, Stage::Finish);
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                ui.add_space(40.0);
+                // The completion page is deliberately denser than the other
+                // wizard pages: on a 768px-tall desktop its 720px window must
+                // leave room for the title bar while still showing every
+                // final action without scrolling or clipping the last frame.
+                ui.add_space(if finish_stage { 20.0 } else { 40.0 });
                 ui.set_max_width(480.0);
                 match &mut self.stage {
                     Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
-                    Stage::LegacyImport { detected, archive, overlaps, mode, error } => {
-                        render_legacy_import_stage(
-                            ui,
-                            &self.settings.data_dir,
-                            detected,
-                            archive,
-                            overlaps,
-                            mode,
-                            error,
-                            &mut action,
-                        )
-                    }
+                    Stage::LegacyImport {
+                        detected,
+                        archive,
+                        overlaps,
+                        mode,
+                        error,
+                    } => render_legacy_import_stage(
+                        ui,
+                        &self.settings.data_dir,
+                        detected,
+                        archive,
+                        overlaps,
+                        mode,
+                        error,
+                        &mut action,
+                    ),
                     Stage::SetupProfile { selected } => {
                         render_setup_profile_stage(ui, selected, &mut action)
                     }
-                    Stage::Discord { token, guild_id, use_default_audio_device } => {
-                        render_discord_stage(
-                            ui,
-                            token,
-                            guild_id,
-                            use_default_audio_device,
-                            self.audio_settings_notice.as_deref(),
-                            &mut action,
-                        )
-                    }
+                    Stage::Discord {
+                        token,
+                        guild_id,
+                        use_default_audio_device,
+                    } => render_discord_stage(
+                        ui,
+                        token,
+                        guild_id,
+                        use_default_audio_device,
+                        self.audio_settings_notice.as_deref(),
+                        &mut action,
+                    ),
                     Stage::VrChatCredentials {
                         username,
                         password,
@@ -1127,6 +1300,8 @@ impl SetupWizard {
                         ui,
                         self.settings.tts_use_default_audio_device.get(),
                         self.audio_settings_notice.as_deref(),
+                        #[cfg(target_os = "linux")]
+                        self.desktop_launcher_notice.as_deref(),
                         &mut action,
                     ),
                     Stage::Done => {}
@@ -1143,12 +1318,15 @@ impl SetupWizard {
         if std::mem::take(&mut self.test_tts_requested) {
             return SetupOutcome::TestTts;
         }
+        if std::mem::take(&mut self.review_settings_requested) {
+            return SetupOutcome::ReviewSettings;
+        }
 
         if !self.done && matches!(self.stage, Stage::Done) {
             self.done = true;
             SetupOutcome::JustFinished {
                 discord_token: self.discord_token_reg.get_or_null(),
-                open_settings: self.open_settings_after_finish,
+                start_tutorial: self.start_tutorial_after_finish,
             }
         } else if self.done {
             SetupOutcome::AlreadyDone
@@ -1162,51 +1340,214 @@ fn render_finish_stage(
     ui: &mut egui::Ui,
     use_default_audio_device: bool,
     audio_settings_notice: Option<&str>,
+    #[cfg(target_os = "linux")] desktop_launcher_notice: Option<&str>,
     action: &mut Action,
 ) {
-    ui.heading("Celeste is ready");
-    ui.add_space(8.0);
     ui.label(
-        "Initial setup is complete. Every integration and advanced option remains available in Settings.",
+        egui::RichText::new("SETUP COMPLETE")
+            .small()
+            .strong()
+            .color(crate::theme::OK),
     );
-    ui.add_space(18.0);
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("Start Celeste").clicked() {
-            *action = Action::FinishStart;
-        }
-        if ui.button("Review settings").clicked() {
-            *action = Action::FinishReviewSettings;
-        }
-        if ui.button("Open data folder").clicked() {
-            *action = Action::FinishOpenDataFolder;
-        }
-        if ui
-            .add_enabled(
-                use_default_audio_device,
-                egui::Button::new("Test TTS"),
-            )
-            .clicked()
-        {
-            *action = Action::FinishTestTts;
-        }
-    });
-    ui.add_space(10.0);
+    ui.add_space(crate::theme::GAP_TIGHT);
+    ui.heading("Celeste is ready");
+    ui.add_space(crate::theme::GAP);
     ui.label(
         egui::RichText::new(
-            if use_default_audio_device {
-                "The TTS test uses this computer's default audio device."
-            } else {
-                "Start Celeste before testing Discord TTS so the bot has time to connect to Discord voice."
-            },
+            "Your choices have been saved. You can change integrations and advanced options in Settings at any time.",
         )
-        .small()
-        .weak(),
+        .color(crate::theme::TEXT_DIM),
     );
-    if use_default_audio_device {
-        render_audio_settings_buttons(ui, action);
+
+    ui.add_space(crate::theme::GAP_WIDE);
+    let accent = ui.visuals().selection.bg_fill;
+    let accent_text = crate::theme::readable_text_on(accent);
+    if ui
+        .add_sized(
+            [ui.available_width(), 40.0],
+            egui::Button::new(
+                egui::RichText::new("Start Celeste")
+                    .strong()
+                    .color(accent_text),
+            )
+            .fill(accent)
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::tint(accent, 0.18))),
+        )
+        .clicked()
+    {
+        *action = Action::FinishStart;
     }
-    if let Some(notice) = audio_settings_notice {
-        ui.label(egui::RichText::new(notice).small().color(egui::Color32::YELLOW));
+
+    ui.add_space(crate::theme::GAP);
+    crate::theme::panel_frame(crate::theme::PANEL).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        centered_label(ui, egui::RichText::new("New to Celeste?").strong());
+        centered_label(
+            ui,
+            egui::RichText::new(
+                "Take a guided, hands-off tour of the interface using temporary example data.",
+            )
+            .small()
+            .color(crate::theme::TEXT_DIM),
+        );
+        ui.add_space(crate::theme::GAP);
+        if centered_button(ui, 140.0, "Start guided tour").clicked() {
+            *action = Action::FinishTutorial;
+        }
+        ui.add_space(crate::theme::GAP_TIGHT);
+        centered_label(
+            ui,
+            egui::RichText::new("Nothing is sent to VRChat or Discord during the tour.")
+                .small()
+                .color(crate::theme::TEXT_MUTED),
+        );
+    });
+
+    ui.add_space(crate::theme::GAP);
+    crate::theme::panel_frame(crate::theme::PANEL).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        centered_label(
+            ui,
+            egui::RichText::new("Check before you begin").strong(),
+        );
+        ui.add_space(crate::theme::GAP_TIGHT);
+        centered_label(
+            ui,
+            egui::RichText::new("Review your choices or open Celeste's local files.")
+                .small()
+                .color(crate::theme::TEXT_DIM),
+        );
+        ui.add_space(crate::theme::GAP);
+        centered_pair(ui, 120.0, "Review settings", 130.0, "Open data folder", |first| {
+            *action = if first {
+                Action::FinishReviewSettings
+            } else {
+                Action::FinishOpenDataFolder
+            };
+        });
+
+        #[cfg(target_os = "linux")]
+        {
+            ui.add_space(crate::theme::GAP);
+            ui.separator();
+            ui.add_space(crate::theme::GAP);
+            centered_label(
+                ui,
+                egui::RichText::new("Linux application launcher").strong(),
+            );
+            centered_label(
+                ui,
+                egui::RichText::new(
+                    "Add Celeste to your desktop environment's application menu so it can start without a terminal.",
+                )
+                .small()
+                .color(crate::theme::TEXT_DIM),
+            );
+            ui.add_space(crate::theme::GAP_TIGHT);
+            if centered_button(ui, 190.0, "Add Celeste to applications").clicked() {
+                *action = Action::FinishInstallDesktopLauncher;
+            }
+            if let Some(notice) = desktop_launcher_notice {
+                ui.add_space(crate::theme::GAP_TIGHT);
+                centered_label(
+                    ui,
+                    egui::RichText::new(notice)
+                        .small()
+                        .color(crate::theme::TEXT_DIM),
+                );
+            }
+        }
+
+        ui.add_space(crate::theme::GAP);
+        ui.separator();
+        ui.add_space(crate::theme::GAP);
+        centered_label(ui, egui::RichText::new("Audio output").strong());
+        centered_label(
+            ui,
+            egui::RichText::new(if use_default_audio_device {
+                "Verify TTS through this computer's default audio device."
+            } else {
+                "Discord TTS becomes available after Celeste starts and the bot connects to voice."
+            })
+            .small()
+            .color(crate::theme::TEXT_DIM),
+        );
+        ui.add_space(crate::theme::GAP_TIGHT);
+        if centered_enabled_button(ui, 90.0, use_default_audio_device, "Test TTS").clicked() {
+            *action = Action::FinishTestTts;
+        }
+        if use_default_audio_device {
+            ui.add_space(crate::theme::GAP_TIGHT);
+            render_audio_settings_buttons(ui, action);
+        }
+        if let Some(notice) = audio_settings_notice {
+            ui.add_space(crate::theme::GAP_TIGHT);
+            centered_label(
+                ui,
+                egui::RichText::new(notice).small().color(crate::theme::WARN),
+            );
+        }
+    });
+}
+
+fn centered_label(ui: &mut egui::Ui, text: egui::RichText) {
+    ui.add(egui::Label::new(text).wrap().halign(egui::Align::Center));
+}
+
+fn centered_enabled_button(
+    ui: &mut egui::Ui,
+    width: f32,
+    enabled: bool,
+    label: &str,
+) -> egui::Response {
+    let offset = ((ui.available_width() - width) / 2.0).max(0.0);
+    ui.horizontal(|ui| {
+        ui.add_space(offset);
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.add_sized(
+                [width, ui.spacing().interact_size.y],
+                egui::Button::new(label),
+            )
+        })
+        .inner
+    })
+    .inner
+}
+
+fn centered_button(ui: &mut egui::Ui, width: f32, label: &str) -> egui::Response {
+    centered_enabled_button(ui, width, true, label)
+}
+
+fn centered_pair(
+    ui: &mut egui::Ui,
+    first_width: f32,
+    first_label: &str,
+    second_width: f32,
+    second_label: &str,
+    mut clicked: impl FnMut(bool),
+) {
+    let gap = ui.spacing().item_spacing.x;
+    let row_height = ui.spacing().interact_size.y;
+    let (_, row) = ui.allocate_space(egui::vec2(ui.available_width(), row_height));
+    let total_width = first_width + gap + second_width;
+    let left = row.center().x - total_width / 2.0;
+    let first_rect = egui::Rect::from_min_size(
+        egui::pos2(left, row.top()),
+        egui::vec2(first_width, row_height),
+    );
+    let second_rect = egui::Rect::from_min_size(
+        egui::pos2(first_rect.right() + gap, row.top()),
+        egui::vec2(second_width, row_height),
+    );
+
+    if ui.put(first_rect, egui::Button::new(first_label)).clicked() {
+        clicked(true);
+    }
+    if ui
+        .put(second_rect, egui::Button::new(second_label))
+        .clicked()
+    {
+        clicked(false);
     }
 }
 
@@ -1256,7 +1597,11 @@ fn render_legacy_import_stage(
     );
     ui.add_space(12.0);
     if let Some(path) = archive.as_ref().or(detected.as_ref()) {
-        ui.label(if archive.is_some() { "Selected Scarlet archive:" } else { "Detected Scarlet folder:" });
+        ui.label(if archive.is_some() {
+            "Selected Scarlet archive:"
+        } else {
+            "Detected Scarlet folder:"
+        });
         ui.add(
             egui::Label::new(egui::RichText::new(path.display().to_string()).monospace())
                 .truncate(),
@@ -1274,12 +1619,17 @@ fn render_legacy_import_stage(
     }
     if !overlaps.is_empty() {
         ui.add_space(10.0);
-        ui.strong(format!("{} overlapping data location(s) found", overlaps.len()));
-        egui::ScrollArea::vertical().max_height(90.0).show(ui, |ui| {
-            for file in overlaps.iter() {
-                ui.label(format!("• {file}"));
-            }
-        });
+        ui.strong(format!(
+            "{} overlapping data location(s) found",
+            overlaps.len()
+        ));
+        egui::ScrollArea::vertical()
+            .max_height(90.0)
+            .show(ui, |ui| {
+                for file in overlaps.iter() {
+                    ui.label(format!("• {file}"));
+                }
+            });
         ui.radio_value(
             mode,
             celeste_core::legacy_import::ImportMode::Merge,
@@ -1333,7 +1683,10 @@ fn render_legacy_import_stage(
                     Ok(staged) => {
                         if archive.take().is_some() {
                             if let Some(previous) = detected.as_deref() {
-                                celeste_core::legacy_archive::cleanup_staging(previous, destination);
+                                celeste_core::legacy_archive::cleanup_staging(
+                                    previous,
+                                    destination,
+                                );
                             }
                         }
                         *overlaps = celeste_core::legacy_import::inspect(&staged, destination)
@@ -1343,10 +1696,14 @@ fn render_legacy_import_stage(
                         *archive = Some(path);
                         *error = None;
                     }
-                    Err(import_error) => *error = Some(format!("Could not read the archive: {import_error}")),
+                    Err(import_error) => {
+                        *error = Some(format!("Could not read the archive: {import_error}"))
+                    }
                 },
                 Ok(None) => {}
-                Err(dialog_error) => *error = Some(format!("Could not open the archive picker: {dialog_error}")),
+                Err(dialog_error) => {
+                    *error = Some(format!("Could not open the archive picker: {dialog_error}"))
+                }
             }
         }
         if ui.button("Continue without importing").clicked() {
@@ -1363,11 +1720,7 @@ fn render_legacy_import_stage(
     );
 }
 
-fn render_setup_profile_stage(
-    ui: &mut egui::Ui,
-    selected: &mut SetupProfile,
-    action: &mut Action,
-) {
+fn render_setup_profile_stage(ui: &mut egui::Ui, selected: &mut SetupProfile, action: &mut Action) {
     ui.heading("How will you use Celeste?");
     ui.add_space(8.0);
     ui.label(
@@ -1402,7 +1755,11 @@ fn render_setup_profile_stage(
         .weak(),
     );
     ui.add_space(6.0);
-    ui.radio_value(selected, SetupProfile::LocalLogger, "Local moderation logger");
+    ui.radio_value(
+        selected,
+        SetupProfile::LocalLogger,
+        "Local moderation logger",
+    );
     ui.label(
         egui::RichText::new(
             "Watch the running VRChat client's logs and show instance activity locally—no VRChat account or Discord bot required.",
@@ -1488,7 +1845,11 @@ fn render_discord_stage(
         ui.add_space(5.0);
         render_audio_settings_buttons(ui, action);
         if let Some(notice) = audio_settings_notice {
-            ui.label(egui::RichText::new(notice).small().color(egui::Color32::YELLOW));
+            ui.label(
+                egui::RichText::new(notice)
+                    .small()
+                    .color(egui::Color32::YELLOW),
+            );
         }
     }
     ui.add_space(12.0);
@@ -1527,23 +1888,30 @@ fn render_discord_stage(
 }
 
 fn render_audio_settings_buttons(ui: &mut egui::Ui, action: &mut Action) {
-    ui.horizontal_wrapped(|ui| {
-        #[cfg(target_os = "windows")]
-        {
-            if ui.button("Open Windows Sound Settings").clicked() {
+    #[cfg(target_os = "windows")]
+    centered_pair(
+        ui,
+        210.0,
+        "Open Windows Sound Settings",
+        180.0,
+        "Open classic Sound panel",
+        |first| {
+            if first {
                 *action = Action::OpenSystemSoundSettings;
-            }
-            if ui.button("Open classic Sound panel").clicked() {
+            } else {
                 *action = Action::OpenClassicSoundPanel;
             }
-        }
-        #[cfg(target_os = "linux")]
-        if ui.button("Open system sound controls").clicked() {
-            *action = Action::OpenSystemSoundSettings;
-        }
-    });
+        },
+    );
+
     #[cfg(target_os = "linux")]
-    ui.label(
+    if centered_button(ui, 200.0, "Open system sound controls").clicked() {
+        *action = Action::OpenSystemSoundSettings;
+    }
+
+    #[cfg(target_os = "linux")]
+    centered_label(
+        ui,
         egui::RichText::new(
             "Celeste tries your desktop's sound settings, then pavucontrol or pwvucontrol.",
         )
@@ -1725,12 +2093,22 @@ fn render_vrchat_group_id_stage(
     }
     ui.add_space(12.0);
     ui.horizontal(|ui| {
-        if ui.add_enabled(!in_flight, egui::Button::new("Back")).clicked() {
+        if ui
+            .add_enabled(!in_flight, egui::Button::new("Back"))
+            .clicked()
+        {
             *action = Action::Back;
         }
-        let check_label = if in_flight { "Checking group…" } else { "Check and continue" };
+        let check_label = if in_flight {
+            "Checking group…"
+        } else {
+            "Check and continue"
+        };
         if ui
-            .add_enabled(!in_flight && !can_continue_anyway, egui::Button::new(check_label))
+            .add_enabled(
+                !in_flight && !can_continue_anyway,
+                egui::Button::new(check_label),
+            )
             .clicked()
         {
             *action = Action::GroupIdSubmit {
@@ -1774,6 +2152,10 @@ mod tests {
         let wizard = wizard(&settings);
         assert!(!wizard.is_done());
         assert_eq!(wizard.stage_name(), "vibecoded_notice");
+        assert_eq!(
+            wizard.desired_window_layout(),
+            (SetupWindowLayout::Compact, [600.0, 400.0])
+        );
     }
 
     #[tokio::test]
@@ -1822,6 +2204,40 @@ mod tests {
         wizard.apply_action(Action::SetupProfileContinue(SetupProfile::Full));
         assert_eq!(wizard.stage_name(), "discord");
         assert!(settings.setup_profile_prompted.get());
+        assert_eq!(
+            settings
+                .store
+                .get_object::<String>("setup_profile")
+                .as_deref(),
+            Some("full")
+        );
+    }
+
+    #[tokio::test]
+    async fn completing_full_setup_from_the_tour_opens_only_missing_integrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        settings
+            .vibecoded_notice_acknowledged
+            .set(Some(true), "test");
+        settings.setup_profile_prompted.set(Some(true), "test");
+        settings.discord_setup_prompted.set(Some(true), "test");
+        settings.vrchat_setup_prompted.set(Some(true), "test");
+        registry_string_encrypted(settings.encrypted.clone(), "discord.token")
+            .set(Some("existing-token".to_string()));
+
+        let wizard = SetupWizard::for_full_setup(&settings, tokio::runtime::Handle::current());
+
+        assert_eq!(wizard.stage_name(), "vrchat_credentials");
+        assert!(settings.discord_setup_prompted.get());
+        assert!(!settings.vrchat_setup_prompted.get());
+        assert_eq!(
+            settings
+                .store
+                .get_object::<String>("setup_profile")
+                .as_deref(),
+            Some("full")
+        );
     }
 
     #[tokio::test]
@@ -1834,6 +2250,64 @@ mod tests {
         assert!(settings.discord_setup_prompted.get());
         assert!(settings.vrchat_setup_prompted.get());
         assert!(settings.tts_use_default_audio_device.get());
+        assert_eq!(
+            wizard.desired_window_layout(),
+            (SetupWindowLayout::Tall, [720.0, 720.0])
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_page_fits_the_window_without_clipping() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        let mut wizard = wizard(&settings);
+        wizard.apply_action(Action::SetupProfileContinue(SetupProfile::LocalLogger));
+
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(720.0, 720.0),
+            )),
+            ..Default::default()
+        });
+        let _ = wizard.render(&ctx);
+        let used = ctx.used_rect();
+        let _ = ctx.end_pass();
+
+        assert!(
+            used.bottom() <= 720.0,
+            "finish content extends below its window: {used:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reviewing_settings_keeps_setup_on_its_finish_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        let mut wizard = wizard(&settings);
+        wizard.apply_action(Action::SetupProfileContinue(SetupProfile::LocalLogger));
+        assert_eq!(wizard.stage_name(), "finish");
+
+        wizard.apply_action(Action::FinishReviewSettings);
+
+        assert_eq!(wizard.stage_name(), "finish");
+        assert!(wizard.review_settings_requested);
+        assert!(!wizard.is_done());
+    }
+
+    #[tokio::test]
+    async fn guided_tour_choice_finishes_setup_and_requests_the_tour() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Arc::new(Settings::open(dir.path()));
+        let mut wizard = wizard(&settings);
+        wizard.apply_action(Action::SetupProfileContinue(SetupProfile::LocalLogger));
+        assert_eq!(wizard.stage_name(), "finish");
+
+        wizard.apply_action(Action::FinishTutorial);
+
+        assert_eq!(wizard.stage_name(), "done");
+        assert!(wizard.start_tutorial_after_finish);
     }
 
     #[tokio::test]

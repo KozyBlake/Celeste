@@ -1,9 +1,13 @@
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=Celeste
-Comment=VRChat moderation and Discord companion
+Comment=A VRChat moderation logger based on Scarlet, but coded in Rust.
 Exec=celeste
+TryExec=celeste
 Icon=io.github.KozyBlake.Celeste
 Terminal=false
-Categories=Utility;
+Categories=Utility;Network;
+Keywords=VRChat;Moderation;Discord;
+StartupNotify=true
 StartupWMClass=io.github.KozyBlake.Celeste

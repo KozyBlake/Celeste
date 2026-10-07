@@ -87,6 +87,7 @@ home/
 /usr/
 /gaud/
 /ex/
+/celeste.version
 
 # Hand-shipped test builds
 celeste-testing*

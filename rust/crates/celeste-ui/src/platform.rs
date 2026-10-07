@@ -39,6 +39,138 @@ pub fn native_renderer() -> eframe::Renderer {
     }
 }
 
+/// Install the currently running Linux build as a normal per-user desktop
+/// application. A `.desktop` file by itself is not enough for a downloaded
+/// standalone binary: it needs a stable executable path and an icon in the
+/// user's XDG data hierarchy. Keeping this user-local avoids requiring root
+/// or making assumptions about the distribution's package manager.
+#[cfg(target_os = "linux")]
+pub fn install_desktop_launcher() -> Result<String, String> {
+    use std::path::PathBuf;
+
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "Celeste could not find your Linux home directory.".to_string())?;
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    let install_dir = home.join(".local/lib/celeste");
+    let installed_executable = install_dir.join("celeste");
+    let applications_dir = data_home.join("applications");
+    let desktop_file = applications_dir.join(format!(
+        "{}.desktop",
+        celeste_core::identity::DESKTOP_APP_ID
+    ));
+    let icon_dir = data_home.join(format!(
+        "icons/hicolor/256x256/apps"
+    ));
+    let icon_file = icon_dir.join(format!(
+        "{}.png",
+        celeste_core::identity::DESKTOP_APP_ID
+    ));
+
+    std::fs::create_dir_all(&install_dir)
+        .map_err(|error| format!("Could not create {}: {error}", install_dir.display()))?;
+    std::fs::create_dir_all(&applications_dir)
+        .map_err(|error| format!("Could not create {}: {error}", applications_dir.display()))?;
+    std::fs::create_dir_all(&icon_dir)
+        .map_err(|error| format!("Could not create {}: {error}", icon_dir.display()))?;
+
+    let running_executable = std::env::current_exe()
+        .map_err(|error| format!("Could not locate the running Celeste executable: {error}"))?;
+    if !same_file_path(&running_executable, &installed_executable) {
+        let temporary = install_dir.join("celeste.installing");
+        std::fs::copy(&running_executable, &temporary).map_err(|error| {
+            format!(
+                "Could not copy Celeste from {} to {}: {error}",
+                running_executable.display(),
+                temporary.display()
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&temporary)
+                .map_err(|error| format!("Could not read installed file permissions: {error}"))?
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&temporary, permissions)
+                .map_err(|error| format!("Could not make Celeste executable: {error}"))?;
+        }
+        std::fs::rename(&temporary, &installed_executable).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+            format!("Could not finish installing Celeste: {error}")
+        })?;
+    }
+
+    const ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
+    std::fs::write(&icon_file, ICON)
+        .map_err(|error| format!("Could not install {}: {error}", icon_file.display()))?;
+
+    let executable = desktop_exec_path(&installed_executable);
+    let desktop = format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Version=1.0\n\
+         Name=Celeste\n\
+         Comment=A VRChat moderation logger based on Scarlet, but coded in Rust.\n\
+         Exec={executable}\n\
+         TryExec={executable}\n\
+         Icon={}\n\
+         Terminal=false\n\
+         Categories=Utility;Network;\n\
+         Keywords=VRChat;Moderation;Discord;\n\
+         StartupNotify=true\n\
+         StartupWMClass={}\n",
+        celeste_core::identity::DESKTOP_APP_ID,
+        celeste_core::identity::DESKTOP_APP_ID,
+    );
+    std::fs::write(&desktop_file, desktop)
+        .map_err(|error| format!("Could not install {}: {error}", desktop_file.display()))?;
+
+    // Most desktops notice the file immediately. When the Freedesktop cache
+    // utility is present, refresh it now so KDE/GNOME search can find Celeste
+    // without waiting for the next login.
+    if let Some(update_database) = celeste_core::tts_voices::find_executable("update-desktop-database") {
+        let _ = std::process::Command::new(update_database)
+            .arg(&applications_dir)
+            .status();
+    }
+
+    Ok(format!(
+        "Celeste was added to your application launcher. The installed copy is {}.",
+        installed_executable.display()
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn same_file_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_exec_path(path: &std::path::Path) -> String {
+    // Desktop-entry Exec quoting treats backslash, quote, backtick and dollar
+    // specially inside double quotes. The install location is controlled by
+    // Celeste, but HOME itself can legally contain spaces or those bytes.
+    let raw = path.to_string_lossy();
+    let mut quoted = String::with_capacity(raw.len() + 2);
+    quoted.push('"');
+    for character in raw.chars() {
+        if matches!(character, '\\' | '"' | '`' | '$') {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    quoted.push('"');
+    quoted
+}
+
 /// The two audio configuration surfaces Windows exposes. Linux has no
 /// equivalent split, so [`System`] opens the best installed desktop sound
 /// tool there and [`Classic`] is only presented by the Windows UI.
@@ -170,5 +302,14 @@ mod tests {
             "pavucontrol",
             "pwvucontrol",
         ]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn desktop_entry_exec_path_quotes_spaces_and_reserved_characters() {
+        assert_eq!(
+            desktop_exec_path(std::path::Path::new("/home/Test User/$Celeste/celeste")),
+            r#""/home/Test User/\$Celeste/celeste""#
+        );
     }
 }

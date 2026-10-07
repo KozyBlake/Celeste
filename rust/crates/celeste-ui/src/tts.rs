@@ -10,10 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-const MIXED_CHARACTER_ALERT: &[u8] =
-    include_bytes!("../resources/tts/mixed-character-alert.wav");
-const NUISANCE_ALERT: &[u8] =
-    include_bytes!("../resources/tts/bl_sfx_siren_chirp.wav");
+const MIXED_CHARACTER_ALERT: &[u8] = include_bytes!("../resources/tts/mixed-character-alert.wav");
+const NUISANCE_ALERT: &[u8] = include_bytes!("../resources/tts/bl_sfx_siren_chirp.wav");
 
 #[derive(Debug, Clone)]
 enum Engine {
@@ -184,11 +182,15 @@ impl Engine {
         if let Some(result) = self.play_via_player(text, voice) {
             return result;
         }
+        // The stored id is `engine/voice`; command-line synthesizers only
+        // understand the voice portion. Keeping the prefix here made macOS
+        // and direct Linux playback silently fall back to their defaults.
+        let voice = celeste_core::tts_voices::VoiceId::parse(voice).voice;
+        let voice = voice.trim();
         let mut command = match self {
             Self::Espeak(path) => {
                 let mut command = Command::new(path);
-                if !voice.trim().is_empty() {
-                    let voice = voice.rsplit(['/', ':']).next().unwrap_or(voice);
+                if !voice.is_empty() {
                     command.args(["-v", voice]);
                 }
                 command.arg(text);
@@ -201,7 +203,7 @@ impl Engine {
             }
             Self::Flite(path) => {
                 let mut command = Command::new(path);
-                if !voice.trim().is_empty() {
+                if !voice.is_empty() {
                     command.args(["-voice", voice]);
                 }
                 command.args(["-t", text]);
@@ -218,7 +220,7 @@ impl Engine {
             }
             Self::MacSay(path) => {
                 let mut command = Command::new(path);
-                if !voice.trim().is_empty() {
+                if !voice.is_empty() {
                     command.args(["-v", voice]);
                 }
                 command.arg(text);
@@ -230,7 +232,8 @@ impl Engine {
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "Add-Type -AssemblyName System.Speech; $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); $s.Speak($args[0])",
+                    "Add-Type -AssemblyName System.Speech; $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); if ($args[0]) { $s.SelectVoice($args[0]) }; $s.Speak($args[1])",
+                    voice,
                     text,
                 ]);
                 command
@@ -254,8 +257,7 @@ impl Engine {
 fn resolve_player_prefix() -> Option<Vec<String>> {
     for name in ["CELESTE_TTS_PLAYER", "SCARLET_TTS_PLAYER"] {
         if let Ok(value) = std::env::var(name) {
-            let parts: Vec<String> =
-                value.split_whitespace().map(str::to_string).collect();
+            let parts: Vec<String> = value.split_whitespace().map(str::to_string).collect();
             if !parts.is_empty() {
                 return Some(parts);
             }
@@ -302,7 +304,8 @@ impl TtsService {
     pub fn new() -> Self {
         let engine = Engine::detect();
         let engine_name = engine.as_ref().map(Engine::name);
-        let mixed_character_alert = extract_alert("mixed-character-alert.wav", MIXED_CHARACTER_ALERT);
+        let mixed_character_alert =
+            extract_alert("mixed-character-alert.wav", MIXED_CHARACTER_ALERT);
         let nuisance_alert = extract_alert("bl_sfx_siren_chirp.wav", NUISANCE_ALERT);
         let (sender, receiver) = mpsc::channel();
         let paused = Arc::new(AtomicBool::new(false));
@@ -314,7 +317,15 @@ impl TtsService {
         let worker_skip = skip_requested.clone();
         std::thread::Builder::new()
             .name("celeste-tts".into())
-            .spawn(move || worker(receiver, engine, worker_active, worker_shutdown, worker_skip))
+            .spawn(move || {
+                worker(
+                    receiver,
+                    engine,
+                    worker_active,
+                    worker_shutdown,
+                    worker_skip,
+                )
+            })
             .expect("spawn TTS worker");
         if let Some(name) = engine_name {
             tracing::info!(engine = name, "TTS service initialized");
@@ -342,10 +353,30 @@ impl TtsService {
     }
 
     pub fn submit(&self, text: impl Into<String>, voice: impl Into<String>) -> Result<(), String> {
-        if self.paused.load(Ordering::SeqCst) {
+        self.submit_speech(text.into(), voice.into(), true)
+    }
+
+    /// Speak accessibility or preview text through the local system output,
+    /// even if ordinary moderation callouts are paused. Guided-tour speech
+    /// is explicitly opted into and must not enable operational callouts or
+    /// route anything through Discord as a side effect.
+    pub fn submit_accessibility(
+        &self,
+        text: impl Into<String>,
+        voice: impl Into<String>,
+    ) -> Result<(), String> {
+        self.submit_speech(text.into(), voice.into(), false)
+    }
+
+    fn submit_speech(
+        &self,
+        text: String,
+        voice: String,
+        respect_pause: bool,
+    ) -> Result<(), String> {
+        if respect_pause && self.paused.load(Ordering::SeqCst) {
             return Ok(());
         }
-        let text = text.into();
         if text.trim().is_empty() {
             return Ok(());
         }
@@ -353,10 +384,7 @@ impl TtsService {
             return Err("No supported TTS engine is installed (tried eSpeak NG/eSpeak, Speech Dispatcher, and Flite).".into());
         }
         self.sender
-            .send(Request::Speak {
-                text,
-                voice: voice.into(),
-            })
+            .send(Request::Speak { text, voice })
             .map_err(|_| "The TTS worker stopped.".to_string())
     }
 
@@ -412,7 +440,10 @@ impl TtsService {
 
     /// Whether the worker is mid-utterance — rendering or playing.
     fn busy(&self) -> bool {
-        self.active.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+        self.active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
     }
 }
 
@@ -420,7 +451,12 @@ impl Drop for TtsService {
     fn drop(&mut self) {
         self.shutting_down.store(true, Ordering::SeqCst);
         let _ = self.sender.send(Request::Shutdown);
-        let _ = self.active.lock().unwrap_or_else(|e| e.into_inner()).as_mut().map(Child::kill);
+        let _ = self
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+            .map(Child::kill);
     }
 }
 
@@ -471,7 +507,11 @@ fn worker(
         }
         loop {
             if shutting_down.load(Ordering::SeqCst) {
-                let _ = active.lock().unwrap_or_else(|e| e.into_inner()).as_mut().map(Child::kill);
+                let _ = active
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_mut()
+                    .map(Child::kill);
                 break;
             }
             if skip_requested.swap(false, Ordering::SeqCst) {
@@ -600,7 +640,10 @@ mod tests {
         // on a machine with none of them rather than vacuous or flaky.
         if find_on_path("espeak-ng").is_some() {
             assert!(
-                matches!(Engine::for_voice("espeak-ng/en-us"), Some(Engine::Espeak(_))),
+                matches!(
+                    Engine::for_voice("espeak-ng/en-us"),
+                    Some(Engine::Espeak(_))
+                ),
                 "an espeak-ng voice must select eSpeak"
             );
         }
@@ -641,7 +684,10 @@ mod tests {
             Some(vec!["legacy-player".to_string(), "--arg".to_string()])
         );
         std::env::set_var("CELESTE_TTS_PLAYER", "new-player");
-        assert_eq!(resolve_player_prefix(), Some(vec!["new-player".to_string()]));
+        assert_eq!(
+            resolve_player_prefix(),
+            Some(vec!["new-player".to_string()])
+        );
         // A blank value is not an override.
         std::env::set_var("CELESTE_TTS_PLAYER", "   ");
         std::env::remove_var("SCARLET_TTS_PLAYER");
@@ -734,7 +780,12 @@ impl TtsSinkAdapter {
         discord: Option<celeste_discord::voice_tts::DiscordVoiceTts>,
         ui: Option<crate::UiState>,
     ) -> Self {
-        TtsSinkAdapter { service, settings, discord, ui }
+        TtsSinkAdapter {
+            service,
+            settings,
+            discord,
+            ui,
+        }
     }
 
     /// Skip the current announcement on whichever route it is playing on.
@@ -754,7 +805,10 @@ impl TtsSinkAdapter {
         ) {
             OutputRoute::Local => self.service.skip(),
             OutputRoute::Discord => {
-                let discord = self.discord.as_ref().expect("route checked Discord availability");
+                let discord = self
+                    .discord
+                    .as_ref()
+                    .expect("route checked Discord availability");
                 discord.skip();
                 // A clip may also be finishing locally from before the
                 // route changed; silence that too rather than leaving it.
@@ -798,7 +852,10 @@ impl TtsSinkAdapter {
                 }
             }
             OutputRoute::Discord => {
-                let discord = self.discord.as_ref().expect("route checked Discord availability");
+                let discord = self
+                    .discord
+                    .as_ref()
+                    .expect("route checked Discord availability");
                 discord.submit(text, &voice);
                 self.publish_route_status();
             }

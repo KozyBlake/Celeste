@@ -13,7 +13,6 @@ A self-hostable VRChat group management utility with Discord integration.
 - [Settings reference](SETTINGS.md)
 - [Building from source](BUILDING.md)
 - [Installation](#installation)
-- [VRChat Group](https://vrchat.com/home/group/grp_f12667c7-df5f-454f-9a34-5ed8c33112a1)
 
 ---
 

@@ -36,18 +36,12 @@ pub const COMMUNITY_DISCORD_URL: &str = "https://discord.gg/CP3AyhypBF";
 pub const FORK_GITHUB_URL: &str = "https://github.com/KozyBlake/ScarletRust";
 pub const GITHUB_URL: &str = FORK_GITHUB_URL;
 
-pub const COMMUNITY_VRCHAT_GROUP_ID: &str = "grp_eb2eb120-67bd-404e-9665-498f567cb56d";
-
 pub const USER_AGENT_NAME: &str = "KozyBlake-Celeste";
 pub const LICENSE_URL: &str = "https://github.com/KozyBlake/ScarletRust?tab=MIT-1-ov-file";
 pub const API_VERSION: &str = "api/1";
 pub const API_HOST_0: &str = "vrchat.com";
 pub const API_HOST_1: &str = "api.vrchat.com";
 pub const API_HOST_2: &str = "api.vrchat.cloud";
-
-pub fn celeste_vrchat_group_url() -> String {
-    format!("https://vrchat.com/home/group/{COMMUNITY_VRCHAT_GROUP_ID}")
-}
 
 pub fn user_agent() -> String {
     format!(

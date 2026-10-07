@@ -2,71 +2,36 @@
   {
     "name": "VRChat",
     "url": "https://vrchat.com",
-    "role": "VRChat itself"
+    "role": "Platform Celeste monitors and moderates"
   },
   {
-    "name": "VRChat Community API docs (unnofficial)",
+    "name": "VRChat API",
     "url": "https://vrchat.community",
-    "role": "Maintainers of the OpenAPI specification for the VRChat API"
-  },
-  {
-    "name": "Vinyarion",
-    "url": "https://discord.gg/CP3AyhypBF",
-    "role": "Author"
+    "role": "Community-maintained API documentation used by Celeste"
   },
   {
     "name": "KozyBlake",
-    "url": "https://github.com/KozyBlake",
-    "role": "Contributor, provisional maintainer of Linux-compatible fork"
+    "url": "https://github.com/KozyBlake/ScarletRust",
+    "role": "Creator and main maintainer of Celeste"
   },
   {
-    "name": "kubectl",
-    "url": "https://github.com/0xkubectl",
-    "role": "Contributor, provisional maintainer of Linux-compatible fork, VRCX-compatible search provider"
-  },
-  {
-    "name": "ComfyChloe",
-    "url": "https://github.com/ComfyChloe",
-    "role": "Contributor, provided a patched version when I was unable to address a breaking change in the VRChat API"
-  },
-  {
-    "name": "NekoSuneVR",
-    "url": "https://nekosunevr.co.uk",
-    "role": "Contributor, VRCX-compatible search provider"
-  },
-  {
-    "name": "unknownangel517",
-    "url": "https://github.com/unknownangel517",
-    "role": "Contributor, VRCX-compatible search provider"
-  },
-  {
-    "name": "Pyrolife9",
+    "name": "Claude",
     "url": "",
-    "role": "Korean translator"
+    "role": "AI development assistant"
   },
   {
-    "name": "FlorianGrille",
+    "name": "OpenAI Codex",
     "url": "",
-    "role": "German translator"
+    "role": "AI development assistant"
   },
   {
-    "name": "Karbon_5381F",
-    "url": "",
-    "role": "Japanese translator"
+    "name": "The Synapse",
+    "url": "https://vrchat.com/home/group/grp_f3518074-c206-4dc1-b17d-0864d46f8c98",
+    "role": "Community support and testing"
   },
   {
-    "name": "Yuni",
-    "url": "",
-    "role": "Polish translator"
-  },
-  {
-    "name": "Unused",
-    "url": "",
-    "role": "Brazilian Portuguese translator"
-  },
-  {
-    "name": "KozyBlake, Claude",
-    "url": "",
-    "role": "Russian translator"
+    "name": "VRC Kmart",
+    "url": "https://vrchat.com/home/group/grp_8c7c423b-cfab-40f5-a53a-a8431655826b",
+    "role": "Community support and testing"
   }
 ]

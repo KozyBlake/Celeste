@@ -155,6 +155,7 @@ fn run() -> anyhow::Result<()> {
     }
     let voice_manager = songbird::Songbird::serenity();
     let (process_controller, mut process_requests) = celeste_discord::data::ProcessController::new();
+    let lifecycle_process_controller = process_controller.clone();
 
     startup_splash.status("Loading moderation data...");
     let shared = celeste_discord::data::SharedState {
@@ -228,33 +229,28 @@ fn run() -> anyhow::Result<()> {
     // relaunch this exact executable with its original arguments. This is the
     // Rust equivalent of Java's exit-code-69/self-relaunch path and works in
     // both GUI and headless modes.
-    runtime.spawn({
-        let data = shared.celeste_data.clone();
-        async move {
-            if let Some(celeste_discord::data::ProcessRequest::Restart) = process_requests.recv().await {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                // `process::exit` skips destructors and the GUI close path,
-                // so persist the same data Java saves before its restart
-                // exit code.
-                data.save_all();
-                if let Err(error) = std::fs::write("celeste.version", celeste_core::identity::VERSION) {
-                    tracing::warn!(%error, "Failed to write celeste.version before restart");
-                }
-                let relaunched = std::env::current_exe().and_then(|executable| {
-                    let mut command = std::process::Command::new(executable);
-                    command.args(std::env::args_os().skip(1));
-                    command.spawn().map(|_| ())
-                });
-                match relaunched {
-                    Ok(()) => std::process::exit(0),
-                    Err(error) => {
-                        tracing::error!(%error, "Failed to relaunch Celeste");
-                        std::process::exit(69);
+    // Headless mode has no graphics event loop to shut down, so it still
+    // handles a Discord-requested restart directly. The graphical path is
+    // handled after `eframe::run_native` returns below; this avoids exiting
+    // from a Tokio worker while EGL/WGL is in the middle of a frame.
+    if headless {
+        runtime.spawn({
+            let data = shared.celeste_data.clone();
+            async move {
+                if let Some(celeste_discord::data::ProcessRequest::Restart) = process_requests.recv().await {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    data.save_all();
+                    match relaunch_current_process() {
+                        Ok(()) => std::process::exit(0),
+                        Err(error) => {
+                            tracing::error!(%error, "Failed to relaunch Celeste");
+                            std::process::exit(69);
+                        }
                     }
                 }
             }
-        }
-    });
+        });
+    }
 
     // The VRChat log tailer feeds the ported event listener, which drives
     // the instance table. `spawn_tailer` reports and then stops on a machine
@@ -458,6 +454,29 @@ fn run() -> anyhow::Result<()> {
     // makes every orderly exit durable.
     shutdown_data.save_all();
 
+    let restart_requested = !headless && lifecycle_process_controller.restart_queued();
+
+    // `Runtime::drop` waits indefinitely for blocking work. Discord voice,
+    // networking and platform integrations can leave one of those workers
+    // alive even after eframe has closed, which produced the confusing
+    // "window is gone but Celeste still owns the terminal" state on Linux.
+    // Stop asynchronous services in an orderly but bounded way; after the
+    // deadline Tokio releases the main thread so the OS can end any
+    // remaining process-local workers with Celeste itself.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(3));
+
+    if restart_requested {
+        relaunch_current_process()?;
+    }
+
+    Ok(())
+}
+
+fn relaunch_current_process() -> anyhow::Result<()> {
+    let executable = std::env::current_exe()?;
+    let mut command = std::process::Command::new(executable);
+    command.args(std::env::args_os().skip(1));
+    command.spawn()?;
     Ok(())
 }
 

@@ -50,7 +50,8 @@ enum TutorialChapter {
     InstanceAndRoster,
     VoiceAndSettings,
     HelpAndTroubleshooting,
-    ModerationAndIntegrations,
+    DiscordModeration,
+    VrChatIntegrations,
     ManagedClients,
     DataAndRecovery,
 }
@@ -66,12 +67,13 @@ enum TutorialNeeds {
 impl TutorialChapter {
     /// Running order. Essential chapters come first so the tour has a
     /// natural end for someone who does not want the advanced material.
-    const ORDER: [TutorialChapter; 7] = [
+    const ORDER: [TutorialChapter; 8] = [
         TutorialChapter::Basics,
         TutorialChapter::InstanceAndRoster,
         TutorialChapter::VoiceAndSettings,
         TutorialChapter::HelpAndTroubleshooting,
-        TutorialChapter::ModerationAndIntegrations,
+        TutorialChapter::DiscordModeration,
+        TutorialChapter::VrChatIntegrations,
         TutorialChapter::ManagedClients,
         TutorialChapter::DataAndRecovery,
     ];
@@ -82,7 +84,8 @@ impl TutorialChapter {
             TutorialChapter::InstanceAndRoster => "Your instance and roster",
             TutorialChapter::VoiceAndSettings => "Voice and settings",
             TutorialChapter::HelpAndTroubleshooting => "Help and troubleshooting",
-            TutorialChapter::ModerationAndIntegrations => "Moderation and integrations",
+            TutorialChapter::DiscordModeration => "Discord and moderation",
+            TutorialChapter::VrChatIntegrations => "VRChat integrations",
             TutorialChapter::ManagedClients => "Managed VRChat clients",
             TutorialChapter::DataAndRecovery => "Data, CLI, and recovery",
         }
@@ -100,7 +103,8 @@ impl TutorialChapter {
 
     fn needs(self) -> TutorialNeeds {
         match self {
-            TutorialChapter::ModerationAndIntegrations => TutorialNeeds::Discord,
+            TutorialChapter::DiscordModeration => TutorialNeeds::Discord,
+            TutorialChapter::VrChatIntegrations => TutorialNeeds::VrChat,
             TutorialChapter::ManagedClients => TutorialNeeds::VrChat,
             _ => TutorialNeeds::Nothing,
         }
@@ -129,7 +133,7 @@ struct TutorialStep {
     try_it: &'static str,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TutorialTarget {
     Header,
     TabBar,
@@ -439,7 +443,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Use Help → Diagnostics and Copy report when something goes wrong. The tour's temporary files are removed when you finish or exit.",
     },
     TutorialStep {
-        chapter: TutorialChapter::ModerationAndIntegrations,
+        chapter: TutorialChapter::DiscordModeration,
         tab: Tab::Settings,
         target: TutorialTarget::SettingsContent,
         settings_category: Some(SettingCategory::Moderation),
@@ -449,7 +453,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Start conservatively: enable only the notices your staff needs, then expand the notification matrix after confirming where each event is routed.",
     },
     TutorialStep {
-        chapter: TutorialChapter::ModerationAndIntegrations,
+        chapter: TutorialChapter::VrChatIntegrations,
         tab: Tab::Settings,
         target: TutorialTarget::SettingsContent,
         settings_category: Some(SettingCategory::Integrations),
@@ -475,8 +479,8 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         settings_category: Some(SettingCategory::System),
         demo_data: false,
         title: "Data, migration, cleanup, and recovery",
-        body: "System shows Celeste's data folder and can open or move it, import legacy Scarlet data, clean old caches and logs, restart Celeste, rerun VRChat setup, or reset a broken VRChat session. Scarlet import is additive: existing Celeste records win, credentials and settings are skipped, and a backup is created so you can verify the result.",
-        try_it: "Pronoun good/bad lists are managed from General and reloaded after editing. Cache cleanup protects active files and does not delete durable moderation lists or history.",
+        body: "System shows Celeste's data folder and can open or move it, import legacy Scarlet data, clean old caches and logs, restart Celeste, rerun VRChat setup, or reset a broken VRChat session. On Linux it can also install or refresh Celeste in the desktop's application menu. Scarlet import is additive: existing Celeste records win, credentials and settings are skipped, and a backup is created so you can verify the result.",
+        try_it: "Pronoun good/bad lists are managed from General and reloaded after editing. Cache cleanup protects active files and does not delete durable moderation lists or history. Linux users can rerun the launcher install after downloading a newer build.",
     },
     TutorialStep {
         chapter: TutorialChapter::DataAndRecovery,
@@ -531,35 +535,121 @@ enum GroupAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InstanceKind { GroupPublic, GroupPlus, GroupMembers, Public, FriendsPlus, Friends, InvitePlus, Invite }
+enum InstanceKind {
+    GroupPublic,
+    GroupPlus,
+    GroupMembers,
+    Public,
+    FriendsPlus,
+    Friends,
+    InvitePlus,
+    Invite,
+}
 
 impl InstanceKind {
-    const ALL: [Self; 8] = [Self::GroupPublic, Self::GroupPlus, Self::GroupMembers, Self::Public, Self::FriendsPlus, Self::Friends, Self::InvitePlus, Self::Invite];
-    fn label(self) -> &'static str { match self { Self::GroupPublic => "Group Public", Self::GroupPlus => "Group Plus", Self::GroupMembers => "Group Members", Self::Public => "Public", Self::FriendsPlus => "Friends+", Self::Friends => "Friends", Self::InvitePlus => "Invite+", Self::Invite => "Invite" } }
-    fn group(self) -> bool { matches!(self, Self::GroupPublic | Self::GroupPlus | Self::GroupMembers) }
-    fn group_access(self) -> Option<&'static str> { match self { Self::GroupPublic => Some("public"), Self::GroupPlus => Some("plus"), Self::GroupMembers => Some("members"), _ => None } }
-    fn instance_type(self) -> &'static str { match self { Self::Public => "public", Self::FriendsPlus => "hidden", Self::Friends => "friends", Self::InvitePlus | Self::Invite => "private", _ => "group" } }
+    const ALL: [Self; 8] = [
+        Self::GroupPublic,
+        Self::GroupPlus,
+        Self::GroupMembers,
+        Self::Public,
+        Self::FriendsPlus,
+        Self::Friends,
+        Self::InvitePlus,
+        Self::Invite,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            Self::GroupPublic => "Group Public",
+            Self::GroupPlus => "Group Plus",
+            Self::GroupMembers => "Group Members",
+            Self::Public => "Public",
+            Self::FriendsPlus => "Friends+",
+            Self::Friends => "Friends",
+            Self::InvitePlus => "Invite+",
+            Self::Invite => "Invite",
+        }
+    }
+    fn group(self) -> bool {
+        matches!(
+            self,
+            Self::GroupPublic | Self::GroupPlus | Self::GroupMembers
+        )
+    }
+    fn group_access(self) -> Option<&'static str> {
+        match self {
+            Self::GroupPublic => Some("public"),
+            Self::GroupPlus => Some("plus"),
+            Self::GroupMembers => Some("members"),
+            _ => None,
+        }
+    }
+    fn instance_type(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::FriendsPlus => "hidden",
+            Self::Friends => "friends",
+            Self::InvitePlus | Self::Invite => "private",
+            _ => "group",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct CreateInstanceForm {
-    world: String, kind: InstanceKind, region: String, avatar_gate: String, display_name: String,
-    queue_enabled: bool, age_gate: bool, content_drones: bool, content_emoji: bool,
-    content_props: bool, content_pedestals: bool, content_prints: bool, content_stickers: bool,
+    world: String,
+    kind: InstanceKind,
+    region: String,
+    avatar_gate: String,
+    display_name: String,
+    queue_enabled: bool,
+    age_gate: bool,
+    content_drones: bool,
+    content_emoji: bool,
+    content_props: bool,
+    content_pedestals: bool,
+    content_prints: bool,
+    content_stickers: bool,
 }
 
 impl Default for CreateInstanceForm {
-    fn default() -> Self { Self { world: String::new(), kind: InstanceKind::GroupPublic, region: "us".into(), avatar_gate: String::new(), display_name: String::new(), queue_enabled: true, age_gate: false, content_drones: true, content_emoji: true, content_props: true, content_pedestals: true, content_prints: true, content_stickers: true } }
+    fn default() -> Self {
+        Self {
+            world: String::new(),
+            kind: InstanceKind::GroupPublic,
+            region: "us".into(),
+            avatar_gate: String::new(),
+            display_name: String::new(),
+            queue_enabled: true,
+            age_gate: false,
+            content_drones: true,
+            content_emoji: true,
+            content_props: true,
+            content_pedestals: true,
+            content_prints: true,
+            content_stickers: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-struct CreatedInstance { message: String, link: String }
+struct CreatedInstance {
+    message: String,
+    link: String,
+}
 
 fn resolve_world_id(input: &str) -> Option<String> {
     let start = input.find("wrld_")?;
     let candidate = input.get(start..start + 41)?;
     let uuid = candidate.strip_prefix("wrld_")?;
-    (uuid.len() == 36 && uuid.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() })).then(|| candidate.to_string())
+    (uuid.len() == 36
+        && uuid.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        }))
+    .then(|| candidate.to_string())
 }
 
 fn decode_url_component(input: &str) -> String {
@@ -580,7 +670,11 @@ fn decode_url_component(input: &str) -> String {
                 continue;
             }
         }
-        output.push(if bytes[index] == b'+' { b' ' } else { bytes[index] });
+        output.push(if bytes[index] == b'+' {
+            b' '
+        } else {
+            bytes[index]
+        });
         index += 1;
     }
     String::from_utf8_lossy(&output).into_owned()
@@ -622,7 +716,9 @@ fn pick_legacy_import_source(
                 .map(|path| path.map(|path| (path, None)))
         }
         rfd::MessageDialogResult::Custom(label) if label.contains("archive") => {
-            let Some(archive) = crate::dialogs::pick_archive("Choose a Scarlet data archive", parent)? else {
+            let Some(archive) =
+                crate::dialogs::pick_archive("Choose a Scarlet data archive", parent)?
+            else {
                 return Ok(None);
             };
             let staged = celeste_core::legacy_archive::prepare(&archive, data_dir)
@@ -631,11 +727,14 @@ fn pick_legacy_import_source(
         }
         // Native backends are inconsistent about whether custom labels come
         // back as Custom/Yes/No. Preserve the visual left-to-right mapping.
-        rfd::MessageDialogResult::Yes => crate::dialogs::pick_folder(
-            "Choose the Scarlet data folder", parent,
-        ).map(|path| path.map(|path| (path, None))),
+        rfd::MessageDialogResult::Yes => {
+            crate::dialogs::pick_folder("Choose the Scarlet data folder", parent)
+                .map(|path| path.map(|path| (path, None)))
+        }
         rfd::MessageDialogResult::No => {
-            let Some(archive) = crate::dialogs::pick_archive("Choose a Scarlet data archive", parent)? else {
+            let Some(archive) =
+                crate::dialogs::pick_archive("Choose a Scarlet data archive", parent)?
+            else {
                 return Ok(None);
             };
             let staged = celeste_core::legacy_archive::prepare(&archive, data_dir)
@@ -654,36 +753,88 @@ fn validate_instance_display_name(name: &str) -> Result<Option<String>, String> 
     Ok((!name.is_empty()).then(|| name.to_string()))
 }
 
-fn create_instance_request(form: &CreateInstanceForm, world_id: &str, owner_id: &str) -> Result<serde_json::Value, String> {
+fn create_instance_request(
+    form: &CreateInstanceForm,
+    world_id: &str,
+    owner_id: &str,
+) -> Result<serde_json::Value, String> {
     let mut request = serde_json::json!({
         "worldId": world_id, "ownerId": owner_id, "type": form.kind.instance_type(), "region": form.region,
         "queueEnabled": form.queue_enabled, "hardClose": false, "ageGate": form.age_gate,
         "contentSettings": { "drones": form.content_drones, "emoji": form.content_emoji, "props": form.content_props, "pedestals": form.content_pedestals, "prints": form.content_prints, "stickers": form.content_stickers }
     });
-    let object = request.as_object_mut().expect("instance request is an object");
-    if let Some(access) = form.kind.group_access() { object.insert("groupAccessType".into(), serde_json::json!(access)); }
-    if form.kind == InstanceKind::InvitePlus { object.insert("canRequestInvite".into(), serde_json::json!(true)); }
-    if let Some(name) = validate_instance_display_name(&form.display_name)? { object.insert("displayName".into(), serde_json::json!(name)); }
-    if !form.avatar_gate.is_empty() { object.insert("minimumAvatarPerformance".into(), serde_json::json!(form.avatar_gate)); }
+    let object = request
+        .as_object_mut()
+        .expect("instance request is an object");
+    if let Some(access) = form.kind.group_access() {
+        object.insert("groupAccessType".into(), serde_json::json!(access));
+    }
+    if form.kind == InstanceKind::InvitePlus {
+        object.insert("canRequestInvite".into(), serde_json::json!(true));
+    }
+    if let Some(name) = validate_instance_display_name(&form.display_name)? {
+        object.insert("displayName".into(), serde_json::json!(name));
+    }
+    if !form.avatar_gate.is_empty() {
+        object.insert(
+            "minimumAvatarPerformance".into(),
+            serde_json::json!(form.avatar_gate),
+        );
+    }
     Ok(request)
 }
 
 fn canonicalize_cli_command(op: &str) -> String {
     let low = op.trim().to_ascii_lowercase();
     const CANONICAL: [&str; 25] = [
-        "info", "help", "logout", "exit", "halt", "quit", "stop", "reboot", "restart", "langlint",
-        "simulate", "explore", "tts", "link", "importgroups", "importgroupsjson", "translate-advisories",
-        "restore-advisories", "repair-secure-store", "vrchatapi-test", "popup", "popups", "popup-test", "clear", "",
+        "info",
+        "help",
+        "logout",
+        "exit",
+        "halt",
+        "quit",
+        "stop",
+        "reboot",
+        "restart",
+        "langlint",
+        "simulate",
+        "explore",
+        "tts",
+        "link",
+        "importgroups",
+        "importgroupsjson",
+        "translate-advisories",
+        "restore-advisories",
+        "repair-secure-store",
+        "vrchatapi-test",
+        "popup",
+        "popups",
+        "popup-test",
+        "clear",
+        "",
     ];
-    if CANONICAL.contains(&low.as_str()) { return low; }
+    if CANONICAL.contains(&low.as_str()) {
+        return low;
+    }
     for (canonical, key) in [
-        ("help", "cli.alias.help"), ("logout", "cli.alias.logout"), ("exit", "cli.alias.exit"),
-        ("reboot", "cli.alias.reboot"), ("langlint", "cli.alias.langlint"), ("simulate", "cli.alias.simulate"),
-        ("explore", "cli.alias.explore"), ("tts", "cli.alias.tts"), ("link", "cli.alias.link"),
-        ("importgroups", "cli.alias.importgroups"), ("importgroupsjson", "cli.alias.importgroupsjson"),
+        ("help", "cli.alias.help"),
+        ("logout", "cli.alias.logout"),
+        ("exit", "cli.alias.exit"),
+        ("reboot", "cli.alias.reboot"),
+        ("langlint", "cli.alias.langlint"),
+        ("simulate", "cli.alias.simulate"),
+        ("explore", "cli.alias.explore"),
+        ("tts", "cli.alias.tts"),
+        ("link", "cli.alias.link"),
+        ("importgroups", "cli.alias.importgroups"),
+        ("importgroupsjson", "cli.alias.importgroupsjson"),
     ] {
         let aliases = celeste_core::i18n::tr(key, &[]);
-        if aliases != key && aliases.split(|c: char| c == ',' || c.is_whitespace()).any(|alias| alias.eq_ignore_ascii_case(&low)) {
+        if aliases != key
+            && aliases
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .any(|alias| alias.eq_ignore_ascii_case(&low))
+        {
             return canonical.into();
         }
     }
@@ -694,10 +845,7 @@ type PendingGroupFileImport = Result<Option<(String, Vec<u8>, String)>, String>;
 
 fn load_column_layout(
     settings: Option<&Settings>,
-) -> (
-    Vec<ColumnId>,
-    std::collections::HashMap<ColumnId, f32>,
-) {
+) -> (Vec<ColumnId>, std::collections::HashMap<ColumnId, f32>) {
     let mut widths = ColumnId::ALL
         .into_iter()
         .map(|column| (column, column.initial_width()))
@@ -724,7 +872,10 @@ fn load_column_layout(
         })
         .collect::<Vec<_>>();
     visible.sort_by_key(|(index, _)| *index);
-    let mut order = visible.into_iter().map(|(_, column)| column).collect::<Vec<_>>();
+    let mut order = visible
+        .into_iter()
+        .map(|(_, column)| column)
+        .collect::<Vec<_>>();
     // A layout written by an older version has no entries for newly added
     // default-visible columns. Java leaves those columns at their defaults.
     for column in ColumnId::DEFAULT_VISIBLE {
@@ -923,7 +1074,10 @@ fn fitted_column_widths(
     let extra = available_width - floor_total;
     if flexible_total <= f32::EPSILON {
         let extra_per_column = extra / columns.len() as f32;
-        return floors.into_iter().map(|width| width + extra_per_column).collect();
+        return floors
+            .into_iter()
+            .map(|width| width + extra_per_column)
+            .collect();
     }
 
     floors
@@ -931,6 +1085,53 @@ fn fitted_column_widths(
         .zip(flexible)
         .map(|(floor, preference)| floor + extra * preference / flexible_total)
         .collect()
+}
+
+/// Convert a width chosen in the rendered, fitted table back into the
+/// stored preference that will reproduce it. The table has a fixed total
+/// width, so enlarging one column necessarily takes flexible space from the
+/// others. Applying the pointer delta directly to the stored preference is
+/// incorrect whenever the table is compressed and makes a drag appear to
+/// snap back on the following frame.
+fn preference_for_fitted_width(
+    columns: &[ColumnId],
+    preferred: &std::collections::HashMap<ColumnId, f32>,
+    available_width: f32,
+    resized: ColumnId,
+    desired_fitted_width: f32,
+) -> f32 {
+    let floor_total = columns.iter().map(ColumnId::fitted_min_width).sum::<f32>();
+    let extra = (available_width - floor_total).max(0.0);
+    let floor = resized.fitted_min_width();
+    if extra <= f32::EPSILON {
+        return resized.min_width();
+    }
+
+    let other_flexible = columns
+        .iter()
+        .copied()
+        .filter(|column| *column != resized)
+        .map(|column| {
+            preferred
+                .get(&column)
+                .copied()
+                .unwrap_or_else(|| column.initial_width())
+                .max(column.fitted_min_width())
+                - column.fitted_min_width()
+        })
+        .sum::<f32>();
+    if other_flexible <= f32::EPSILON {
+        return preferred
+            .get(&resized)
+            .copied()
+            .unwrap_or_else(|| resized.initial_width());
+    }
+
+    // Keep at least a sliver of flexible width for the other columns. Their
+    // hard floors are already protected by `fitted_column_widths`.
+    let target_flexible = (desired_fitted_width - floor).clamp(0.0, extra - 0.5);
+    let resized_flexible = target_flexible * other_flexible / (extra - target_flexible);
+    (floor + resized_flexible).max(resized.min_width())
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -998,6 +1199,13 @@ pub struct CelesteApp {
     tutorial_show_all: bool,
     tutorial_layout: TutorialLayout,
     tutorial_demo: Option<TutorialDemo>,
+    /// Optional local narration for the current guided-tour session. This
+    /// is deliberately independent of moderation callout pause/routing:
+    /// tour speech is opt-in, always local, and never sent to Discord.
+    tutorial_narration: bool,
+    tutorial_voice: String,
+    tutorial_narrated_step: Option<usize>,
+    tutorial_tts_notice: Option<String>,
     resume_tutorial_step: Option<usize>,
     tutorial_setup_had_discord: bool,
     /// The authenticated VRChat client, shared with `celeste-discord`'s
@@ -1015,8 +1223,10 @@ pub struct CelesteApp {
     process_controller: Arc<celeste_discord::data::ProcessController>,
     /// Set when a background VRChat login stopped to ask for a two-factor
     /// code; drained in `update` to open the code prompt.
-    two_factor_tx: std::sync::mpsc::Sender<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
-    two_factor_rx: std::sync::mpsc::Receiver<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
+    two_factor_tx:
+        std::sync::mpsc::Sender<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
+    two_factor_rx:
+        std::sync::mpsc::Receiver<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
     celeste_data: Arc<celeste_core::data::CelesteData>,
     staff_list: Arc<celeste_core::staff_list::StaffList>,
     secret_staff_list: Arc<celeste_core::staff_list::StaffList>,
@@ -1098,6 +1308,12 @@ pub struct CelesteApp {
     diagnostics_open: bool,
     credits_open: bool,
     visual_style_installed: bool,
+    /// egui ships a deliberately compact font set. System fallbacks fill in
+    /// arrows used by Celeste and, on demand, scripts appearing in VRChat
+    /// display names without bundling a large world font into every build.
+    font_fallbacks_installed: bool,
+    font_fallback_paths: Vec<PathBuf>,
+    font_fallback_attempted_chars: std::collections::HashSet<char>,
     managed_client_edit: Option<celeste_vrchat::managed_clients::ManagedClientSlot>,
     managed_client_error: Option<String>,
     /// One throttled process-table snapshot shared by every enabled coverage
@@ -1121,8 +1337,14 @@ impl CelesteApp {
         tts: Arc<crate::tts::TtsService>,
         tts_route: Arc<crate::tts::TtsSinkAdapter>,
         pronoun_lists: Arc<celeste_core::pronoun_lists::PronounLists>,
-        two_factor_tx: std::sync::mpsc::Sender<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
-        two_factor_rx: std::sync::mpsc::Receiver<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
+        two_factor_tx: std::sync::mpsc::Sender<(
+            Arc<celeste_vrchat::client::VrChatClient>,
+            Vec<String>,
+        )>,
+        two_factor_rx: std::sync::mpsc::Receiver<(
+            Arc<celeste_vrchat::client::VrChatClient>,
+            Vec<String>,
+        )>,
         managed_clients: Arc<celeste_vrchat::managed_clients::ManagedClientStore>,
     ) -> Self {
         let celeste_data = shared.celeste_data.clone();
@@ -1140,12 +1362,16 @@ impl CelesteApp {
         let voice_manager = shared.voice_manager.clone();
         let process_controller = shared.process_controller.clone();
         let settings = Some(shared.settings.clone());
-        let last_window_bounds = settings.as_ref().and_then(|settings| settings.ui_bounds.get_or_null());
-        let ui_scale = settings.as_ref()
+        let last_window_bounds = settings
+            .as_ref()
+            .and_then(|settings| settings.ui_bounds.get_or_null());
+        let ui_scale = settings
+            .as_ref()
             .and_then(|settings| settings.store.get_object::<f32>("ui_scale"))
             .unwrap_or(1.0)
             .clamp(0.5, 4.0);
-        let accent = settings.as_ref()
+        let accent = settings
+            .as_ref()
             .and_then(|settings| settings.store.get_object::<Vec<u8>>("ui_accent_color"))
             .filter(|rgb| rgb.len() == 3)
             .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
@@ -1159,7 +1385,9 @@ impl CelesteApp {
             state.append_cli_output(message.as_str());
         }
 
-        let wizard = settings.as_ref().map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
+        let wizard = settings
+            .as_ref()
+            .map(|s| crate::setup::SetupWizard::new(s, runtime_handle.clone()));
 
         // If setup already ran in an earlier session, the wizard is
         // constructed already-`done` and won't render at all -- but Discord
@@ -1212,6 +1440,20 @@ impl CelesteApp {
         };
 
         let (column_order, column_widths) = load_column_layout(settings.as_deref());
+        let installed_tutorial_voices = celeste_core::tts_voices::installed();
+        let tutorial_voice = settings
+            .as_ref()
+            .and_then(|settings| settings.store.get_object::<String>("tutorial_tts_voice"))
+            .or_else(|| {
+                settings.as_ref().and_then(|settings| {
+                    let voice = settings.tts_voice_name.get();
+                    (!voice.trim().is_empty()).then_some(voice)
+                })
+            })
+            .and_then(|voice| {
+                celeste_core::tts_voices::resolve_legacy(&voice, &installed_tutorial_voices)
+            })
+            .unwrap_or_default();
 
         CelesteApp {
             state,
@@ -1226,6 +1468,10 @@ impl CelesteApp {
             tutorial_show_all: false,
             tutorial_layout: TutorialLayout::default(),
             tutorial_demo: None,
+            tutorial_narration: false,
+            tutorial_voice,
+            tutorial_narrated_step: None,
+            tutorial_tts_notice: None,
             resume_tutorial_step: None,
             tutorial_setup_had_discord: false,
             vrchat_slot,
@@ -1290,6 +1536,9 @@ impl CelesteApp {
             diagnostics_open: false,
             credits_open: false,
             visual_style_installed: false,
+            font_fallbacks_installed: false,
+            font_fallback_paths: Vec::new(),
+            font_fallback_attempted_chars: std::collections::HashSet::new(),
             managed_client_edit: None,
             managed_client_error: None,
             managed_profile_pids: std::collections::HashMap::new(),
@@ -1348,8 +1597,7 @@ impl CelesteApp {
         // On the blue, text has to be near-white to stay readable, and the
         // border has to be a lighter blue rather than a grey outline.
         style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, text_emphasis);
-        style.visuals.widgets.active.bg_stroke =
-            egui::Stroke::new(1.0_f32, self.accent);
+        style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, self.accent);
         style.visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0_f32, text_emphasis);
         style.visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0_f32, border_subtle);
         // `selectable_value` (the tab bar, the settings sidebar, the
@@ -1363,15 +1611,69 @@ impl CelesteApp {
         self.visual_style_installed = true;
     }
 
+    fn ensure_font_fallbacks(&mut self, ctx: &egui::Context) {
+        if !self.font_fallbacks_installed {
+            self.font_fallback_paths = base_system_font_paths();
+            apply_font_fallbacks(ctx, &self.font_fallback_paths);
+            self.font_fallbacks_installed = true;
+            ctx.request_repaint();
+            return;
+        }
+
+        // Only pay for large language fonts when live VRChat data actually
+        // needs them. The ordinary fallback is under 2 MiB; a CJK font can
+        // be around 20 MiB, which matters for an app expected to sit open
+        // beside VRChat for days.
+        let players = self.state.ordered_players();
+        let mut characters = std::collections::BTreeSet::new();
+        for player in &players {
+            for text in [
+                Some(player.name.as_str()),
+                player.pronouns.as_deref(),
+                player.avatar_name.as_deref(),
+                player.advisory.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                characters.extend(text.chars().filter(|character| !character.is_control()));
+            }
+        }
+        characters.retain(|character| {
+            !self.font_fallback_attempted_chars.contains(character)
+                && !ctx.fonts(|fonts| {
+                    fonts.has_glyph(
+                        &egui::FontId::proportional(crate::theme::TEXT_BODY),
+                        *character,
+                    )
+                })
+        });
+        if characters.is_empty() {
+            return;
+        }
+
+        self.font_fallback_attempted_chars
+            .extend(characters.iter().copied());
+        let mut changed = false;
+        for path in system_font_paths_for(&characters) {
+            if !self.font_fallback_paths.contains(&path) {
+                tracing::info!(path = %path.display(), "Adding a system font fallback for VRChat text");
+                self.font_fallback_paths.push(path);
+                changed = true;
+            }
+        }
+        if changed {
+            apply_font_fallbacks(ctx, &self.font_fallback_paths);
+            ctx.request_repaint();
+        }
+    }
+
     /// Shared visual primitives. Keeping these here prevents each newly
     /// ported screen from inventing its own shade, border and corner radius.
     fn card_frame() -> egui::Frame {
         egui::Frame::none()
             .fill(crate::theme::PANEL)
-            .stroke(egui::Stroke::new(
-                1.0_f32,
-                crate::theme::RULE,
-            ))
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::RULE))
             .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
             .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD))
     }
@@ -1379,10 +1681,7 @@ impl CelesteApp {
     fn inset_frame() -> egui::Frame {
         egui::Frame::none()
             .fill(crate::theme::WELL)
-            .stroke(egui::Stroke::new(
-                1.0_f32,
-                crate::theme::RULE,
-            ))
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::RULE))
             .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
             .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD))
     }
@@ -1415,7 +1714,11 @@ impl CelesteApp {
                 celeste_core::identity::VERSION
             )
         } else {
-            format!("{} {}", celeste_core::identity::NAME, celeste_core::identity::VERSION)
+            format!(
+                "{} {}",
+                celeste_core::identity::NAME,
+                celeste_core::identity::VERSION
+            )
         };
         match self.state.group_name() {
             Some(group) if !group.trim().is_empty() => {
@@ -1455,7 +1758,9 @@ impl CelesteApp {
     }
 
     fn save_column_layout(&self) {
-        let Some(settings) = &self.settings else { return };
+        let Some(settings) = &self.settings else {
+            return;
+        };
         let layout = ColumnId::ALL
             .into_iter()
             .map(|column| {
@@ -1479,11 +1784,18 @@ impl CelesteApp {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let header = ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(celeste_core::identity::NAME).strong().size(crate::theme::TEXT_HEADING));
                 ui.label(
-                    egui::RichText::new(format!("Version {}  |  Windows & Linux", celeste_core::identity::VERSION))
-                        .small()
-                        .weak(),
+                    egui::RichText::new(celeste_core::identity::NAME)
+                        .strong()
+                        .size(crate::theme::TEXT_HEADING),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Version {}  |  Windows & Linux",
+                        celeste_core::identity::VERSION
+                    ))
+                    .small()
+                    .weak(),
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1494,9 +1806,18 @@ impl CelesteApp {
                 } else {
                     crate::theme::WARN
                 };
-                let label = if status.is_empty() { "VRChat: connecting" } else { &status };
+                let label = if status.is_empty() {
+                    "VRChat: connecting"
+                } else {
+                    &status
+                };
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), 28))
+                    .fill(egui::Color32::from_rgba_unmultiplied(
+                        colour.r(),
+                        colour.g(),
+                        colour.b(),
+                        28,
+                    ))
                     .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
                     .inner_margin(egui::Margin::symmetric(10.0, 5.0))
                     .show(ui, |ui| {
@@ -1539,9 +1860,14 @@ impl CelesteApp {
             });
 
             ui.menu_button("Tools", |ui| {
-                if ui.button("Open data folder").on_hover_text("Open the KozyBlake/Celeste data directory").clicked() {
+                if ui
+                    .button("Open data folder")
+                    .on_hover_text("Open the KozyBlake/Celeste data directory")
+                    .clicked()
+                {
                     if let Err(err) = open::that(&self.data_dir) {
-                        self.state.append_cli_output(format!("Could not open data folder: {err}"));
+                        self.state
+                            .append_cli_output(format!("Could not open data folder: {err}"));
                     }
                     ui.close_menu();
                 }
@@ -1564,13 +1890,18 @@ impl CelesteApp {
                 ui.visuals().weak_text_color()
             };
             let button = egui::Button::new(
-                egui::RichText::new(if tts_on { "Voice: On" } else { "Voice: Off" }).color(voice_colour),
+                egui::RichText::new(if tts_on { "Voice: On" } else { "Voice: Off" })
+                    .color(voice_colour),
             );
             if ui.add(button).clicked() {
                 self.state.set_tts_enabled(!tts_on);
                 self.tts.set_paused(tts_on);
             }
-            if ui.button("Skip voice").on_hover_text("Skip the current TTS announcement").clicked() {
+            if ui
+                .button("Skip voice")
+                .on_hover_text("Skip the current TTS announcement")
+                .clicked()
+            {
                 // Routed, not local-only: with announcements going to
                 // Discord there is nothing playing on this machine to kill.
                 self.state.append_cli_output(if self.tts_route.skip() {
@@ -1598,11 +1929,16 @@ impl CelesteApp {
             let help = ui.menu_button("Help", |ui| {
                 let resume_at = self.tutorial_resume_step();
                 if ui
-                    .button(if resume_at.is_some() { "Resume guided tour" } else { "Guided tour" })
+                    .button(if resume_at.is_some() {
+                        "Resume guided tour"
+                    } else {
+                        "Guided tour"
+                    })
                     .clicked()
                 {
                     self.start_tutorial(ui.ctx(), resume_at.unwrap_or(0));
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     ui.close_menu();
                 }
                 if resume_at.is_some() && ui.button("Start tour over").clicked() {
@@ -1610,13 +1946,16 @@ impl CelesteApp {
                         settings.tutorial_progress_step.set(Some(-1), "guided-tour");
                     }
                     self.start_tutorial(ui.ctx(), 0);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     ui.close_menu();
                 }
                 if ui.button("Tour chapters…").clicked() {
+                    self.stop_tutorial_narration();
                     self.tutorial_step = None;
                     self.tutorial_menu = true;
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     ui.close_menu();
                 }
                 if ui.button("Diagnostics").clicked() {
@@ -1630,12 +1969,17 @@ impl CelesteApp {
                 ui.separator();
                 for (label, url) in [
                     ("GitHub repository", celeste_core::identity::GITHUB_URL),
-                    ("VRChat group", "https://vrchat.com/home/group/grp_eb2eb120-67bd-404e-9665-498f567cb56d"),
                     ("License", celeste_core::identity::LICENSE_URL),
                     ("Community API docs", "https://vrchat.community/"),
                     ("VRChat Terms of Service", "https://hello.vrchat.com/legal"),
-                    ("VRChat Privacy Policy", "https://hello.vrchat.com/privacy#7"),
-                    ("VRChat Community Guidelines", "https://hello.vrchat.com/community-guidelines"),
+                    (
+                        "VRChat Privacy Policy",
+                        "https://hello.vrchat.com/privacy#7",
+                    ),
+                    (
+                        "VRChat Community Guidelines",
+                        "https://hello.vrchat.com/community-guidelines",
+                    ),
                 ] {
                     if ui.button(label).clicked() {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(url));
@@ -1659,18 +2003,14 @@ impl CelesteApp {
         self.runtime_handle.spawn(async move {
             let http = http.read().await.clone();
             let Some(http) = http else {
-                state.append_cli_output(
-                    "Sync Discord failed: the Discord bot is not connected.",
-                );
+                state.append_cli_output("Sync Discord failed: the Discord bot is not connected.");
                 return;
             };
             match celeste_discord::commands::register_global_commands_http(&http).await {
                 Ok(count) => state.append_cli_output(format!(
                     "Sync Discord complete: registered {count} global commands."
                 )),
-                Err(error) => state.append_cli_output(format!(
-                    "Sync Discord failed: {error}"
-                )),
+                Err(error) => state.append_cli_output(format!("Sync Discord failed: {error}")),
             }
         });
     }
@@ -1679,7 +2019,9 @@ impl CelesteApp {
     /// toggles this live (`ScarletUI.setCliTabVisible`, `:1374-1385`); the
     /// setting existed here but nothing read it, so the toggle did nothing.
     fn cli_tab_visible(&self) -> bool {
-        self.settings.as_ref().is_none_or(|settings| settings.show_cli_tab.get())
+        self.settings
+            .as_ref()
+            .is_none_or(|settings| settings.show_cli_tab.get())
     }
 
     /// Port of `ScarletUI`'s `DO_NOTHING_ON_CLOSE` + `uiModalExit`
@@ -1757,7 +2099,12 @@ impl CelesteApp {
         if !show_cli && self.tab == Tab::Cli {
             self.tab = Tab::Instance;
         }
-        let tabs = [(Tab::Instance, "Instance"), (Tab::Clients, "Clients"), (Tab::Settings, "Settings"), (Tab::Cli, "CLI")];
+        let tabs = [
+            (Tab::Instance, "Instance"),
+            (Tab::Clients, "Clients"),
+            (Tab::Settings, "Settings"),
+            (Tab::Cli, "CLI"),
+        ];
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (tab, label) in tabs {
@@ -1846,7 +2193,11 @@ impl CelesteApp {
             ColumnId::Performance => {
                 Self::text_cell(
                     ui,
-                    player.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()).unwrap_or(""),
+                    player
+                        .avatar_info
+                        .as_ref()
+                        .and_then(|info| info.performance_rating.as_deref())
+                        .unwrap_or(""),
                 );
             }
             ColumnId::AvatarStats => {
@@ -1857,8 +2208,9 @@ impl CelesteApp {
                         avatar_name: player.avatar_name.clone(),
                         info: player.avatar_info.clone(),
                         note: player.avatar_info_note.clone(),
-                        evidence: celeste_core::report_evidence::has_avatar_evidence(player)
-                            .then(|| celeste_core::report_evidence::render(player, location.as_deref())),
+                        evidence: celeste_core::report_evidence::has_avatar_evidence(player).then(
+                            || celeste_core::report_evidence::render(player, location.as_deref()),
+                        ),
                     });
                 }
             }
@@ -1873,7 +2225,11 @@ impl CelesteApp {
                         .watched_memberships
                         .iter()
                         .any(|m| m.kind == "MALICIOUS" || m.critical);
-                    let label = if worst { format!("⚠ {total}") } else { total.to_string() };
+                    let label = if worst {
+                        format!("⚠ {total}")
+                    } else {
+                        total.to_string()
+                    };
                     if Self::table_button(ui, &label).clicked() {
                         self.watched_groups_open = Some(WatchedGroupsView {
                             player_name: player.name.clone(),
@@ -1884,14 +2240,20 @@ impl CelesteApp {
                 }
             }
             ColumnId::AccAge => {
-                let age = player.account_age.map(format_account_age).unwrap_or_default();
+                let age = player
+                    .account_age
+                    .map(format_account_age)
+                    .unwrap_or_default();
                 Self::text_cell(ui, &age);
             }
             ColumnId::Joined => {
                 Self::text_cell(ui, &player.joined.format("%Y-%m-%d %H:%M:%S").to_string());
             }
             ColumnId::Left => {
-                let left = player.left.map(|l| l.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default();
+                let left = player
+                    .left
+                    .map(|l| l.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_default();
                 Self::text_cell(ui, &left);
             }
             ColumnId::Advisory => {
@@ -1901,17 +2263,28 @@ impl CelesteApp {
                 Self::text_cell(ui, player.age_verification_status.as_deref().unwrap_or(""));
             }
             ColumnId::Rank => {
-                let color =
-                    player.trust_rank.color_rgb().map(|(r, g, b)| egui::Color32::from_rgb(r, g, b)).unwrap_or(egui::Color32::GRAY);
-                ui.add(egui::Label::new(egui::RichText::new(player.trust_rank.label()).color(color)).truncate());
+                let color = player
+                    .trust_rank
+                    .color_rgb()
+                    .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b))
+                    .unwrap_or(egui::Color32::GRAY);
+                ui.add(
+                    egui::Label::new(egui::RichText::new(player.trust_rank.label()).color(color))
+                        .truncate(),
+                );
             }
             ColumnId::Profile => {
                 let response = ui
-                    .add_enabled_ui(external_actions_enabled, |ui| Self::table_button(ui, "Open"))
+                    .add_enabled_ui(external_actions_enabled, |ui| {
+                        Self::table_button(ui, "Open")
+                    })
                     .inner
                     .on_disabled_hover_text("Disabled for temporary tutorial data");
                 if response.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::same_tab(format!("https://vrchat.com/home/user/{}", player.id)));
+                    ui.ctx().open_url(egui::OpenUrl::same_tab(format!(
+                        "https://vrchat.com/home/user/{}",
+                        player.id
+                    )));
                 }
             }
             ColumnId::CopyId => {
@@ -1927,21 +2300,27 @@ impl CelesteApp {
                 if response.clicked() {
                     // Java confirms before banning from the table; so does
                     // this, because a stray click in a row list is easy.
-                    self.group_action_confirm = Some((GroupAction::Ban, player.id.clone(), player.name.clone()));
+                    self.group_action_confirm =
+                        Some((GroupAction::Ban, player.id.clone(), player.name.clone()));
                 }
             }
             ColumnId::Unban => {
                 let response = ui
-                    .add_enabled_ui(external_actions_enabled, |ui| Self::table_button(ui, "Unban"))
+                    .add_enabled_ui(external_actions_enabled, |ui| {
+                        Self::table_button(ui, "Unban")
+                    })
                     .inner
                     .on_disabled_hover_text("Disabled for temporary tutorial data");
                 if response.clicked() {
-                    self.group_action_confirm = Some((GroupAction::Unban, player.id.clone(), player.name.clone()));
+                    self.group_action_confirm =
+                        Some((GroupAction::Unban, player.id.clone(), player.name.clone()));
                 }
             }
             ColumnId::Invite => {
                 let response = ui
-                    .add_enabled_ui(external_actions_enabled, |ui| Self::table_button(ui, "Invite"))
+                    .add_enabled_ui(external_actions_enabled, |ui| {
+                        Self::table_button(ui, "Invite")
+                    })
                     .inner
                     .on_disabled_hover_text("Disabled for temporary tutorial data");
                 if response.clicked() {
@@ -1950,7 +2329,8 @@ impl CelesteApp {
                         .as_ref()
                         .is_some_and(|settings| settings.confirm_group_invite.get());
                     if confirm {
-                        self.group_action_confirm = Some((GroupAction::Invite, player.id.clone(), player.name.clone()));
+                        self.group_action_confirm =
+                            Some((GroupAction::Invite, player.id.clone(), player.name.clone()));
                     } else {
                         self.spawn_group_invite(player.id.clone(), player.name.clone());
                     }
@@ -1976,7 +2356,7 @@ impl CelesteApp {
             .as_ref()
             .and_then(|instance| instance.world_name.clone())
             .unwrap_or_else(|| "Current instance".to_string());
-        Self::card_frame()
+        let instance_card = Self::card_frame()
             .inner_margin(if compact_height {
                 egui::Margin::symmetric(12.0, 7.0)
             } else {
@@ -1984,11 +2364,27 @@ impl CelesteApp {
             })
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(egui::RichText::new("Current instance").small().color(crate::theme::INFO));
-                ui.label(egui::RichText::new(&instance_name).strong().size(crate::theme::TEXT_HEADING));
+                ui.label(
+                    egui::RichText::new("Current instance")
+                        .small()
+                        .color(crate::theme::INFO),
+                );
+                ui.label(
+                    egui::RichText::new(&instance_name)
+                        .strong()
+                        .size(crate::theme::TEXT_HEADING),
+                );
                 if !compact_height {
                     if let Some(instance) = &instance {
-                    ui.add(egui::Label::new(egui::RichText::new(&instance.location).small().weak().monospace()).truncate())
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&instance.location)
+                                    .small()
+                                    .weak()
+                                    .monospace(),
+                            )
+                            .truncate(),
+                        )
                         .on_hover_text(&instance.location);
                     }
                 }
@@ -1997,23 +2393,47 @@ impl CelesteApp {
                     ui.separator();
                     ui.add_space(5.0);
                     ui.horizontal_wrapped(|ui| {
-                        let kind = if instance.is_group_instance { "Group instance" } else { "Public or private instance" };
+                        let kind = if instance.is_group_instance {
+                            "Group instance"
+                        } else {
+                            "Public or private instance"
+                        };
                         ui.label(egui::RichText::new(kind).small().strong());
                         ui.separator();
-                        ui.label(egui::RichText::new(format!("Joined {}", instance.joined.format("%b %-d at %H:%M"))).small().weak());
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Joined {}",
+                                instance.joined.format("%b %-d at %H:%M")
+                            ))
+                            .small()
+                            .weak(),
+                        );
                         ui.separator();
-                        ui.label(egui::RichText::new(format!("{present} present")).color(crate::theme::OK));
+                        ui.label(
+                            egui::RichText::new(format!("{present} present"))
+                                .color(crate::theme::OK),
+                        );
                         if left > 0 {
-                            ui.label(egui::RichText::new(format!("{left} left")).color(crate::theme::TEXT_MUTED));
+                            ui.label(
+                                egui::RichText::new(format!("{left} left"))
+                                    .color(crate::theme::TEXT_MUTED),
+                            );
                         }
                         ui.label(egui::RichText::new(format!("{total} total")).small().weak());
                         if !compact_height {
                             ui.separator();
-                            ui.label(egui::RichText::new("Drag headers to reorder  |  Right-click for columns").small().weak());
+                            ui.label(
+                                egui::RichText::new(
+                                    "Drag headers to reorder  |  Right-click for columns",
+                                )
+                                .small()
+                                .weak(),
+                            );
                         }
                     });
                 }
             });
+        self.tutorial_layout.instance_card = Some(instance_card.response.rect);
         ui.add_space(8.0);
         let column_order = self.column_order.clone();
         let column_widths = self.column_widths.clone();
@@ -2023,7 +2443,9 @@ impl CelesteApp {
         let dim_opacity = self
             .settings
             .as_ref()
-            .map(|settings| 1.0 - (settings.ui_left_player_dim_percent.get() as f32 / 100.0).clamp(0.0, 0.9))
+            .map(|settings| {
+                1.0 - (settings.ui_left_player_dim_percent.get() as f32 / 100.0).clamp(0.0, 0.9)
+            })
             .unwrap_or(0.65);
 
         // Header cells are drag sources *and* drop zones at once: dropping
@@ -2039,169 +2461,218 @@ impl CelesteApp {
         let active_sort = self.table_sort;
         let player_panel_height = ui.available_height();
 
-        Self::card_frame()
-            .show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.set_min_height((player_panel_height - 24.0).max(0.0));
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("Player details").strong().size(crate::theme::TEXT_HEADING));
-            ui.separator();
-            ui.label(egui::RichText::new(format!("{} visible columns", column_order.len())).small().weak());
-        });
-        ui.add_space(8.0);
-        let table_panel_height = ui.available_height();
-        Self::inset_frame()
-            .inner_margin(egui::Margin::same(crate::theme::GAP))
-            .show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.set_min_height((table_panel_height - 12.0).max(0.0));
-        let table_view_width = ui.available_width();
-        let table_view_height = ui.available_height();
-            // `TableBuilder` places `item_spacing.x` between each pair of
-            // columns and reserves the scrollbar width separately from the
-            // declared column widths. Budget for both or the last columns
-            // still land outside the panel even when the widths themselves
-            // add up to `table_view_width`.
-            let inter_column_spacing = ui.spacing().item_spacing.x
-                * column_order.len().saturating_sub(1) as f32;
-            let scrollbar_width = ui.spacing().scroll.allocated_width();
-            let content_width = (table_view_width - inter_column_spacing - scrollbar_width).max(0.0);
-            // Keep the entire roster inside the inner panel. Saved widths
-            // remain the user's preferences, but the on-screen widths are
-            // proportionally compressed to the current viewport. Cells and
-            // headings use ellipses, with full cell values available on
-            // hover.
-            let fitted_widths = fitted_column_widths(&column_order, &column_widths, content_width);
-            let mut table = TableBuilder::new(ui)
-                .striped(true)
-                .min_scrolled_height(table_view_height)
-                .max_scroll_height(table_view_height)
-                .auto_shrink([false, false]);
-            for width in fitted_widths {
-                table = table.column(Column::exact(width).clip(true));
-            }
+        let player_table = Self::card_frame().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.set_min_height((player_panel_height - 24.0).max(0.0));
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("Player details")
+                        .strong()
+                        .size(crate::theme::TEXT_HEADING),
+                );
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("{} visible columns", column_order.len()))
+                        .small()
+                        .weak(),
+                );
+            });
+            ui.add_space(8.0);
+            let table_panel_height = ui.available_height();
+            Self::inset_frame()
+                .inner_margin(egui::Margin::same(crate::theme::GAP))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.set_min_height((table_panel_height - 12.0).max(0.0));
+                    let table_view_width = ui.available_width();
+                    let table_view_height = ui.available_height();
+                    // `TableBuilder` places `item_spacing.x` between each pair of
+                    // columns and reserves the scrollbar width separately from the
+                    // declared column widths. Budget for both or the last columns
+                    // still land outside the panel even when the widths themselves
+                    // add up to `table_view_width`.
+                    let inter_column_spacing =
+                        ui.spacing().item_spacing.x * column_order.len().saturating_sub(1) as f32;
+                    let scrollbar_width = ui.spacing().scroll.allocated_width();
+                    let content_width =
+                        (table_view_width - inter_column_spacing - scrollbar_width).max(0.0);
+                    // Keep the entire roster inside the inner panel. Saved widths
+                    // remain the user's preferences, but the on-screen widths are
+                    // proportionally compressed to the current viewport. Cells and
+                    // headings use ellipses, with full cell values available on
+                    // hover.
+                    let fitted_widths =
+                        fitted_column_widths(&column_order, &column_widths, content_width);
+                    let mut table = TableBuilder::new(ui)
+                        .striped(true)
+                        .min_scrolled_height(table_view_height)
+                        .max_scroll_height(table_view_height)
+                        .auto_shrink([false, false]);
+                    for width in &fitted_widths {
+                        table = table.column(Column::exact(*width).clip(true));
+                    }
 
-            table
-                .header(28.0, |mut header| {
-                    for (index, column) in column_order.iter().enumerate() {
-                        header.col(|ui| {
-                            // A plain label is the drop target. egui's stock
-                            // `dnd_drop_zone` always paints every target as a
-                            // filled widget, which produced the row of little
-                            // grey boxes around otherwise ordinary headings.
-                            let response = ui.dnd_drag_source(
-                                egui::Id::new("instance_column_header").with(index),
-                                index,
-                                |ui| {
-                                    let marker = match active_sort {
-                                        Some(TableSort { column: sorted, ascending: true }) if sorted == *column => " [asc]",
-                                        Some(TableSort { column: sorted, ascending: false }) if sorted == *column => " [desc]",
-                                        _ => "",
-                                    };
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format!("{}{marker}", column.label()))
-                                                .strong()
-                                                .color(crate::theme::TEXT_DIM),
+                    table
+                        .header(28.0, |mut header| {
+                            for (index, column) in column_order.iter().enumerate() {
+                                header.col(|ui| {
+                                    // A plain label is the drop target. egui's stock
+                                    // `dnd_drop_zone` always paints every target as a
+                                    // filled widget, which produced the row of little
+                                    // grey boxes around otherwise ordinary headings.
+                                    let response = ui
+                                        .dnd_drag_source(
+                                            egui::Id::new("instance_column_header").with(index),
+                                            index,
+                                            |ui| {
+                                                let marker = match active_sort {
+                                                    Some(TableSort {
+                                                        column: sorted,
+                                                        ascending: true,
+                                                    }) if sorted == *column => " [asc]",
+                                                    Some(TableSort {
+                                                        column: sorted,
+                                                        ascending: false,
+                                                    }) if sorted == *column => " [desc]",
+                                                    _ => "",
+                                                };
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(format!(
+                                                            "{}{marker}",
+                                                            column.label()
+                                                        ))
+                                                        .strong()
+                                                        .color(crate::theme::TEXT_DIM),
+                                                    )
+                                                    .truncate()
+                                                    .sense(egui::Sense::click_and_drag()),
+                                                );
+                                            },
                                         )
-                                        .truncate()
-                                        .sense(egui::Sense::click_and_drag()),
-                                    );
-                                },
-                            ).response;
-                            if column.sortable() && response.clicked() {
-                                clicked_sort = Some(*column);
-                            }
-                            response.context_menu(|ui| {
-                                if ui.button("Default order").clicked() {
-                                    reset_sort = true;
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                ui.strong("Columns");
-                                for candidate in ColumnId::ALL {
-                                    let mut shown = column_order.contains(&candidate);
-                                    if ui.checkbox(&mut shown, candidate.label()).changed() {
-                                        toggle_column = Some(candidate);
+                                        .response;
+                                    if column.sortable() && response.clicked() {
+                                        clicked_sort = Some(*column);
                                     }
-                                }
-                            });
-                            let resize_id = egui::Id::new("instance_column_resize").with(*column);
-                            let edge = ui.max_rect().right();
-                            let resize_rect = egui::Rect::from_min_max(
-                                egui::pos2(edge - 4.0, ui.max_rect().top()),
-                                egui::pos2(edge + 4.0, ui.max_rect().bottom()),
-                            );
-                            let resize = ui
-                                .interact(resize_rect, resize_id, egui::Sense::drag())
-                                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
-                            if resize.drag_started() {
-                                ui.ctx().data_mut(|data| {
-                                    data.insert_temp(resize_id, column_widths.get(column).copied().unwrap_or_else(|| column.initial_width()));
+                                    response.context_menu(|ui| {
+                                        if ui.button("Default order").clicked() {
+                                            reset_sort = true;
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        ui.strong("Columns");
+                                        for candidate in ColumnId::ALL {
+                                            let mut shown = column_order.contains(&candidate);
+                                            if ui.checkbox(&mut shown, candidate.label()).changed()
+                                            {
+                                                toggle_column = Some(candidate);
+                                            }
+                                        }
+                                    });
+                                    let resize_id =
+                                        egui::Id::new("instance_column_resize").with(*column);
+                                    let edge = ui.max_rect().right();
+                                    let resize_rect = egui::Rect::from_min_max(
+                                        egui::pos2(edge - 4.0, ui.max_rect().top()),
+                                        egui::pos2(edge + 4.0, ui.max_rect().bottom()),
+                                    );
+                                    let resize = ui
+                                        .interact(resize_rect, resize_id, egui::Sense::drag())
+                                        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                                    if resize.drag_started() {
+                                        ui.ctx().data_mut(|data| {
+                                            data.insert_temp(
+                                                resize_id,
+                                                fitted_widths
+                                                    .get(index)
+                                                    .copied()
+                                                    .unwrap_or_else(|| column.initial_width()),
+                                            );
+                                        });
+                                    }
+                                    if resize.dragged() || resize.drag_stopped() {
+                                        let start = ui.ctx().data(|data| {
+                                            data.get_temp::<f32>(resize_id).unwrap_or_else(|| {
+                                                fitted_widths
+                                                    .get(index)
+                                                    .copied()
+                                                    .unwrap_or_else(|| column.initial_width())
+                                            })
+                                        });
+                                        let desired_fitted = (start + resize.drag_delta().x)
+                                            .max(column.fitted_min_width());
+                                        width_update = Some((
+                                            *column,
+                                            preference_for_fitted_width(
+                                                &column_order,
+                                                &column_widths,
+                                                content_width,
+                                                *column,
+                                                desired_fitted,
+                                            ),
+                                            resize.drag_stopped(),
+                                        ));
+                                    }
+                                    if let Some(dragged_from) =
+                                        response.dnd_release_payload::<usize>()
+                                    {
+                                        swap = Some((*dragged_from, index));
+                                    }
                                 });
                             }
-                            if resize.dragged() || resize.drag_stopped() {
-                                let start = ui.ctx().data(|data| {
-                                    data.get_temp::<f32>(resize_id)
-                                        .unwrap_or_else(|| column_widths.get(column).copied().unwrap_or_else(|| column.initial_width()))
+                        })
+                        .body(|mut body| {
+                            for player in &players {
+                                body.row(27.0, |mut row| {
+                                    let departed = player.left.is_some();
+                                    for column in &column_order {
+                                        row.col(|ui| {
+                                            // One line per row: anything too long is
+                                            // clipped with an ellipsis and readable
+                                            // in full on hover, instead of wrapping
+                                            // and pushing the row's height out.
+                                            ui.style_mut().wrap_mode =
+                                                Some(egui::TextWrapMode::Truncate);
+                                            // Java repaints the whole row from the
+                                            // advisory (`ScarletUI.java:762-813`):
+                                            // amber background for flagged pronouns,
+                                            // and the advisory's own colour — or
+                                            // amber — as the foreground. Both were
+                                            // being computed in core and then never
+                                            // read, so a watched user looked exactly
+                                            // like everyone else.
+                                            if let Some(background) = row_background(player) {
+                                                let rect = ui.available_rect_before_wrap();
+                                                ui.painter().rect_filled(rect, 0.0, background);
+                                            }
+                                            if let Some(foreground) = row_foreground(player) {
+                                                ui.visuals_mut().override_text_color =
+                                                    Some(foreground);
+                                            }
+                                            if departed {
+                                                // Someone who has left stays listed
+                                                // (their history is the point) but
+                                                // reads as past tense: sorted below
+                                                // everyone present, and faded by the
+                                                // amount `ui_left_player_dim_percent`
+                                                // asks for.
+                                                ui.set_opacity(dim_opacity);
+                                            }
+                                            self.render_cell(
+                                                ui,
+                                                player,
+                                                *column,
+                                                &display_state,
+                                                !tutorial_demo,
+                                            );
+                                        });
+                                    }
                                 });
-                                width_update = Some((*column, (start + resize.drag_delta().x).max(column.min_width()), resize.drag_stopped()));
-                            }
-                            if let Some(dragged_from) = response.dnd_release_payload::<usize>() {
-                                swap = Some((*dragged_from, index));
                             }
                         });
-                    }
-                })
-                .body(|mut body| {
-                    for player in &players {
-                        body.row(27.0, |mut row| {
-                            let departed = player.left.is_some();
-                            for column in &column_order {
-                                row.col(|ui| {
-                                    // One line per row: anything too long is
-                                    // clipped with an ellipsis and readable
-                                    // in full on hover, instead of wrapping
-                                    // and pushing the row's height out.
-                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                                    // Java repaints the whole row from the
-                                    // advisory (`ScarletUI.java:762-813`):
-                                    // amber background for flagged pronouns,
-                                    // and the advisory's own colour — or
-                                    // amber — as the foreground. Both were
-                                    // being computed in core and then never
-                                    // read, so a watched user looked exactly
-                                    // like everyone else.
-                                    if let Some(background) = row_background(player) {
-                                        let rect = ui.available_rect_before_wrap();
-                                        ui.painter().rect_filled(rect, 0.0, background);
-                                    }
-                                    if let Some(foreground) = row_foreground(player) {
-                                        ui.visuals_mut().override_text_color = Some(foreground);
-                                    }
-                                    if departed {
-                                        // Someone who has left stays listed
-                                        // (their history is the point) but
-                                        // reads as past tense: sorted below
-                                        // everyone present, and faded by the
-                                        // amount `ui_left_player_dim_percent`
-                                        // asks for.
-                                        ui.set_opacity(dim_opacity);
-                                    }
-                                    self.render_cell(
-                                        ui,
-                                        player,
-                                        *column,
-                                        &display_state,
-                                        !tutorial_demo,
-                                    );
-                                });
-                            }
-                        });
-                    }
                 });
-            });
-            });
+        });
+        self.tutorial_layout.player_table = Some(player_table.response.rect);
 
         if let Some((from, to)) = swap {
             if from != to && from < self.column_order.len() && to < self.column_order.len() {
@@ -2216,7 +2687,11 @@ impl CelesteApp {
             }
         }
         if let Some(column) = toggle_column {
-            if let Some(index) = self.column_order.iter().position(|visible| *visible == column) {
+            if let Some(index) = self
+                .column_order
+                .iter()
+                .position(|visible| *visible == column)
+            {
                 if self.column_order.len() > 1 {
                     self.column_order.remove(index);
                 }
@@ -2229,10 +2704,17 @@ impl CelesteApp {
             self.table_sort = None;
         } else if let Some(column) = clicked_sort {
             self.table_sort = Some(match self.table_sort {
-                Some(TableSort { column: active, ascending }) if active == column => {
-                    TableSort { column, ascending: !ascending }
-                }
-                _ => TableSort { column, ascending: true },
+                Some(TableSort {
+                    column: active,
+                    ascending,
+                }) if active == column => TableSort {
+                    column,
+                    ascending: !ascending,
+                },
+                _ => TableSort {
+                    column,
+                    ascending: true,
+                },
             });
         }
     }
@@ -2272,7 +2754,9 @@ impl CelesteApp {
     /// player is wearing, and — when it knows nothing — the honest reason
     /// why, which is the part that matters for a private avatar.
     fn avatar_stats_window(&mut self, ctx: &egui::Context) {
-        let Some(view) = self.avatar_stats_open.clone() else { return };
+        let Some(view) = self.avatar_stats_open.clone() else {
+            return;
+        };
         let mut open = true;
         egui::Window::new(format!("Avatar - {}", view.player_name))
             .collapsible(false)
@@ -2382,7 +2866,9 @@ impl CelesteApp {
     /// — almost everything is invisible. This is the whole set, laid out
     /// by type with the worst first, rather than one run-on string.
     fn watched_groups_window(&mut self, ctx: &egui::Context) {
-        let Some(view) = self.watched_groups_open.as_ref() else { return };
+        let Some(view) = self.watched_groups_open.as_ref() else {
+            return;
+        };
         let sections = celeste_core::watched_membership::group_by_kind(&view.memberships);
         let total = view.memberships.len();
         let player_name = view.player_name.clone();
@@ -2488,7 +2974,8 @@ impl CelesteApp {
 
         if let Some(text) = copy {
             ctx.copy_text(text);
-            self.state.append_cli_output(&format!("Copied {player_name}'s watched groups."));
+            self.state
+                .append_cli_output(&format!("Copied {player_name}'s watched groups."));
         }
         if !open {
             self.watched_groups_open = None;
@@ -2503,7 +2990,9 @@ impl CelesteApp {
     /// window says so — the same avatar loading harmlessly a moment before
     /// an unrelated freeze looks identical from here.
     fn crash_report_window(&mut self, ctx: &egui::Context) {
-        let Some(report) = self.state.crash_report() else { return };
+        let Some(report) = self.state.crash_report() else {
+            return;
+        };
         let mut open = true;
         egui::Window::new("VRChat stopped unexpectedly")
             .collapsible(false)
@@ -2645,7 +3134,9 @@ impl CelesteApp {
     /// The table's Ban action. Same call the `/vrchat-user-ban` command
     /// makes, run on the shared VRChat session.
     fn group_action_confirm_window(&mut self, ctx: &egui::Context) {
-        let Some((action, user_id, display_name)) = self.group_action_confirm.clone() else { return };
+        let Some((action, user_id, display_name)) = self.group_action_confirm.clone() else {
+            return;
+        };
         let mut open = true;
         let mut decided = false;
         let verb = match action {
@@ -2653,22 +3144,36 @@ impl CelesteApp {
             GroupAction::Unban => "Unban",
             GroupAction::Invite => "Invite",
         };
-        let preposition = if action == GroupAction::Invite { "to" } else { "from" };
+        let preposition = if action == GroupAction::Invite {
+            "to"
+        } else {
+            "from"
+        };
         egui::Window::new(format!("{verb} VRChat group user"))
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(format!("{verb} {display_name} {preposition} the configured VRChat group?"));
-                ui.add(egui::Label::new(egui::RichText::new(&user_id).small().monospace().weak()));
+                ui.label(format!(
+                    "{verb} {display_name} {preposition} the configured VRChat group?"
+                ));
+                ui.add(egui::Label::new(
+                    egui::RichText::new(&user_id).small().monospace().weak(),
+                ));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button(verb).clicked() {
                         decided = true;
                         match action {
-                            GroupAction::Ban => self.spawn_group_ban(user_id.clone(), display_name.clone()),
-                            GroupAction::Unban => self.spawn_group_unban(user_id.clone(), display_name.clone()),
-                            GroupAction::Invite => self.spawn_group_invite(user_id.clone(), display_name.clone()),
+                            GroupAction::Ban => {
+                                self.spawn_group_ban(user_id.clone(), display_name.clone())
+                            }
+                            GroupAction::Unban => {
+                                self.spawn_group_unban(user_id.clone(), display_name.clone())
+                            }
+                            GroupAction::Invite => {
+                                self.spawn_group_invite(user_id.clone(), display_name.clone())
+                            }
                         }
                     }
                     if ui.button("Cancel").clicked() {
@@ -2682,14 +3187,22 @@ impl CelesteApp {
     }
 
     fn spawn_group_ban(&mut self, user_id: String, display_name: String) {
-        let Some(settings) = self.settings.clone() else { return };
-        let Some(group_id) = settings.store.get_string("vrchat_group_id").filter(|id| !id.trim().is_empty()) else {
-            self.state.append_cli_output("Ban failed: no VRChat group is configured.");
+        let Some(settings) = self.settings.clone() else {
+            return;
+        };
+        let Some(group_id) = settings
+            .store
+            .get_string("vrchat_group_id")
+            .filter(|id| !id.trim().is_empty())
+        else {
+            self.state
+                .append_cli_output("Ban failed: no VRChat group is configured.");
             return;
         };
         let slot = self.vrchat_slot.clone();
         let state = self.state.clone();
-        self.state.append_cli_output(format!("Banning {display_name}..."));
+        self.state
+            .append_cli_output(format!("Banning {display_name}..."));
         self.runtime_handle.spawn(async move {
             let client = slot.read().await.clone();
             let Some(client) = client else {
@@ -2712,15 +3225,33 @@ impl CelesteApp {
     }
 
     fn spawn_group_action(&mut self, user_id: String, display_name: String, action: GroupAction) {
-        let Some(settings) = self.settings.clone() else { return };
-        let Some(group_id) = settings.store.get_string("vrchat_group_id").filter(|id| !id.trim().is_empty()) else {
-            self.state.append_cli_output(format!("{} failed: no VRChat group is configured.", match action { GroupAction::Unban => "Unban", GroupAction::Invite => "Invite", GroupAction::Ban => "Ban" }));
+        let Some(settings) = self.settings.clone() else {
+            return;
+        };
+        let Some(group_id) = settings
+            .store
+            .get_string("vrchat_group_id")
+            .filter(|id| !id.trim().is_empty())
+        else {
+            self.state.append_cli_output(format!(
+                "{} failed: no VRChat group is configured.",
+                match action {
+                    GroupAction::Unban => "Unban",
+                    GroupAction::Invite => "Invite",
+                    GroupAction::Ban => "Ban",
+                }
+            ));
             return;
         };
         let slot = self.vrchat_slot.clone();
         let state = self.state.clone();
-        let verb = match action { GroupAction::Unban => "Unbanning", GroupAction::Invite => "Inviting", GroupAction::Ban => "Banning" };
-        self.state.append_cli_output(format!("{verb} {display_name}..."));
+        let verb = match action {
+            GroupAction::Unban => "Unbanning",
+            GroupAction::Invite => "Inviting",
+            GroupAction::Ban => "Banning",
+        };
+        self.state
+            .append_cli_output(format!("{verb} {display_name}..."));
         self.runtime_handle.spawn(async move {
             let client = slot.read().await.clone();
             let Some(client) = client else {
@@ -2728,13 +3259,30 @@ impl CelesteApp {
                 return;
             };
             let result = match action {
-                GroupAction::Unban => client.unban_from_group(&group_id, &user_id).await.map(|_| ()),
+                GroupAction::Unban => client
+                    .unban_from_group(&group_id, &user_id)
+                    .await
+                    .map(|_| ()),
                 GroupAction::Invite => client.create_group_invite(&group_id, &user_id, true).await,
                 GroupAction::Ban => client.ban_from_group(&group_id, &user_id).await.map(|_| ()),
             };
             match result {
-                Ok(()) => state.append_cli_output(format!("{} {display_name}.", match action { GroupAction::Unban => "Unbanned", GroupAction::Invite => "Invited", GroupAction::Ban => "Banned" })),
-                Err(err) => state.append_cli_output(format!("Failed to {} {display_name}: {err}", match action { GroupAction::Unban => "unban", GroupAction::Invite => "invite", GroupAction::Ban => "ban" })),
+                Ok(()) => state.append_cli_output(format!(
+                    "{} {display_name}.",
+                    match action {
+                        GroupAction::Unban => "Unbanned",
+                        GroupAction::Invite => "Invited",
+                        GroupAction::Ban => "Banned",
+                    }
+                )),
+                Err(err) => state.append_cli_output(format!(
+                    "Failed to {} {display_name}: {err}",
+                    match action {
+                        GroupAction::Unban => "unban",
+                        GroupAction::Invite => "invite",
+                        GroupAction::Ban => "ban",
+                    }
+                )),
             }
         });
     }
@@ -2753,11 +3301,13 @@ impl CelesteApp {
                 Ok(Err(error)) => {
                     self.create_instance_rx = None;
                     self.create_instance_error = Some(error.clone());
-                    self.state.append_cli_output(format!("Create instance failed: {error}"));
+                    self.state
+                        .append_cli_output(format!("Create instance failed: {error}"));
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.create_instance_rx = None;
-                    self.create_instance_error = Some("The instance creation task stopped unexpectedly.".into());
+                    self.create_instance_error =
+                        Some("The instance creation task stopped unexpectedly.".into());
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
@@ -2827,24 +3377,40 @@ impl CelesteApp {
                         if ui.button("Cancel").clicked() { cancel = true; }
                     });
                 });
-            if cancel { open = false; }
+            if cancel {
+                open = false;
+            }
             self.create_instance_open = open;
-            if submit { self.start_create_instance(); }
+            if submit {
+                self.start_create_instance();
+            }
         }
 
         if let Some(created) = self.created_instance.clone() {
             let mut open = true;
-            egui::Window::new("VRChat instance created").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-                ui.label(&created.message);
-                ui.hyperlink_to("Open instance on VRChat", &created.link);
-                ui.horizontal(|ui| {
-                    if ui.button("Open in browser").clicked() {
-                        if let Err(error) = open::that(&created.link) { self.state.append_cli_output(format!("Could not open instance link: {error}")); }
-                    }
-                    if ui.button("Copy link").clicked() { ui.ctx().copy_text(created.link.clone()); }
+            egui::Window::new("VRChat instance created")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(&created.message);
+                    ui.hyperlink_to("Open instance on VRChat", &created.link);
+                    ui.horizontal(|ui| {
+                        if ui.button("Open in browser").clicked() {
+                            if let Err(error) = open::that(&created.link) {
+                                self.state.append_cli_output(format!(
+                                    "Could not open instance link: {error}"
+                                ));
+                            }
+                        }
+                        if ui.button("Copy link").clicked() {
+                            ui.ctx().copy_text(created.link.clone());
+                        }
+                    });
                 });
-            });
-            if !open { self.created_instance = None; }
+            if !open {
+                self.created_instance = None;
+            }
         }
     }
 
@@ -2854,17 +3420,26 @@ impl CelesteApp {
             self.create_instance_error = Some("Paste a valid VRChat world URL or wrld_ ID.".into());
             return;
         };
-        if let Err(error) = validate_instance_display_name(&self.create_instance_form.display_name) {
+        if let Err(error) = validate_instance_display_name(&self.create_instance_form.display_name)
+        {
             self.create_instance_error = Some(error);
             return;
         }
         let group_id = if self.create_instance_form.kind.group() {
-            let Some(id) = self.settings.as_ref().and_then(|s| s.store.get_string("vrchat_group_id")).filter(|id| !id.trim().is_empty()) else {
-                self.create_instance_error = Some("No VRChat group ID is configured in Settings.".into());
+            let Some(id) = self
+                .settings
+                .as_ref()
+                .and_then(|s| s.store.get_string("vrchat_group_id"))
+                .filter(|id| !id.trim().is_empty())
+            else {
+                self.create_instance_error =
+                    Some("No VRChat group ID is configured in Settings.".into());
                 return;
             };
             Some(id)
-        } else { None };
+        } else {
+            None
+        };
 
         let form = self.create_instance_form.clone();
         let slot = self.vrchat_slot.clone();
@@ -2915,11 +3490,13 @@ impl CelesteApp {
     /// and import it over the current watched groups.
     fn import_groups_from_file(&mut self) {
         if self.import_groups_file_rx.is_some() {
-            self.state.append_cli_output("Import groups: a file picker is already open.");
+            self.state
+                .append_cli_output("Import groups: a file picker is already open.");
             return;
         }
 
-        self.state.append_cli_output("Import groups: opening file picker...");
+        self.state
+            .append_cli_output("Import groups: opening file picker...");
         let (tx, rx) = std::sync::mpsc::channel();
         self.runtime_handle.spawn(async move {
             // The synchronous rfd API drives the XDG portal from egui's UI
@@ -2964,16 +3541,20 @@ impl CelesteApp {
         } else if lower.contains(".json") {
             "json"
         } else {
-            self.state.append_cli_output("Import groups: unrecognized file type (expected .csv or .json in the URL).");
+            self.state.append_cli_output(
+                "Import groups: unrecognized file type (expected .csv or .json in the URL).",
+            );
             return;
         };
 
-        self.state.append_cli_output(format!("Import groups: fetching {url}..."));
+        self.state
+            .append_cli_output(format!("Import groups: fetching {url}..."));
         let (tx, rx) = std::sync::mpsc::channel();
         self.runtime_handle.spawn(async move {
             // 8 MiB is far beyond any real watched-group list and keeps a
             // hostile response from exhausting memory.
-            let result = celeste_discord::url_guard::download_public_text(&url, 8 * 1024 * 1024).await;
+            let result =
+                celeste_discord::url_guard::download_public_text(&url, 8 * 1024 * 1024).await;
             let _ = tx.send(result);
         });
         self.import_groups_rx = Some((extension.to_string(), rx));
@@ -2986,13 +3567,19 @@ impl CelesteApp {
             "csv" => self.watched_groups.import_legacy_csv(contents, true),
             "json" => self.watched_groups.import_json(contents, true),
             other => {
-                self.state.append_cli_output(format!("Import groups: unrecognized file type \"{other}\"."));
+                self.state.append_cli_output(format!(
+                    "Import groups: unrecognized file type \"{other}\"."
+                ));
                 return;
             }
         };
         match result {
-            Ok(count) => self.state.append_cli_output(format!("Imported {count} watched group(s) from {source}.")),
-            Err(err) => self.state.append_cli_output(format!("Import groups failed ({source}): {err}")),
+            Ok(count) => self
+                .state
+                .append_cli_output(format!("Imported {count} watched group(s) from {source}.")),
+            Err(err) => self
+                .state
+                .append_cli_output(format!("Import groups failed ({source}): {err}")),
         }
     }
 
@@ -3008,11 +3595,14 @@ impl CelesteApp {
                 .show(ctx, |ui| {
                     ui.label("URL of a CSV or JSON watched-group list:");
                     let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.import_groups_url).desired_width(420.0).hint_text("https://..."),
+                        egui::TextEdit::singleline(&mut self.import_groups_url)
+                            .desired_width(420.0)
+                            .hint_text("https://..."),
                     );
                     ui.horizontal(|ui| {
                         submit = ui.button("Import").clicked()
-                            || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                            || (response.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                         if ui.button("Cancel").clicked() {
                             self.import_groups_url.clear();
                             self.import_groups_url_open = false;
@@ -3043,7 +3633,9 @@ impl CelesteApp {
                             self.apply_group_import(&extension, &contents, &source);
                         }
                         Ok(None) => self.state.append_cli_output("Import groups: canceled."),
-                        Err(err) => self.state.append_cli_output(format!("Import groups failed: {err}")),
+                        Err(err) => self
+                            .state
+                            .append_cli_output(format!("Import groups failed: {err}")),
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -3063,7 +3655,9 @@ impl CelesteApp {
                     self.import_groups_rx = None;
                     match result {
                         Ok(text) => self.apply_group_import(&extension, text.as_bytes(), "the URL"),
-                        Err(err) => self.state.append_cli_output(format!("Import groups failed: {err}")),
+                        Err(err) => self
+                            .state
+                            .append_cli_output(format!("Import groups failed: {err}")),
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -3099,7 +3693,10 @@ impl CelesteApp {
     /// Intentional sections based on Java's `SETTINGS_SECTIONS`, while the
     /// six-category sidebar remains the more compact Rust navigation.
     fn setting_group(id: &str) -> &'static str {
-        if matches!(id, "ui_language" | "ui_left_player_dim_percent" | "ui_accent_headers") {
+        if matches!(
+            id,
+            "ui_language" | "ui_left_player_dim_percent" | "ui_accent_headers"
+        ) {
             "Appearance"
         } else if id.starts_with("ui_")
             || matches!(
@@ -3112,7 +3709,10 @@ impl CelesteApp {
         {
             "Interface"
         } else if id.starts_with("enforce_instances")
-            || matches!(id, "vrchat_client_launch_on_instance_create" | "instance_follow_fast_poll_seconds")
+            || matches!(
+                id,
+                "vrchat_client_launch_on_instance_create" | "instance_follow_fast_poll_seconds"
+            )
         {
             "Instance enforcement"
         } else if id.starts_with("advisory_") {
@@ -3195,7 +3795,7 @@ impl CelesteApp {
                 "appearance ui scale accent colour color pronoun validation good bad list reload"
             }
             SettingCategory::System => {
-                "system data folder open move import scarlet legacy migration cache cleanup restart celeste reset vrchat credentials session"
+                "system data folder open move import scarlet legacy migration cache cleanup restart celeste reset vrchat credentials session linux desktop application launcher shortcut menu install"
             }
             SettingCategory::Notifications => {
                 "audio sound output device speaker headphones mixer control panel windows settings pavucontrol pipewire pulse tts"
@@ -3222,22 +3822,61 @@ impl CelesteApp {
         )
     }
 
-    fn render_notification_matrix(ui: &mut egui::Ui, descriptors: &[std::sync::Arc<dyn SettingDescriptor>]) {
+    fn render_notification_matrix(
+        ui: &mut egui::Ui,
+        descriptors: &[std::sync::Arc<dyn SettingDescriptor>],
+    ) {
         const ROWS: [(&str, Option<&str>, Option<&str>); 9] = [
-            ("Watched user", Some("tts_announce_watched_users"), Some("toast_notify_watched_users")),
-            ("Watched group", Some("tts_announce_watched_groups"), Some("toast_notify_watched_groups")),
-            ("Watched avatar", Some("tts_announce_watched_avatars"), Some("toast_notify_watched_avatars")),
-            ("New player", Some("tts_announce_new_players"), Some("toast_notify_new_players")),
-            ("Mixed-character name", Some("tts_announce_mixed_character_names"), Some("toast_notify_mixed_character_names")),
-            ("Vote to kick", Some("tts_announce_votes_to_kick"), Some("toast_notify_votes_to_kick")),
-            ("Suspicious pronouns", Some("tts_announce_suspicious_pronouns"), Some("toast_notify_suspicious_pronouns")),
+            (
+                "Watched user",
+                Some("tts_announce_watched_users"),
+                Some("toast_notify_watched_users"),
+            ),
+            (
+                "Watched group",
+                Some("tts_announce_watched_groups"),
+                Some("toast_notify_watched_groups"),
+            ),
+            (
+                "Watched avatar",
+                Some("tts_announce_watched_avatars"),
+                Some("toast_notify_watched_avatars"),
+            ),
+            (
+                "New player",
+                Some("tts_announce_new_players"),
+                Some("toast_notify_new_players"),
+            ),
+            (
+                "Mixed-character name",
+                Some("tts_announce_mixed_character_names"),
+                Some("toast_notify_mixed_character_names"),
+            ),
+            (
+                "Vote to kick",
+                Some("tts_announce_votes_to_kick"),
+                Some("toast_notify_votes_to_kick"),
+            ),
+            (
+                "Suspicious pronouns",
+                Some("tts_announce_suspicious_pronouns"),
+                Some("toast_notify_suspicious_pronouns"),
+            ),
             ("Moderation action", None, Some("toast_notify_moderation")),
             ("Staff activity", None, Some("toast_notify_staff")),
         ];
         let find = |id: &str| descriptors.iter().find(|descriptor| descriptor.id() == id);
         Self::card_frame().show(ui, |ui| {
-            ui.label(egui::RichText::new("Event notifications").strong().size(crate::theme::TEXT_HEADING));
-            ui.label(egui::RichText::new("Choose how each event should get your attention.").small().weak());
+            ui.label(
+                egui::RichText::new("Event notifications")
+                    .strong()
+                    .size(crate::theme::TEXT_HEADING),
+            );
+            ui.label(
+                egui::RichText::new("Choose how each event should get your attention.")
+                    .small()
+                    .weak(),
+            );
             ui.add_space(8.0);
             egui::Grid::new("notification_matrix")
                 .num_columns(3)
@@ -3309,7 +3948,9 @@ impl CelesteApp {
                 ui.separator();
                 ui.label("Celeste identifies each client by its numeric VRChat --profile value.");
                 ui.separator();
-                ui.label("A VRChat-wide API outage pauses recovery instead of restarting every client.");
+                ui.label(
+                    "A VRChat-wide API outage pauses recovery instead of restarting every client.",
+                );
                 ui.separator();
                 ui.label("Automatic instance replacement is opt-in per slot.");
             });
@@ -3453,7 +4094,8 @@ impl CelesteApp {
                         Some(location) => slot.desired_location = location,
                         None => {
                             self.managed_client_error = Some(
-                                "Paste a full wrld_…:instance… location or VRChat launch URL.".into(),
+                                "Paste a full wrld_…:instance… location or VRChat launch URL."
+                                    .into(),
                             );
                             return;
                         }
@@ -3464,7 +4106,8 @@ impl CelesteApp {
                         Some(world) => slot.template.world_id = world,
                         None => {
                             self.managed_client_error = Some(
-                                "The replacement template needs a valid wrld_ ID or world URL.".into(),
+                                "The replacement template needs a valid wrld_ ID or world URL."
+                                    .into(),
                             );
                             return;
                         }
@@ -3507,9 +4150,9 @@ impl CelesteApp {
             self.managed_profile_pids.clear();
             self.managed_profile_scan_at = None;
         } else {
-            let scan_due = self.managed_profile_scan_at.is_none_or(|last| {
-                last.elapsed() >= std::time::Duration::from_secs(3)
-            });
+            let scan_due = self
+                .managed_profile_scan_at
+                .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(3));
             if scan_due {
                 self.managed_profile_pids =
                     celeste_vrchat::launch::profile_pids_for(&enabled_profiles);
@@ -3526,17 +4169,37 @@ impl CelesteApp {
                 Self::card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(&slot.label).strong().size(crate::theme::TEXT_HEADING));
+                            ui.label(
+                                egui::RichText::new(&slot.label)
+                                    .strong()
+                                    .size(crate::theme::TEXT_HEADING),
+                            );
                             let account = if slot.expected_display_name.trim().is_empty() {
                                 slot.expected_user_id.as_str()
                             } else {
                                 slot.expected_display_name.as_str()
                             };
-                            ui.label(egui::RichText::new(format!("Profile {}  |  {}", slot.profile, if account.is_empty() { "identity check disabled" } else { account })).small().weak());
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Profile {}  |  {}",
+                                    slot.profile,
+                                    if account.is_empty() {
+                                        "identity check disabled"
+                                    } else {
+                                        account
+                                    }
+                                ))
+                                .small()
+                                .weak(),
+                            );
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.colored_label(
-                                if slot.enabled { crate::theme::OK } else { crate::theme::TEXT_MUTED },
+                                if slot.enabled {
+                                    crate::theme::OK
+                                } else {
+                                    crate::theme::TEXT_MUTED
+                                },
                                 if slot.enabled { "Managed" } else { "Disabled" },
                             );
                         });
@@ -3553,28 +4216,58 @@ impl CelesteApp {
                                 .get(&slot.profile)
                                 .map(Vec::as_slice)
                                 .unwrap_or_default();
-                            ui.label(if pids.is_empty() { "Process stopped".into() } else { format!("PID {}", pids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")) });
+                            ui.label(if pids.is_empty() {
+                                "Process stopped".into()
+                            } else {
+                                format!(
+                                    "PID {}",
+                                    pids.iter()
+                                        .map(u32::to_string)
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )
+                            });
                         } else {
                             ui.weak("Process monitoring off");
                         }
                     });
                     if !slot.desired_location.is_empty() {
-                        ui.add(egui::Label::new(egui::RichText::new(&slot.desired_location).monospace().small()).truncate())
-                            .on_hover_text(&slot.desired_location);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&slot.desired_location)
+                                    .monospace()
+                                    .small(),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&slot.desired_location);
                     }
                     if !slot.last_error.is_empty() {
                         ui.colored_label(crate::theme::WARN, &slot.last_error);
                     }
                     ui.add_space(7.0);
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Edit").clicked() { edit = Some(slot.clone()); }
-                        if ui.button(if slot.enabled { "Disable" } else { "Enable" }).clicked() {
+                        if ui.button("Edit").clicked() {
+                            edit = Some(slot.clone());
+                        }
+                        if ui
+                            .button(if slot.enabled { "Disable" } else { "Enable" })
+                            .clicked()
+                        {
                             toggle = Some(slot.clone());
                         }
-                        if ui.button("Stop & disable").on_hover_text("Stops only this numeric VRChat profile").clicked() {
+                        if ui
+                            .button("Stop & disable")
+                            .on_hover_text("Stops only this numeric VRChat profile")
+                            .clicked()
+                        {
                             stop = Some(slot.clone());
                         }
-                        if ui.button("Forget slot").on_hover_text("Stops managing it; does not close VRChat").clicked() {
+                        if ui
+                            .button("Forget slot")
+                            .on_hover_text("Stops managing it; does not close VRChat")
+                            .clicked()
+                        {
                             remove = Some(slot.id.clone());
                         }
                     });
@@ -3629,7 +4322,7 @@ impl CelesteApp {
             })
             .collect();
 
-        egui::SidePanel::left("settings_categories")
+        let settings_sidebar = egui::SidePanel::left("settings_categories")
             .resizable(false)
             .exact_width(176.0)
             .frame(
@@ -3638,232 +4331,259 @@ impl CelesteApp {
                     .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
             .show_inside(ui, |ui| {
-            ui.label(egui::RichText::new("SETTINGS").strong().small().weak());
-            ui.add_space(5.0);
-            for category in SettingCategory::ALL {
-                let mut count = visible.iter().filter(|d| d.category() == category).count();
-                // Count the category's action card as an available result.
-                // This avoids labels such as "System (0)" while that page
-                // contains important controls including legacy import.
-                if (query.is_empty() && Self::has_settings_actions(category))
-                    || (!query.is_empty() && Self::settings_action_matches(category, &query))
-                {
-                    count += 1;
-                }
-                let label = if count == 0 {
-                    egui::RichText::new(format!("{}  ({count})", category.label())).weak()
-                } else {
-                    egui::RichText::new(format!("{}  ({count})", category.label()))
-                };
-                let selected = self.settings_category == category;
-                let response = ui.add_sized(
-                    [ui.available_width(), 32.0],
-                    egui::Button::new(label)
-                        .selected(selected)
-                        .stroke(egui::Stroke::NONE),
-                );
-                if response.clicked() {
-                    // Leaving the category destroys every text field in
-                    // it, and egui delivers no focus-loss event for a
-                    // widget that simply stops being drawn — so anything
-                    // typed and not yet committed would vanish. Write it
-                    // before navigating away.
-                    self.flush_pending_setting_edits();
-                    Self::activate_settings_category(
-                        &mut self.settings_category,
-                        &mut self.settings_search,
-                        category,
+                ui.label(egui::RichText::new("SETTINGS").strong().small().weak());
+                ui.add_space(5.0);
+                for category in SettingCategory::ALL {
+                    let mut count = visible.iter().filter(|d| d.category() == category).count();
+                    // Count the category's action card as an available result.
+                    // This avoids labels such as "System (0)" while that page
+                    // contains important controls including legacy import.
+                    if (query.is_empty() && Self::has_settings_actions(category))
+                        || (!query.is_empty() && Self::settings_action_matches(category, &query))
+                    {
+                        count += 1;
+                    }
+                    let label = if count == 0 {
+                        egui::RichText::new(format!("{}  ({count})", category.label())).weak()
+                    } else {
+                        egui::RichText::new(format!("{}  ({count})", category.label()))
+                    };
+                    let selected = self.settings_category == category;
+                    let response = ui.add_sized(
+                        [ui.available_width(), 32.0],
+                        egui::Button::new(label)
+                            .selected(selected)
+                            .stroke(egui::Stroke::NONE),
                     );
+                    if response.clicked() {
+                        // Leaving the category destroys every text field in
+                        // it, and egui delivers no focus-loss event for a
+                        // widget that simply stops being drawn — so anything
+                        // typed and not yet committed would vanish. Write it
+                        // before navigating away.
+                        self.flush_pending_setting_edits();
+                        Self::activate_settings_category(
+                            &mut self.settings_category,
+                            &mut self.settings_search,
+                            category,
+                        );
+                    }
                 }
-            }
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(5.0);
-            ui.label(
-                egui::RichText::new("Unavailable features are hidden.")
-                    .small()
-                    .weak(),
-            );
-        });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(5.0);
+                ui.label(
+                    egui::RichText::new("Unavailable features are hidden.")
+                        .small()
+                        .weak(),
+                );
+            });
+        self.tutorial_layout.settings_sidebar = Some(settings_sidebar.response.rect);
 
-        egui::CentralPanel::default()
+        let settings_content = egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
                     .fill(crate::theme::INK)
                     .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
             .show_inside(ui, |ui| {
-            let category = self.settings_category;
+                let category = self.settings_category;
 
-            ui.horizontal(|ui| {
-                ui.heading(category.label());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // The field needs a stable id of its own. egui derives
-                    // one from the widget's position in the layout
-                    // otherwise, and the "Clear" button below is
-                    // conditional: typing the first character makes it
-                    // appear, which shifts the field, which changes its
-                    // derived id — so egui saw a different widget and took
-                    // the keyboard focus away after exactly one keystroke.
-                    //
-                    // Drawn before the button as well, so that in this
-                    // right-to-left layout the field keeps the same
-                    // position whether or not the button is there, and
-                    // doesn't jump sideways as you type.
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.settings_search)
-                            .id(settings_search_id())
-                            .desired_width(220.0)
-                            .hint_text("Search all settings"),
-                    );
-                    if !self.settings_search.is_empty()
-                        && ui.button("Clear").on_hover_text("Clear search").clicked()
-                    {
-                        self.settings_search.clear();
-                        // Hand focus back rather than leaving the caret
-                        // nowhere after the button disappears.
-                        ui.memory_mut(|memory| memory.request_focus(settings_search_id()));
-                    }
-                });
-            });
-            ui.separator();
-
-            // A search looks across every category; otherwise this is the
-            // selected one.
-            let mut rows: Vec<_> = if query.is_empty() {
-                visible.iter().filter(|d| d.category() == category).copied().collect()
-            } else {
-                visible.clone()
-            };
-            let show_notification_matrix = query.is_empty() && category == SettingCategory::Notifications;
-            let matching_action_categories: Vec<_> = if query.is_empty() {
-                Vec::new()
-            } else {
-                SettingCategory::ALL
-                    .into_iter()
-                    .filter(|category| Self::settings_action_matches(*category, &query))
-                    .collect()
-            };
-            if show_notification_matrix {
-                rows.retain(|descriptor| !Self::notification_matrix_id(descriptor.id()));
-            }
-
-            const SECTION_ORDER: [&str; 15] = [
-                "Appearance",
-                "Interface",
-                "Instance enforcement",
-                "Moderation",
-                "Advisories",
-                "Text to speech",
-                "Desktop notifications",
-                "Discord",
-                "Verification",
-                "Outstanding moderation",
-                "Avatar search",
-                "Cache cleanup",
-                "VRChat credentials",
-                "CLI",
-                "General",
-            ];
-            rows.sort_by_key(|descriptor| {
-                SECTION_ORDER
-                    .iter()
-                    .position(|section| *section == Self::setting_group(descriptor.id()))
-                    .unwrap_or(SECTION_ORDER.len())
-            });
-
-            if rows.is_empty()
-                && !show_notification_matrix
-                && matching_action_categories.is_empty()
-            {
-                ui.add_space(12.0);
-                ui.weak(if query.is_empty() {
-                    "No settings in this category.".to_string()
-                } else {
-                    format!("Nothing matches \"{}\".", self.settings_search.trim())
-                });
-                return;
-            }
-
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                if show_notification_matrix {
-                    ui.add_space(10.0);
-                    Self::render_notification_matrix(ui, &all);
-                    ui.add_space(12.0);
-                }
-
-                let mut start = 0;
-                while start < rows.len() {
-                    let group = Self::setting_group(rows[start].id());
-                    let mut end = start + 1;
-                    while end < rows.len() && Self::setting_group(rows[end].id()) == group {
-                        end += 1;
-                    }
-                    Self::card_frame().show(ui, |ui| {
-                        ui.label(egui::RichText::new(group).strong().size(crate::theme::TEXT_HEADING));
-                        ui.add_space(5.0);
-                        for (offset, descriptor) in rows[start..end].iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.set_width((ui.available_width() - CONTROL_WIDTH).max(120.0));
-                                    ui.label(descriptor.name());
-                                    // The raw id used to be printed here.
-                                    // That tells you how the setting is
-                                    // stored — the one thing someone
-                                    // deciding whether to change it does
-                                    // not need — while leaving "what
-                                    // happens if I turn this on?"
-                                    // unanswered. The description answers
-                                    // it; the id stays on hover, where it
-                                    // is still useful for `/settings edit`.
-                                    let hover = format!(
-                                        "{}\nUse this id with /settings edit in Discord",
-                                        descriptor.id()
-                                    );
-                                    if let Some(description) =
-                                        celeste_core::settings::help::describe(descriptor.id())
-                                    {
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(description)
-                                                    .size(crate::theme::TEXT_SM)
-                                                    .color(crate::theme::TEXT_MUTED),
-                                            )
-                                            .wrap(),
-                                        )
-                                        .on_hover_text(hover);
-                                    }
-                                });
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    self.render_setting_control(ui, descriptor);
-                                });
-                            });
-                            if offset + 1 < end - start {
-                                ui.add_space(3.0);
-                                ui.separator();
-                                ui.add_space(3.0);
-                            }
+                ui.horizontal(|ui| {
+                    ui.heading(category.label());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // The field needs a stable id of its own. egui derives
+                        // one from the widget's position in the layout
+                        // otherwise, and the "Clear" button below is
+                        // conditional: typing the first character makes it
+                        // appear, which shifts the field, which changes its
+                        // derived id — so egui saw a different widget and took
+                        // the keyboard focus away after exactly one keystroke.
+                        //
+                        // Drawn before the button as well, so that in this
+                        // right-to-left layout the field keeps the same
+                        // position whether or not the button is there, and
+                        // doesn't jump sideways as you type.
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.settings_search)
+                                .id(settings_search_id())
+                                .desired_width(220.0)
+                                .hint_text("Search all settings"),
+                        );
+                        if !self.settings_search.is_empty()
+                            && ui.button("Clear").on_hover_text("Clear search").clicked()
+                        {
+                            self.settings_search.clear();
+                            // Hand focus back rather than leaving the caret
+                            // nowhere after the button disappears.
+                            ui.memory_mut(|memory| memory.request_focus(settings_search_id()));
                         }
                     });
-                    ui.add_space(10.0);
-                    start = end;
-                }
-                if query.is_empty() {
-                    self.render_settings_actions(ui, category);
+                });
+                ui.separator();
+
+                // A search looks across every category; otherwise this is the
+                // selected one.
+                let mut rows: Vec<_> = if query.is_empty() {
+                    visible
+                        .iter()
+                        .filter(|d| d.category() == category)
+                        .copied()
+                        .collect()
                 } else {
-                    for action_category in matching_action_categories {
-                        self.render_settings_actions(ui, action_category);
-                    }
+                    visible.clone()
+                };
+                let show_notification_matrix =
+                    query.is_empty() && category == SettingCategory::Notifications;
+                let matching_action_categories: Vec<_> = if query.is_empty() {
+                    Vec::new()
+                } else {
+                    SettingCategory::ALL
+                        .into_iter()
+                        .filter(|category| Self::settings_action_matches(*category, &query))
+                        .collect()
+                };
+                if show_notification_matrix {
+                    rows.retain(|descriptor| !Self::notification_matrix_id(descriptor.id()));
                 }
-                ui.add_space(4.0);
+
+                const SECTION_ORDER: [&str; 15] = [
+                    "Appearance",
+                    "Interface",
+                    "Instance enforcement",
+                    "Moderation",
+                    "Advisories",
+                    "Text to speech",
+                    "Desktop notifications",
+                    "Discord",
+                    "Verification",
+                    "Outstanding moderation",
+                    "Avatar search",
+                    "Cache cleanup",
+                    "VRChat credentials",
+                    "CLI",
+                    "General",
+                ];
+                rows.sort_by_key(|descriptor| {
+                    SECTION_ORDER
+                        .iter()
+                        .position(|section| *section == Self::setting_group(descriptor.id()))
+                        .unwrap_or(SECTION_ORDER.len())
+                });
+
+                if rows.is_empty()
+                    && !show_notification_matrix
+                    && matching_action_categories.is_empty()
+                {
+                    ui.add_space(12.0);
+                    ui.weak(if query.is_empty() {
+                        "No settings in this category.".to_string()
+                    } else {
+                        format!("Nothing matches \"{}\".", self.settings_search.trim())
+                    });
+                    return;
+                }
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if show_notification_matrix {
+                            ui.add_space(10.0);
+                            Self::render_notification_matrix(ui, &all);
+                            ui.add_space(12.0);
+                        }
+
+                        let mut start = 0;
+                        while start < rows.len() {
+                            let group = Self::setting_group(rows[start].id());
+                            let mut end = start + 1;
+                            while end < rows.len() && Self::setting_group(rows[end].id()) == group {
+                                end += 1;
+                            }
+                            Self::card_frame().show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(group)
+                                        .strong()
+                                        .size(crate::theme::TEXT_HEADING),
+                                );
+                                ui.add_space(5.0);
+                                for (offset, descriptor) in rows[start..end].iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.set_width(
+                                                (ui.available_width() - CONTROL_WIDTH).max(120.0),
+                                            );
+                                            ui.label(descriptor.name());
+                                            // The raw id used to be printed here.
+                                            // That tells you how the setting is
+                                            // stored — the one thing someone
+                                            // deciding whether to change it does
+                                            // not need — while leaving "what
+                                            // happens if I turn this on?"
+                                            // unanswered. The description answers
+                                            // it; the id stays on hover, where it
+                                            // is still useful for `/settings edit`.
+                                            let hover = format!(
+                                                "{}\nUse this id with /settings edit in Discord",
+                                                descriptor.id()
+                                            );
+                                            if let Some(description) =
+                                                celeste_core::settings::help::describe(
+                                                    descriptor.id(),
+                                                )
+                                            {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(description)
+                                                            .size(crate::theme::TEXT_SM)
+                                                            .color(crate::theme::TEXT_MUTED),
+                                                    )
+                                                    .wrap(),
+                                                )
+                                                .on_hover_text(hover);
+                                            }
+                                        });
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                self.render_setting_control(ui, descriptor);
+                                            },
+                                        );
+                                    });
+                                    if offset + 1 < end - start {
+                                        ui.add_space(3.0);
+                                        ui.separator();
+                                        ui.add_space(3.0);
+                                    }
+                                }
+                            });
+                            ui.add_space(10.0);
+                            start = end;
+                        }
+                        if query.is_empty() {
+                            self.render_settings_actions(ui, category);
+                        } else {
+                            for action_category in matching_action_categories {
+                                self.render_settings_actions(ui, action_category);
+                            }
+                        }
+                        ui.add_space(4.0);
+                    });
             });
-        });
+        self.tutorial_layout.settings_content = Some(settings_content.response.rect);
     }
 
     /// Java registers these as `FileValuedVoid` rows. They are UI actions,
     /// not stored values, so keep them beside the registry-backed controls.
     fn render_settings_actions(&mut self, ui: &mut egui::Ui, category: SettingCategory) {
-        if !matches!(category, SettingCategory::General | SettingCategory::System | SettingCategory::Notifications | SettingCategory::Discord | SettingCategory::Integrations) {
+        if !matches!(
+            category,
+            SettingCategory::General
+                | SettingCategory::System
+                | SettingCategory::Notifications
+                | SettingCategory::Discord
+                | SettingCategory::Integrations
+        ) {
             return;
         }
         ui.add_space(2.0);
@@ -3959,6 +4679,28 @@ impl CelesteApp {
                     }
                     if ui.button("Open data folder").clicked() {
                         if let Err(error) = open::that(&self.data_dir) { self.state.append_cli_output(format!("Could not open data folder: {error}")); }
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        ui.label("Linux application launcher");
+                        ui.label(
+                            egui::RichText::new(
+                                "Installs a private copy for this user and adds Celeste to KDE, GNOME and other Freedesktop application menus. Run this again after replacing Celeste with a newer build.",
+                            )
+                            .small()
+                            .weak(),
+                        );
+                        if ui.button("Install or refresh application launcher").clicked() {
+                            let message = match crate::platform::install_desktop_launcher() {
+                                Ok(message) => message,
+                                Err(error) => error,
+                            };
+                            self.state.append_cli_output(&message);
+                            self.settings_notice = Some(message);
+                        }
                     }
                 }
                 SettingCategory::Notifications => {
@@ -4062,7 +4804,9 @@ impl CelesteApp {
 
     fn report_audio_settings_result(&mut self, result: Result<&'static str, String>) {
         let message = match result {
-            Ok(panel) => format!("Opened {panel}. Choose the output device you want Celeste to use."),
+            Ok(panel) => {
+                format!("Opened {panel}. Choose the output device you want Celeste to use.")
+            }
             Err(error) => error,
         };
         self.state.append_cli_output(&message);
@@ -4070,20 +4814,32 @@ impl CelesteApp {
     }
 
     fn open_avatar_provider_manager(&mut self) {
-        let Some(settings) = self.settings.as_ref() else { return };
-        let builtins: Vec<String> = celeste_discord::avatar_search::BUILTIN_PROVIDERS.iter().map(|url| (*url).to_string()).collect();
-        let selected: std::collections::HashSet<String> = if settings.avatar_search_providers_enabled.get() {
-            settings.avatar_search_providers.get().into_iter().collect()
-        } else {
-            builtins.iter().cloned().collect()
+        let Some(settings) = self.settings.as_ref() else {
+            return;
         };
+        let builtins: Vec<String> = celeste_discord::avatar_search::BUILTIN_PROVIDERS
+            .iter()
+            .map(|url| (*url).to_string())
+            .collect();
+        let selected: std::collections::HashSet<String> =
+            if settings.avatar_search_providers_enabled.get() {
+                settings.avatar_search_providers.get().into_iter().collect()
+            } else {
+                builtins.iter().cloned().collect()
+            };
         let mut known = builtins;
         for url in settings.avatar_search_providers.get() {
-            if !known.contains(&url) && !url.to_ascii_lowercase().contains("worldbalancer") { known.push(url); }
+            if !known.contains(&url) && !url.to_ascii_lowercase().contains("worldbalancer") {
+                known.push(url);
+            }
         }
-        self.avatar_provider_choices = known.into_iter()
+        self.avatar_provider_choices = known
+            .into_iter()
             .filter(|url| !url.to_ascii_lowercase().contains("worldbalancer"))
-            .map(|url| AvatarProviderChoice { enabled: selected.contains(&url), url })
+            .map(|url| AvatarProviderChoice {
+                enabled: selected.contains(&url),
+                url,
+            })
             .collect();
         self.avatar_provider_input.clear();
         self.avatar_provider_error = None;
@@ -4091,20 +4847,37 @@ impl CelesteApp {
     }
 
     fn save_avatar_provider_choices(&mut self) {
-        let Some(settings) = self.settings.as_ref() else { return };
-        let selected: Vec<String> = self.avatar_provider_choices.iter()
-            .filter(|choice| choice.enabled).map(|choice| choice.url.clone()).collect();
-        let defaults: std::collections::HashSet<&str> = celeste_discord::avatar_search::BUILTIN_PROVIDERS.iter().copied().collect();
-        let selected_set: std::collections::HashSet<&str> = selected.iter().map(String::as_str).collect();
+        let Some(settings) = self.settings.as_ref() else {
+            return;
+        };
+        let selected: Vec<String> = self
+            .avatar_provider_choices
+            .iter()
+            .filter(|choice| choice.enabled)
+            .map(|choice| choice.url.clone())
+            .collect();
+        let defaults: std::collections::HashSet<&str> =
+            celeste_discord::avatar_search::BUILTIN_PROVIDERS
+                .iter()
+                .copied()
+                .collect();
+        let selected_set: std::collections::HashSet<&str> =
+            selected.iter().map(String::as_str).collect();
         let uses_defaults = selected_set == defaults;
-        settings.avatar_search_providers.set(if uses_defaults { None } else { Some(selected) }, "ui");
-        settings.avatar_search_providers_enabled.set(Some(!uses_defaults), "ui");
+        settings
+            .avatar_search_providers
+            .set(if uses_defaults { None } else { Some(selected) }, "ui");
+        settings
+            .avatar_search_providers_enabled
+            .set(Some(!uses_defaults), "ui");
         let search = self.avatar_search.clone();
-        self.runtime_handle.spawn(async move { search.clear_provider_state().await });
+        self.runtime_handle
+            .spawn(async move { search.clear_provider_state().await });
         self.settings_notice = Some(if uses_defaults {
             "Avatar search providers restored to the built-in defaults.".to_string()
         } else {
-            "Avatar search providers saved. New avatar lookups use this selection immediately.".to_string()
+            "Avatar search providers saved. New avatar lookups use this selection immediately."
+                .to_string()
         });
     }
 
@@ -4112,47 +4885,83 @@ impl CelesteApp {
         if self.ui_scale_open {
             let mut open = true;
             let mut apply = false;
-            egui::Window::new("UI scale").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-                ui.label(format!("Scale: {:.0}%", self.ui_scale_percent));
-                ui.add(egui::Slider::new(&mut self.ui_scale_percent, 50.0..=400.0).suffix("%"));
-                ui.horizontal(|ui| {
-                    apply = ui.button("Apply").clicked();
-                    if ui.button("Cancel").clicked() { self.ui_scale_open = false; }
+            egui::Window::new("UI scale")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(format!("Scale: {:.0}%", self.ui_scale_percent));
+                    ui.add(egui::Slider::new(&mut self.ui_scale_percent, 50.0..=400.0).suffix("%"));
+                    ui.horizontal(|ui| {
+                        apply = ui.button("Apply").clicked();
+                        if ui.button("Cancel").clicked() {
+                            self.ui_scale_open = false;
+                        }
+                    });
                 });
-            });
-            if !open { self.ui_scale_open = false; }
+            if !open {
+                self.ui_scale_open = false;
+            }
             if apply {
                 self.ui_scale = (self.ui_scale_percent / 100.0).clamp(0.5, 4.0);
-                if let Some(settings) = &self.settings { settings.store.set_object("ui_scale", &self.ui_scale); }
+                if let Some(settings) = &self.settings {
+                    settings.store.set_object("ui_scale", &self.ui_scale);
+                }
                 ctx.set_zoom_factor(self.ui_scale);
                 self.ui_scale_open = false;
-                self.settings_notice = Some(format!("UI scale set to {:.0}%.", self.ui_scale * 100.0));
+                self.settings_notice =
+                    Some(format!("UI scale set to {:.0}%.", self.ui_scale * 100.0));
             }
         }
 
         if self.accent_open {
             let mut open = true;
             let mut save = false;
-            egui::Window::new("Accent colour").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-                ui.label("Choose a preset or a custom colour.");
-                for (name, value) in [
-                    ("Celeste blue", [38, 104, 170]), ("Crimson", [200, 55, 65]),
-                    ("Cobalt", [59, 125, 216]), ("Forest", [46, 158, 91]),
-                    ("Amber", [212, 130, 26]), ("Violet", [124, 77, 184]), ("Rose", [212, 68, 128]),
-                ] {
-                    if ui.selectable_label(self.accent_edit == value, name).clicked() { self.accent_edit = value; }
-                }
-                ui.add_space(6.0);
-                ui.color_edit_button_srgb(&mut self.accent_edit);
-                ui.horizontal(|ui| {
-                    save = ui.button("Apply").clicked();
-                    if ui.button("Cancel").clicked() { self.accent_open = false; }
+            egui::Window::new("Accent colour")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label("Choose a preset or a custom colour.");
+                    for (name, value) in [
+                        ("Celeste blue", [38, 104, 170]),
+                        ("Crimson", [200, 55, 65]),
+                        ("Cobalt", [59, 125, 216]),
+                        ("Forest", [46, 158, 91]),
+                        ("Amber", [212, 130, 26]),
+                        ("Violet", [124, 77, 184]),
+                        ("Rose", [212, 68, 128]),
+                    ] {
+                        if ui
+                            .selectable_label(self.accent_edit == value, name)
+                            .clicked()
+                        {
+                            self.accent_edit = value;
+                        }
+                    }
+                    ui.add_space(6.0);
+                    ui.color_edit_button_srgb(&mut self.accent_edit);
+                    ui.horizontal(|ui| {
+                        save = ui.button("Apply").clicked();
+                        if ui.button("Cancel").clicked() {
+                            self.accent_open = false;
+                        }
+                    });
                 });
-            });
-            if !open { self.accent_open = false; }
+            if !open {
+                self.accent_open = false;
+            }
             if save {
-                self.accent = egui::Color32::from_rgb(self.accent_edit[0], self.accent_edit[1], self.accent_edit[2]);
-                if let Some(settings) = &self.settings { settings.store.set_object("ui_accent_color", &self.accent_edit.to_vec()); }
+                self.accent = egui::Color32::from_rgb(
+                    self.accent_edit[0],
+                    self.accent_edit[1],
+                    self.accent_edit[2],
+                );
+                if let Some(settings) = &self.settings {
+                    settings
+                        .store
+                        .set_object("ui_accent_color", &self.accent_edit.to_vec());
+                }
                 self.visual_style_installed = false;
                 self.accent_open = false;
                 self.settings_notice = Some("Accent colour updated.".to_string());
@@ -4164,79 +4973,122 @@ impl CelesteApp {
             let mut save = false;
             let mut restore = false;
             let mut add = false;
-            egui::Window::new("Avatar search providers").collapsible(false).resizable(true).default_width(620.0).open(&mut open).show(ctx, |ui| {
-                ui.label("Choose the VRCX-compatible databases Celeste may query.");
-                ui.label(egui::RichText::new("World Balancer entries are intentionally ignored.").small().weak());
-                ui.add_space(6.0);
-                // A database is a thing you recognise by name, not a URL
-                // you proof-read. Named services show their name with the
-                // host underneath; an endpoint the user added themselves has
-                // no name we can honestly give it, so it shows its URL.
-                for choice in &mut self.avatar_provider_choices {
-                    let name = celeste_discord::avatar_search::provider_name(&choice.url);
-                    ui.horizontal(|ui| {
-                        let label = name.unwrap_or("Custom endpoint");
-                        ui.checkbox(&mut choice.enabled, label);
-                        let detail = match name {
-                            Some(_) => celeste_discord::avatar_search::provider_host(&choice.url),
-                            None => choice.url.as_str(),
-                        };
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(detail)
-                                    .size(crate::theme::TEXT_SM)
-                                    .color(crate::theme::TEXT_MUTED),
+            egui::Window::new("Avatar search providers")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(620.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label("Choose the VRCX-compatible databases Celeste may query.");
+                    ui.label(
+                        egui::RichText::new("World Balancer entries are intentionally ignored.")
+                            .small()
+                            .weak(),
+                    );
+                    ui.add_space(6.0);
+                    // A database is a thing you recognise by name, not a URL
+                    // you proof-read. Named services show their name with the
+                    // host underneath; an endpoint the user added themselves has
+                    // no name we can honestly give it, so it shows its URL.
+                    for choice in &mut self.avatar_provider_choices {
+                        let name = celeste_discord::avatar_search::provider_name(&choice.url);
+                        ui.horizontal(|ui| {
+                            let label = name.unwrap_or("Custom endpoint");
+                            ui.checkbox(&mut choice.enabled, label);
+                            let detail = match name {
+                                Some(_) => {
+                                    celeste_discord::avatar_search::provider_host(&choice.url)
+                                }
+                                None => choice.url.as_str(),
+                            };
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(detail)
+                                        .size(crate::theme::TEXT_SM)
+                                        .color(crate::theme::TEXT_MUTED),
+                                )
+                                .truncate(),
                             )
-                            .truncate(),
-                        )
-                        .on_hover_text(&choice.url);
+                            .on_hover_text(&choice.url);
+                        });
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.avatar_provider_input)
+                                .desired_width(430.0)
+                                .hint_text("https://..."),
+                        );
+                        add = ui.button("Add").clicked();
                     });
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.avatar_provider_input).desired_width(430.0).hint_text("https://..."));
-                    add = ui.button("Add").clicked();
+                    if let Some(error) = &self.avatar_provider_error {
+                        ui.colored_label(crate::theme::DANGER, error);
+                    }
+                    ui.horizontal(|ui| {
+                        restore = ui.button("Restore defaults").clicked();
+                        save = ui.button("Save").clicked();
+                        if ui.button("Cancel").clicked() {
+                            self.avatar_providers_open = false;
+                        }
+                    });
                 });
-                if let Some(error) = &self.avatar_provider_error { ui.colored_label(crate::theme::DANGER, error); }
-                ui.horizontal(|ui| {
-                    restore = ui.button("Restore defaults").clicked();
-                    save = ui.button("Save").clicked();
-                    if ui.button("Cancel").clicked() { self.avatar_providers_open = false; }
-                });
-            });
             if add {
                 let url = self.avatar_provider_input.trim().to_string();
                 if !(url.starts_with("http://") || url.starts_with("https://")) {
                     self.avatar_provider_error = Some("Enter a full http(s) URL.".to_string());
                 } else if url.to_ascii_lowercase().contains("worldbalancer") {
-                    self.avatar_provider_error = Some("World Balancer is excluded from avatar searches.".to_string());
+                    self.avatar_provider_error =
+                        Some("World Balancer is excluded from avatar searches.".to_string());
                 } else {
-                    if let Some(choice) = self.avatar_provider_choices.iter_mut().find(|choice| choice.url == url) { choice.enabled = true; }
-                    else { self.avatar_provider_choices.push(AvatarProviderChoice { url, enabled: true }); }
+                    if let Some(choice) = self
+                        .avatar_provider_choices
+                        .iter_mut()
+                        .find(|choice| choice.url == url)
+                    {
+                        choice.enabled = true;
+                    } else {
+                        self.avatar_provider_choices
+                            .push(AvatarProviderChoice { url, enabled: true });
+                    }
                     self.avatar_provider_input.clear();
                     self.avatar_provider_error = None;
                 }
             }
             if restore {
-                let defaults: std::collections::HashSet<&str> = celeste_discord::avatar_search::BUILTIN_PROVIDERS.iter().copied().collect();
-                for choice in &mut self.avatar_provider_choices { choice.enabled = defaults.contains(choice.url.as_str()); }
+                let defaults: std::collections::HashSet<&str> =
+                    celeste_discord::avatar_search::BUILTIN_PROVIDERS
+                        .iter()
+                        .copied()
+                        .collect();
+                for choice in &mut self.avatar_provider_choices {
+                    choice.enabled = defaults.contains(choice.url.as_str());
+                }
             }
-            if !open { self.avatar_providers_open = false; }
-            if save { self.save_avatar_provider_choices(); self.avatar_providers_open = false; }
+            if !open {
+                self.avatar_providers_open = false;
+            }
+            if save {
+                self.save_avatar_provider_choices();
+                self.avatar_providers_open = false;
+            }
         }
 
         if self.settings_notice.is_some() {
             let message = self.settings_notice.clone().unwrap();
             let mut close = false;
-            egui::Window::new("Celeste").collapsible(false).resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            egui::Window::new("Celeste")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
                     ui.label(message);
                     ui.add_space(8.0);
                     close = ui.button("Close").clicked();
                 });
-            if close { self.settings_notice = None; }
+            if close {
+                self.settings_notice = None;
+            }
         }
-
     }
 
     fn legacy_import_result_page(&mut self, ctx: &egui::Context) {
@@ -4305,8 +5157,28 @@ impl CelesteApp {
     }
 
     fn diagnostics_report(&self) -> String {
-        let vrchat = self.vrchat_slot.try_read().map(|slot| if slot.is_some() { "connected" } else { "not connected" }).unwrap_or("busy");
-        let discord = self.discord_http.try_read().map(|http| if http.is_some() { "connected" } else { "not connected / staff mode" }).unwrap_or("busy");
+        let vrchat = self
+            .vrchat_slot
+            .try_read()
+            .map(|slot| {
+                if slot.is_some() {
+                    "connected"
+                } else {
+                    "not connected"
+                }
+            })
+            .unwrap_or("busy");
+        let discord = self
+            .discord_http
+            .try_read()
+            .map(|http| {
+                if http.is_some() {
+                    "connected"
+                } else {
+                    "not connected / staff mode"
+                }
+            })
+            .unwrap_or("busy");
         let mut report = format!(
             "Celeste {}\nData folder: {}\n\nVRChat\n  Session: {}\n  Status: {}\n\nDiscord\n  Gateway/HTTP: {}\n\nText to speech\n  Local engine: {}\n",
             celeste_core::identity::VERSION,
@@ -4317,23 +5189,45 @@ impl CelesteApp {
             self.tts.engine_name().unwrap_or("not installed"),
         );
         if let Some(settings) = &self.settings {
-            let last_audit = settings.last_audit_query.get_or_null()
-                .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+            let last_audit = settings
+                .last_audit_query
+                .get_or_null()
+                .map(|time| {
+                    time.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                })
                 .unwrap_or_else(|| "never".to_string());
-            report.push_str(&format!("\nAudit log\n  Polling interval: {}s\n  Last query cursor: {}\n", settings.audit_polling_interval.get(), last_audit));
+            report.push_str(&format!(
+                "\nAudit log\n  Polling interval: {}s\n  Last query cursor: {}\n",
+                settings.audit_polling_interval.get(),
+                last_audit
+            ));
             let providers: Vec<String> = if settings.avatar_search_providers_enabled.get() {
                 settings.avatar_search_providers.get()
             } else {
-                celeste_discord::avatar_search::BUILTIN_PROVIDERS.iter().map(|url| (*url).to_string()).collect()
+                celeste_discord::avatar_search::BUILTIN_PROVIDERS
+                    .iter()
+                    .map(|url| (*url).to_string())
+                    .collect()
             };
             let backoffs = self.avatar_search.provider_backoffs();
             report.push_str("\nAvatar search providers\n");
-            for provider in providers.into_iter().filter(|url| !url.to_ascii_lowercase().contains("worldbalancer")) {
-                let status = backoffs.as_ref().and_then(|states| states.get(&provider)).filter(|seconds| **seconds > 0)
-                    .map(|seconds| format!("backoff {seconds}s")).unwrap_or_else(|| "ready".to_string());
+            for provider in providers
+                .into_iter()
+                .filter(|url| !url.to_ascii_lowercase().contains("worldbalancer"))
+            {
+                let status = backoffs
+                    .as_ref()
+                    .and_then(|states| states.get(&provider))
+                    .filter(|seconds| **seconds > 0)
+                    .map(|seconds| format!("backoff {seconds}s"))
+                    .unwrap_or_else(|| "ready".to_string());
                 report.push_str(&format!("  [{status}] {provider}\n"));
             }
-            if backoffs.is_none() { report.push_str("  (provider status is busy; no request was delayed)\n"); }
+            if backoffs.is_none() {
+                report.push_str("  (provider status is busy; no request was delayed)\n");
+            }
         }
         report
     }
@@ -4345,6 +5239,8 @@ impl CelesteApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
         let step = step.min(TUTORIAL_STEPS.len().saturating_sub(1));
         self.tutorial_step = Some(step);
+        self.tutorial_narrated_step = None;
+        self.tutorial_tts_notice = None;
         self.record_tutorial_progress(step);
         if self.tutorial_demo.is_none() {
             self.tutorial_demo = TutorialDemo::create();
@@ -4354,15 +5250,65 @@ impl CelesteApp {
         }
     }
 
+    fn tutorial_voice_label(voice: &str) -> String {
+        if voice.trim().is_empty() {
+            return "System default".to_string();
+        }
+        let parsed = celeste_core::tts_voices::VoiceId::parse(voice);
+        if parsed.engine.is_empty() {
+            parsed.voice
+        } else {
+            format!("{} ({})", parsed.voice, parsed.engine)
+        }
+    }
+
+    fn tutorial_spoken_text(step: TutorialStep) -> String {
+        let mut text = format!("{}. {}", step.title, step.body);
+        if step.demo_data {
+            text.push_str(
+                " The information shown is temporary demonstration data, not your Celeste records.",
+            );
+        }
+        if !step.try_it.trim().is_empty() {
+            text.push_str(" Try or notice this. ");
+            text.push_str(step.try_it);
+        }
+        text
+    }
+
+    fn speak_tutorial_step(&mut self, index: usize) {
+        let Some(step) = TUTORIAL_STEPS.get(index).copied() else {
+            return;
+        };
+        self.tts.skip();
+        self.tutorial_tts_notice = self
+            .tts
+            .submit_accessibility(
+                Self::tutorial_spoken_text(step),
+                self.tutorial_voice.clone(),
+            )
+            .err();
+        self.tutorial_narrated_step = Some(index);
+    }
+
+    fn stop_tutorial_narration(&mut self) {
+        self.tts.skip();
+        self.tutorial_narrated_step = None;
+    }
+
     /// Remember the furthest step reached, so leaving the tour does not
     /// throw the progress away. Deliberately a high-water mark: stepping
     /// back to re-read something and then quitting should not rewind what
     /// Help offers to resume.
     fn record_tutorial_progress(&self, step: usize) {
-        let Some(settings) = &self.settings else { return };
+        let Some(settings) = &self.settings else {
+            return;
+        };
         let step = step as i32;
         if settings.tutorial_progress_step.get() < step {
-            settings.tutorial_progress_step.set(Some(step), "guided-tour");
+            settings
+                .tutorial_progress_step
+                .set(Some(step), "guided-tour");
         }
     }
 
@@ -4393,14 +5339,18 @@ impl CelesteApp {
 
     /// Previous shown step before `from`.
     fn tutorial_prev_step(&self, from: usize) -> Option<usize> {
-        (0..from).rev().find(|index| self.tutorial_step_applies(*index))
+        (0..from)
+            .rev()
+            .find(|index| self.tutorial_step_applies(*index))
     }
 
     /// True when `from` is the last step of the essential path, so the tour
     /// has somewhere natural to stop rather than running an operator-only
     /// chapter at a first-time user.
     fn tutorial_ends_essentials(&self, from: usize) -> bool {
-        let Some(step) = TUTORIAL_STEPS.get(from) else { return false };
+        let Some(step) = TUTORIAL_STEPS.get(from) else {
+            return false;
+        };
         if !step.chapter.essential() {
             return false;
         }
@@ -4422,7 +5372,9 @@ impl CelesteApp {
         if needs == TutorialNeeds::Nothing {
             return true;
         }
-        let Some(settings) = &self.settings else { return true };
+        let Some(settings) = &self.settings else {
+            return true;
+        };
         let Some(profile) = settings.store.get_object::<String>("setup_profile") else {
             // No profile was ever chosen: show everything.
             return true;
@@ -4493,6 +5445,7 @@ impl CelesteApp {
     /// vertically.
     fn tutorial_window_anchor(
         ctx: &egui::Context,
+        target_kind: TutorialTarget,
         target: Option<egui::Rect>,
     ) -> (egui::Align2, [f32; 2]) {
         const SIDE: f32 = 24.0;
@@ -4500,8 +5453,28 @@ impl CelesteApp {
         const TOP: f32 = 118.0;
         const BOTTOM: f32 = -24.0;
 
-        let _ = (SIDE, TOP, BOTTOM);
+        // These areas are deliberately broad. Geometry alone cannot find a
+        // non-overlapping side, but their useful controls and sample rows
+        // are concentrated toward the top/left. The quiet bottom-right
+        // corner keeps the explanation visible without covering the exact
+        // buttons, table values or action card the text asks the user to
+        // inspect.
+        if let Some(anchor) = Self::tutorial_forced_anchor(target_kind) {
+            return (anchor, [-SIDE, BOTTOM]);
+        }
+
+        let _ = TOP;
         Self::tutorial_anchor_for(ctx.screen_rect(), target)
+    }
+
+    fn tutorial_forced_anchor(target: TutorialTarget) -> Option<egui::Align2> {
+        matches!(
+            target,
+            TutorialTarget::PlayerTable
+                | TutorialTarget::ToolbarControls
+                | TutorialTarget::SettingsContent
+        )
+        .then_some(egui::Align2::RIGHT_BOTTOM)
     }
 
     /// Geometry half of [`Self::tutorial_window_anchor`], split out so the
@@ -4599,17 +5572,24 @@ impl CelesteApp {
         } else if close {
             self.tutorial_menu = false;
             self.tutorial_demo = None;
+            self.tutorial_narration = false;
+            self.stop_tutorial_narration();
             ctx.request_repaint();
         }
     }
 
     fn tutorial_window(&mut self, ctx: &egui::Context) {
         self.tutorial_menu_window(ctx);
-        let Some(index) = self.tutorial_step else { return };
+        let Some(index) = self.tutorial_step else {
+            return;
+        };
         let Some(step) = TUTORIAL_STEPS.get(index).copied() else {
             self.tutorial_step = None;
             return;
         };
+        if self.tutorial_narration && self.tutorial_narrated_step != Some(index) {
+            self.speak_tutorial_step(index);
+        }
 
         // Open the area being described rather than asking a new user to
         // find it from prose alone.
@@ -4674,15 +5654,25 @@ impl CelesteApp {
         let mut next = false;
         let mut close = false;
         let mut complete_full_setup = false;
-        let (discord_configured, vrchat_configured, setup_label) =
-            self.integration_setup_status();
+        let mut narration_enabled = self.tutorial_narration;
+        let mut selected_voice = self.tutorial_voice.clone();
+        let mut test_voice = false;
+        let mut replay_step = false;
+        let tts_available = self.tts.engine_name().is_some();
+        let mut voices = celeste_core::tts_voices::installed();
+        voices.insert(0, String::new());
+        let (discord_configured, vrchat_configured, setup_label) = self.integration_setup_status();
         let chapter = step.chapter;
         let ends_essentials = self.tutorial_ends_essentials(index);
         let last_step = self.tutorial_next_step(index).is_none();
         let has_previous = self.tutorial_prev_step(index).is_some();
         let chapter_steps = chapter.steps();
-        let within = chapter_steps.iter().position(|i| *i == index).map(|i| i + 1).unwrap_or(1);
-        let (anchor_align, anchor_offset) = Self::tutorial_window_anchor(ctx, target);
+        let within = chapter_steps
+            .iter()
+            .position(|i| *i == index)
+            .map(|i| i + 1)
+            .unwrap_or(1);
+        let (anchor_align, anchor_offset) = Self::tutorial_window_anchor(ctx, step.target, target);
         egui::Window::new(format!(
             "Guided tour — {} ({} of {}){}",
             chapter.title(),
@@ -4732,6 +5722,49 @@ impl CelesteApp {
                     ui.label(egui::RichText::new("Try or notice this").strong());
                     ui.label(step.try_it);
                 });
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Tour narration").strong());
+                ui.add_enabled_ui(tts_available, |ui| {
+                    ui.checkbox(&mut narration_enabled, "Read each tour step aloud");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Voice:");
+                        egui::ComboBox::from_id_salt("guided-tour-voice")
+                            .selected_text(Self::tutorial_voice_label(&selected_voice))
+                            .width(190.0)
+                            .show_ui(ui, |ui| {
+                                for voice in &voices {
+                                    ui.selectable_value(
+                                        &mut selected_voice,
+                                        voice.clone(),
+                                        Self::tutorial_voice_label(voice),
+                                    );
+                                }
+                            });
+                        test_voice = ui.button("Test voice").clicked();
+                        replay_step = ui
+                            .add_enabled(narration_enabled, egui::Button::new("Replay step"))
+                            .clicked();
+                    });
+                });
+                if !tts_available {
+                    ui.colored_label(
+                        crate::theme::WARN,
+                        "No supported local TTS engine was detected. The written tour remains available.",
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "Narration uses this computer's audio output and is never sent to Discord.",
+                        )
+                        .small()
+                        .color(crate::theme::TEXT_MUTED),
+                    );
+                }
+                if let Some(notice) = &self.tutorial_tts_notice {
+                    ui.colored_label(crate::theme::WARN, notice);
+                }
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     previous = ui
@@ -4752,6 +5785,34 @@ impl CelesteApp {
                 });
             });
 
+        let narration_changed = narration_enabled != self.tutorial_narration;
+        let voice_changed = selected_voice != self.tutorial_voice;
+        self.tutorial_narration = narration_enabled;
+        if voice_changed {
+            self.tutorial_voice = selected_voice;
+            if let Some(settings) = &self.settings {
+                settings
+                    .store
+                    .set_object("tutorial_tts_voice", &self.tutorial_voice);
+            }
+        }
+        if !self.tutorial_narration {
+            if narration_changed {
+                self.stop_tutorial_narration();
+            }
+        } else if test_voice {
+            self.tts.skip();
+            self.tutorial_tts_notice = self
+                .tts
+                .submit_accessibility(
+                    "Hello. This is how I will sound while reading Celeste's guided tour.",
+                    self.tutorial_voice.clone(),
+                )
+                .err();
+        } else if replay_step || narration_changed || voice_changed {
+            self.speak_tutorial_step(index);
+        }
+
         if complete_full_setup {
             if let Some(settings) = self.settings.clone() {
                 let mut wizard = crate::setup::SetupWizard::for_full_setup(
@@ -4762,6 +5823,7 @@ impl CelesteApp {
                     wizard.resize_for_current_stage_next_frame();
                     self.resume_tutorial_step = Some(index);
                     self.tutorial_setup_had_discord = discord_configured;
+                    self.stop_tutorial_narration();
                     self.tutorial_step = None;
                     self.tutorial_demo = None;
                     self.wizard = Some(wizard);
@@ -4772,10 +5834,13 @@ impl CelesteApp {
         }
 
         if close {
+            self.tutorial_narration = false;
+            self.stop_tutorial_narration();
             self.tutorial_step = None;
             self.tutorial_menu = false;
             self.tutorial_demo = None;
         } else if next {
+            self.stop_tutorial_narration();
             // Finishing the essential path opens the chapter chooser rather
             // than dropping a first-time user straight into operator-only
             // material - or ending the tour before they know it exists.
@@ -4792,6 +5857,7 @@ impl CelesteApp {
             }
             ctx.request_repaint();
         } else if previous {
+            self.stop_tutorial_narration();
             if let Some(earlier) = self.tutorial_prev_step(index) {
                 self.tutorial_step = Some(earlier);
             }
@@ -4803,10 +5869,19 @@ impl CelesteApp {
         if self.clear_instance_confirm {
             let mut confirm = false;
             let mut cancel = false;
-            egui::Window::new("Clear current instance?").collapsible(false).resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            egui::Window::new("Clear current instance?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
                     ui.label("Clear every player row from the current Instance view?");
-                    ui.label(egui::RichText::new("New VRChat log events will continue to populate the table.").small().weak());
+                    ui.label(
+                        egui::RichText::new(
+                            "New VRChat log events will continue to populate the table.",
+                        )
+                        .small()
+                        .weak(),
+                    );
                     ui.horizontal(|ui| {
                         confirm = ui.button("Clear instance").clicked();
                         cancel = ui.button("Cancel").clicked();
@@ -4816,47 +5891,82 @@ impl CelesteApp {
                 self.state.clear_instance();
                 self.state.append_cli_output("Instance cleared.");
                 self.clear_instance_confirm = false;
-            } else if cancel { self.clear_instance_confirm = false; }
+            } else if cancel {
+                self.clear_instance_confirm = false;
+            }
         }
 
         if self.diagnostics_open {
             let report = self.diagnostics_report();
             let mut open = true;
-            egui::Window::new("Diagnostics").default_width(680.0).default_height(440.0).open(&mut open).show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("Copy report").clicked() { ui.ctx().copy_text(report.clone()); }
-                    if ui.button("Open data folder").clicked() {
-                        if let Err(error) = open::that(&self.data_dir) { self.state.append_cli_output(format!("Could not open data folder: {error}")); }
-                    }
+            egui::Window::new("Diagnostics")
+                .default_width(680.0)
+                .default_height(440.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Copy report").clicked() {
+                            ui.ctx().copy_text(report.clone());
+                        }
+                        if ui.button("Open data folder").clicked() {
+                            if let Err(error) = open::that(&self.data_dir) {
+                                self.state.append_cli_output(format!(
+                                    "Could not open data folder: {error}"
+                                ));
+                            }
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::both().show(ui, |ui| {
+                        ui.monospace(&report);
+                    });
                 });
-                ui.separator();
-                egui::ScrollArea::both().show(ui, |ui| { ui.monospace(&report); });
-            });
-            if !open { self.diagnostics_open = false; }
+            if !open {
+                self.diagnostics_open = false;
+            }
         }
 
         if self.credits_open {
-            let credits: Vec<serde_json::Value> = serde_json::from_str(include_str!("../resources/credits.json")).unwrap_or_default();
+            let credits: Vec<serde_json::Value> =
+                serde_json::from_str(include_str!("../resources/credits.json")).unwrap_or_default();
             let mut open = true;
-            egui::Window::new("Credits / About Celeste").default_width(650.0).default_height(420.0).open(&mut open).show(ctx, |ui| {
-                ui.heading(format!("Celeste {}", celeste_core::identity::VERSION));
-                ui.label(celeste_core::identity::FORK_NOTE);
-                ui.label("A VRChat group moderation logger.");
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for credit in &credits {
-                        let name = credit.get("name").and_then(serde_json::Value::as_str).unwrap_or("Unknown");
-                        let role = credit.get("role").and_then(serde_json::Value::as_str).unwrap_or("");
-                        let url = credit.get("url").and_then(serde_json::Value::as_str).unwrap_or("");
-                        ui.horizontal_wrapped(|ui| {
-                            if url.is_empty() { ui.strong(name); }
-                            else if ui.link(name).clicked() { ui.ctx().open_url(egui::OpenUrl::new_tab(url)); }
-                            ui.label(format!("— {role}"));
-                        });
-                    }
+            egui::Window::new("Credits / About Celeste")
+                .default_width(650.0)
+                .default_height(420.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.heading(format!("Celeste {}", celeste_core::identity::VERSION));
+                    ui.label(celeste_core::identity::FORK_NOTE);
+                    ui.label("A VRChat group moderation logger.");
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for credit in &credits {
+                            let name = credit
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("Unknown");
+                            let role = credit
+                                .get("role")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            let url = credit
+                                .get("url")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            ui.horizontal_wrapped(|ui| {
+                                if url.is_empty() {
+                                    ui.strong(name);
+                                } else if ui.link(name).clicked() {
+                                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                                }
+                                ui.label(format!("— {role}"));
+                            });
+                        }
+                    });
                 });
-            });
-            if !open { self.credits_open = false; }
+            if !open {
+                self.credits_open = false;
+            }
         }
     }
 
@@ -4937,7 +6047,8 @@ impl CelesteApp {
                     return;
                 }
                 Ok(rfd::MessageDialogResult::Yes) => Some((detected, None)),
-                Ok(rfd::MessageDialogResult::No) => match pick_legacy_import_source(&self.data_dir) {
+                Ok(rfd::MessageDialogResult::No) => match pick_legacy_import_source(&self.data_dir)
+                {
                     Ok(selection) => selection,
                     Err(error) => {
                         let message = format!("Could not choose Scarlet data: {error}");
@@ -4959,7 +6070,9 @@ impl CelesteApp {
                 }
             }
         };
-        let Some((source, archive)) = selection else { return };
+        let Some((source, archive)) = selection else {
+            return;
+        };
         if !celeste_core::paths::settings_file_usable(&source) {
             let message = format!(
                 "{} does not contain a readable, non-empty settings.json, so it was not imported.",
@@ -5010,7 +6123,8 @@ impl CelesteApp {
                     return;
                 }
                 Err(error) => {
-                    let message = format!("Could not open the Scarlet import confirmation: {error}");
+                    let message =
+                        format!("Could not open the Scarlet import confirmation: {error}");
                     self.state.append_cli_output(&message);
                     self.settings_notice = Some(message);
                     if archive.is_some() {
@@ -5049,7 +6163,9 @@ impl CelesteApp {
                 // Some native backends return semantic results for custom
                 // buttons rather than their labels.
                 Ok(rfd::MessageDialogResult::Yes) => celeste_core::legacy_import::ImportMode::Merge,
-                Ok(rfd::MessageDialogResult::No) => celeste_core::legacy_import::ImportMode::Replace,
+                Ok(rfd::MessageDialogResult::No) => {
+                    celeste_core::legacy_import::ImportMode::Replace
+                }
                 Ok(_) => {
                     if archive.is_some() {
                         celeste_core::legacy_archive::cleanup_staging(&source, &self.data_dir);
@@ -5069,7 +6185,10 @@ impl CelesteApp {
         };
         let queued = if let Some(archive) = archive.as_deref() {
             celeste_core::legacy_import::queue_prepared_archive(
-                &self.data_dir, &source, archive, mode,
+                &self.data_dir,
+                &source,
+                archive,
+                mode,
             )
         } else {
             celeste_core::legacy_import::queue(&self.data_dir, &source, mode)
@@ -5098,7 +6217,9 @@ impl CelesteApp {
     }
 
     fn prepare_cache_cleanup(&mut self) {
-        let Some(settings) = self.settings.as_ref() else { return };
+        let Some(settings) = self.settings.as_ref() else {
+            return;
+        };
         let days = settings.cache_cleanup_days.get().clamp(1, 30);
         let cutoff = std::time::SystemTime::now()
             - std::time::Duration::from_secs(days as u64 * 24 * 60 * 60);
@@ -5210,10 +6331,14 @@ impl CelesteApp {
     /// (or leaving the tab, or closing the window) throws the value away
     /// with no indication that it was not saved.
     fn flush_pending_setting_edits(&mut self) {
-        let Some(settings) = self.settings.clone() else { return };
+        let Some(settings) = self.settings.clone() else {
+            return;
+        };
         let mut rejected = Vec::new();
         for descriptor in settings.registry.all() {
-            let Some(buffer) = self.settings_edit_buffers.get(descriptor.id()) else { continue };
+            let Some(buffer) = self.settings_edit_buffers.get(descriptor.id()) else {
+                continue;
+            };
             let stored = descriptor.get_as_string();
             if *buffer == stored {
                 continue;
@@ -5223,17 +6348,20 @@ impl CelesteApp {
             }
         }
         for id in rejected {
-            if let Some(descriptor) =
-                settings.registry.all().into_iter().find(|d| d.id() == id)
-            {
-                self.settings_edit_buffers.insert(id.clone(), descriptor.get_as_string());
+            if let Some(descriptor) = settings.registry.all().into_iter().find(|d| d.id() == id) {
+                self.settings_edit_buffers
+                    .insert(id.clone(), descriptor.get_as_string());
             }
             self.state
                 .append_cli_output(format!("Setting {id}: value rejected (didn't validate)."));
         }
     }
 
-    fn render_setting_control(&mut self, ui: &mut egui::Ui, descriptor: &std::sync::Arc<dyn SettingDescriptor>) {
+    fn render_setting_control(
+        &mut self,
+        ui: &mut egui::Ui,
+        descriptor: &std::sync::Arc<dyn SettingDescriptor>,
+    ) {
         ui.set_width(CONTROL_WIDTH);
         match descriptor.kind() {
             SettingKind::Boolean { default } => {
@@ -5244,7 +6372,11 @@ impl CelesteApp {
                 }
                 if value != *default {
                     ui.scope(|ui| {
-                        if ui.small_button("Reset").on_hover_text("Reset to default").clicked() {
+                        if ui
+                            .small_button("Reset")
+                            .on_hover_text("Reset to default")
+                            .clicked()
+                        {
                             descriptor.set_from_string(&default.to_string(), "ui");
                         }
                     });
@@ -5252,12 +6384,23 @@ impl CelesteApp {
             }
             SettingKind::IntegerRange { default, min, max } => {
                 let mut value: i32 = descriptor.get_as_string().parse().unwrap_or(*default);
-                if ui.add(egui::DragValue::new(&mut value).range(*min..=*max).speed(1.0)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut value)
+                            .range(*min..=*max)
+                            .speed(1.0),
+                    )
+                    .changed()
+                {
                     descriptor.set_from_string(&value.to_string(), "ui");
                 }
                 if value != *default {
                     ui.scope(|ui| {
-                        if ui.small_button("Reset").on_hover_text("Reset to default").clicked() {
+                        if ui
+                            .small_button("Reset")
+                            .on_hover_text("Reset to default")
+                            .clicked()
+                        {
                             descriptor.set_from_string(&default.to_string(), "ui");
                         }
                     });
@@ -5270,7 +6413,10 @@ impl CelesteApp {
                     .width(CONTROL_WIDTH - 24.0)
                     .show_ui(ui, |ui| {
                         for variant in variants {
-                            if ui.selectable_value(&mut current, variant.clone(), variant).changed() {
+                            if ui
+                                .selectable_value(&mut current, variant.clone(), variant)
+                                .changed()
+                            {
                                 descriptor.set_from_string(variant, "ui");
                             }
                         }
@@ -5279,19 +6425,29 @@ impl CelesteApp {
             SettingKind::StringChoice { valid_values } => {
                 let mut current = descriptor.get_as_string();
                 let values = valid_values();
-                let selected = if current.is_empty() { "System default".to_string() } else { current.clone() };
+                let selected = if current.is_empty() {
+                    "System default".to_string()
+                } else {
+                    current.clone()
+                };
                 egui::ComboBox::from_id_salt(descriptor.id())
                     .selected_text(selected)
                     .width(CONTROL_WIDTH - 24.0)
                     .show_ui(ui, |ui| {
-                        if ui.selectable_value(&mut current, String::new(), "System default").changed() {
+                        if ui
+                            .selectable_value(&mut current, String::new(), "System default")
+                            .changed()
+                        {
                             descriptor.set_from_string("", "ui");
                         }
                         if values.is_empty() {
                             ui.weak("(nothing installed)");
                         }
                         for value in values {
-                            if ui.selectable_value(&mut current, value.clone(), &value).changed() {
+                            if ui
+                                .selectable_value(&mut current, value.clone(), &value)
+                                .changed()
+                            {
                                 descriptor.set_from_string(&value, "ui");
                             }
                         }
@@ -5406,7 +6562,8 @@ impl CelesteApp {
                         .id(widget_id)
                         .desired_width(CONTROL_WIDTH - 12.0),
                 );
-                let entered = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let entered =
+                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if commit_text_setting(response.lost_focus(), entered) {
                     let accepted = descriptor.set_from_string(buf, "ui");
                     if !accepted {
@@ -5427,9 +6584,11 @@ impl CelesteApp {
             ui.vertical(|ui| {
                 ui.heading("Command console");
                 ui.label(
-                    egui::RichText::new("Run local Celeste maintenance commands and inspect their output.")
-                        .small()
-                        .weak(),
+                    egui::RichText::new(
+                        "Run local Celeste maintenance commands and inspect their output.",
+                    )
+                    .small()
+                    .weak(),
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -5466,8 +6625,7 @@ impl CelesteApp {
                     .hint_text("Type help for available commands"),
             );
             let run = ui.add(self.primary_button("Run")).clicked()
-                || (response.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
             if run && !self.cli_input.trim().is_empty() {
                 self.run_cli_command(ui.ctx(), self.cli_input.trim().to_string());
                 self.cli_input.clear();
@@ -5479,7 +6637,9 @@ impl CelesteApp {
     /// is deliberately out of scope are recognized and say so explicitly.
     fn run_cli_command(&mut self, ctx: &egui::Context, command: String) {
         self.state.append_cli_output(format!("> {command}"));
-        let (raw_op, rest) = command.split_once(char::is_whitespace).map_or((command.as_str(), ""), |(op, rest)| (op, rest.trim()));
+        let (raw_op, rest) = command
+            .split_once(char::is_whitespace)
+            .map_or((command.as_str(), ""), |(op, rest)| (op, rest.trim()));
         let op = canonicalize_cli_command(raw_op);
         match op.as_str() {
             "help" | "info" => self.state.append_cli_output(
@@ -5564,21 +6724,30 @@ impl CelesteApp {
 
     fn cli_import_groups(&mut self, source: &str, extension: &str) {
         if source.is_empty() {
-            self.state.append_cli_output(format!("Usage: importgroups{} <file|URL>", if extension == "json" { "json" } else { "" }));
+            self.state.append_cli_output(format!(
+                "Usage: importgroups{} <file|URL>",
+                if extension == "json" { "json" } else { "" }
+            ));
             return;
         }
         if source.starts_with("http://") || source.starts_with("https://") {
-            self.state.append_cli_output(format!("Importing watched groups {extension} from URL: {source}"));
+            self.state.append_cli_output(format!(
+                "Importing watched groups {extension} from URL: {source}"
+            ));
             let url = source.to_string();
             let (tx, rx) = std::sync::mpsc::channel();
             self.runtime_handle.spawn(async move {
-                let _ = tx.send(celeste_discord::url_guard::download_public_text(&url, 8 * 1024 * 1024).await);
+                let _ = tx.send(
+                    celeste_discord::url_guard::download_public_text(&url, 8 * 1024 * 1024).await,
+                );
             });
             self.import_groups_rx = Some((extension.to_string(), rx));
         } else {
             match std::fs::read(source) {
                 Ok(contents) => self.apply_group_import(extension, &contents, source),
-                Err(error) => self.state.append_cli_output(format!("[error] Exception importing watched groups from file {source}: {error}")),
+                Err(error) => self.state.append_cli_output(format!(
+                    "[error] Exception importing watched groups from file {source}: {error}"
+                )),
             }
         }
     }
@@ -5588,6 +6757,7 @@ impl eframe::App for CelesteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         ctx.set_zoom_factor(self.ui_scale);
+        self.ensure_font_fallbacks(ctx);
         self.install_visual_style(ctx);
         self.persist_window_bounds(ctx);
 
@@ -5670,7 +6840,9 @@ impl eframe::App for CelesteApp {
                         &methods,
                     );
                     if self.wizard.is_none() {
-                        tracing::warn!("VRChat asked for an unsupported two-factor method: {methods:?}");
+                        tracing::warn!(
+                            "VRChat asked for an unsupported two-factor method: {methods:?}"
+                        );
                     }
                 }
             }
@@ -5680,7 +6852,11 @@ impl eframe::App for CelesteApp {
             Some(wizard) => {
                 let outcome = wizard.render(ctx);
                 let vrchat_client =
-                    if matches!(outcome, crate::setup::SetupOutcome::JustFinished { .. }) { wizard.vrchat_client() } else { None };
+                    if matches!(outcome, crate::setup::SetupOutcome::JustFinished { .. }) {
+                        wizard.vrchat_client()
+                    } else {
+                        None
+                    };
                 (Some(outcome), vrchat_client)
             }
             None => (None, None),
@@ -5688,8 +6864,11 @@ impl eframe::App for CelesteApp {
         // A code-only prompt finishing means a login happened and nothing
         // else: publish the client, but don't re-run setup's finishing work
         // (which would connect a second Discord client).
-        let two_factor_only =
-            self.wizard.as_ref().map(crate::setup::SetupWizard::is_two_factor_only).unwrap_or(false);
+        let two_factor_only = self
+            .wizard
+            .as_ref()
+            .map(crate::setup::SetupWizard::is_two_factor_only)
+            .unwrap_or(false);
         let outcome = if two_factor_only {
             match outcome {
                 Some(crate::setup::SetupOutcome::JustFinished { .. }) => {
@@ -5716,7 +6895,11 @@ impl eframe::App for CelesteApp {
                 start_tutorial,
             }) => {
                 let resuming_tutorial = self.resume_tutorial_step.is_some();
-                self.staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
+                self.staff_mode = discord_token
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty();
 
                 match wizard_vrchat_client {
                     // The wizard already logged in this session -- reuse
@@ -5747,28 +6930,30 @@ impl eframe::App for CelesteApp {
                 // `if cond && let Some(x) = ...` is a let chain, which needs
                 // edition 2024; this workspace is on 2021. `Option::filter`
                 // expresses the same guard without re-indenting the block.
-                let tutorial_allows_discord = !resuming_tutorial || !self.tutorial_setup_had_discord;
+                let tutorial_allows_discord =
+                    !resuming_tutorial || !self.tutorial_setup_had_discord;
                 if let Some(settings) = self.settings.clone().filter(|_| tutorial_allows_discord) {
-                    self.runtime_handle.spawn(celeste_discord::client::connect_and_serve(
-                        discord_token,
-                        celeste_discord::data::SharedState {
-                            vrchat_client: self.vrchat_slot.clone(),
-                            avatar_search: self.avatar_search.clone(),
-                            http: self.discord_http.clone(),
-                            discord_config: self.discord_config.clone(),
-                            health_reporter: self.health_reporter.clone(),
-                            voice_manager: self.voice_manager.clone(),
-                            process_controller: self.process_controller.clone(),
-                            celeste_data: self.celeste_data.clone(),
-                            settings,
-                            staff_list: self.staff_list.clone(),
-                            secret_staff_list: self.secret_staff_list.clone(),
-                            moderation_tags: self.moderation_tags.clone(),
-                            watched_groups: self.watched_groups.clone(),
-                            watched_users: self.watched_users.clone(),
-                            watched_avatars: self.watched_avatars.clone(),
-                        },
-                    ));
+                    self.runtime_handle
+                        .spawn(celeste_discord::client::connect_and_serve(
+                            discord_token,
+                            celeste_discord::data::SharedState {
+                                vrchat_client: self.vrchat_slot.clone(),
+                                avatar_search: self.avatar_search.clone(),
+                                http: self.discord_http.clone(),
+                                discord_config: self.discord_config.clone(),
+                                health_reporter: self.health_reporter.clone(),
+                                voice_manager: self.voice_manager.clone(),
+                                process_controller: self.process_controller.clone(),
+                                celeste_data: self.celeste_data.clone(),
+                                settings,
+                                staff_list: self.staff_list.clone(),
+                                secret_staff_list: self.secret_staff_list.clone(),
+                                moderation_tags: self.moderation_tags.clone(),
+                                watched_groups: self.watched_groups.clone(),
+                                watched_users: self.watched_users.clone(),
+                                watched_avatars: self.watched_avatars.clone(),
+                            },
+                        ));
                 }
                 self.wizard = None;
                 if let Some(step) = self.resume_tutorial_step.take() {
@@ -5786,10 +6971,8 @@ impl eframe::App for CelesteApp {
                 return;
             }
             Some(crate::setup::SetupOutcome::TestTts) => {
-                self.tts_route.submit_routed(
-                    "setup-test",
-                    "Celeste text to speech is working.",
-                );
+                self.tts_route
+                    .submit_routed("setup-test", "Celeste text to speech is working.");
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
                 return;
             }
@@ -5815,8 +6998,16 @@ impl eframe::App for CelesteApp {
         if let Some(step) = self
             .tutorial_step
             .and_then(|index| TUTORIAL_STEPS.get(index))
+            .copied()
         {
             self.tab = step.tab;
+            if let Some(category) = step.settings_category {
+                if self.settings_category != category || !self.settings_search.is_empty() {
+                    self.flush_pending_setting_edits();
+                    self.settings_category = category;
+                    self.settings_search.clear();
+                }
+            }
         }
         self.tutorial_layout = TutorialLayout::default();
 
@@ -5827,8 +7018,8 @@ impl eframe::App for CelesteApp {
                     .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
             )
             .show(ctx, |ui| {
-            self.toolbar(ui);
-        });
+                self.toolbar(ui);
+            });
 
         let status_state = self.tutorial_state();
         let status_bar = egui::TopBottomPanel::bottom("status_bar")
@@ -5838,44 +7029,58 @@ impl eframe::App for CelesteApp {
                     .inner_margin(egui::Margin::symmetric(12.0, 6.0)),
             )
             .show(ctx, |ui| {
-            let (present, left, total) = status_state.status_counts();
-            // Java's `updateStatusBar`, through the same message catalogue
-            // so the wording (and its translations) stay in one place.
-            let text = if total == 0 {
-                celeste_core::i18n::tr("ui.statusNoInstance", &[])
-            } else {
-                celeste_core::i18n::tr(
-                    "ui.statusBar",
-                    &[&present.to_string(), &left.to_string(), &total.to_string()],
-                )
-            };
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(text).small());
-                // Which instance those players are in. Java never showed
-                // this; without it there is no way to tell "no instance
-                // open" from "instance open, nobody joined yet".
-                match status_state.instance() {
-                    Some(instance) => {
-                        ui.separator();
-                        let label = instance.world_name.clone().unwrap_or_else(|| instance.location.clone());
-                        let label = if instance.is_group_instance { format!("{label}  (group)") } else { label };
-                        ui.label(egui::RichText::new(label).small().strong()).on_hover_text(instance.location.clone());
+                let (present, left, total) = status_state.status_counts();
+                // Java's `updateStatusBar`, through the same message catalogue
+                // so the wording (and its translations) stay in one place.
+                let text = if total == 0 {
+                    celeste_core::i18n::tr("ui.statusNoInstance", &[])
+                } else {
+                    celeste_core::i18n::tr(
+                        "ui.statusBar",
+                        &[&present.to_string(), &left.to_string(), &total.to_string()],
+                    )
+                };
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(text).small());
+                    // Which instance those players are in. Java never showed
+                    // this; without it there is no way to tell "no instance
+                    // open" from "instance open, nobody joined yet".
+                    match status_state.instance() {
+                        Some(instance) => {
+                            ui.separator();
+                            let label = instance
+                                .world_name
+                                .clone()
+                                .unwrap_or_else(|| instance.location.clone());
+                            let label = if instance.is_group_instance {
+                                format!("{label}  (group)")
+                            } else {
+                                label
+                            };
+                            ui.label(egui::RichText::new(label).small().strong())
+                                .on_hover_text(instance.location.clone());
+                        }
+                        None => {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(
+                                    celeste_core::i18n::tr("ui.statusNoInstance", &[]).trim(),
+                                )
+                                .small()
+                                .weak(),
+                            );
+                        }
                     }
-                    None => {
-                        ui.separator();
-                        ui.label(egui::RichText::new(celeste_core::i18n::tr("ui.statusNoInstance", &[]).trim()).small().weak());
-                    }
-                }
-                // A dropped TTS announcement is otherwise silent in every
-                // sense: nothing plays and nothing is shown.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(problem) = status_state.tts_status() {
-                        ui.colored_label(crate::theme::WARN, "Voice warning")
-                            .on_hover_text(&problem);
-                    }
+                    // A dropped TTS announcement is otherwise silent in every
+                    // sense: nothing plays and nothing is shown.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(problem) = status_state.tts_status() {
+                            ui.colored_label(crate::theme::WARN, "Voice warning")
+                                .on_hover_text(&problem);
+                        }
+                    });
                 });
             });
-        });
         self.tutorial_layout.status_bar = Some(status_bar.response.rect);
 
         self.watched_groups_window(ctx);
@@ -5896,11 +7101,11 @@ impl eframe::App for CelesteApp {
                     .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
             .show(ctx, |ui| match self.tab {
-            Tab::Instance => self.instance_tab(ui),
-            Tab::Clients => self.managed_clients_tab(ui),
-            Tab::Settings => self.settings_tab(ui),
-            Tab::Cli => self.cli_tab(ui),
-        });
+                Tab::Instance => self.instance_tab(ui),
+                Tab::Clients => self.managed_clients_tab(ui),
+                Tab::Settings => self.settings_tab(ui),
+                Tab::Cli => self.cli_tab(ui),
+            });
         self.tutorial_layout.main_content = Some(main_content.response.rect);
 
         // Render this last so the explanation remains above the area it is
@@ -5925,10 +7130,20 @@ impl eframe::App for CelesteApp {
 /// resolves a Discord token, to spawn the Discord client itself.
 fn format_account_age((years, months, days): (i32, i32, i32)) -> String {
     let mut parts = Vec::new();
-    if years != 0 { parts.push(format!("{years}y")); }
-    if months != 0 { parts.push(format!("{months}m")); }
-    if days != 0 { parts.push(format!("{days}d")); }
-    if parts.is_empty() { "0D".to_string() } else { parts.join(" ") }
+    if years != 0 {
+        parts.push(format!("{years}y"));
+    }
+    if months != 0 {
+        parts.push(format!("{months}m"));
+    }
+    if days != 0 {
+        parts.push(format!("{days}d"));
+    }
+    if parts.is_empty() {
+        "0D".to_string()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn sort_players(players: &mut [celeste_core::ui::ConnectedPlayer], sort: Option<TableSort>) {
@@ -5936,7 +7151,8 @@ fn sort_players(players: &mut [celeste_core::ui::ConnectedPlayer], sort: Option<
         return;
     };
     fn text(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
-        left.map(str::to_lowercase).cmp(&right.map(str::to_lowercase))
+        left.map(str::to_lowercase)
+            .cmp(&right.map(str::to_lowercase))
     }
     players.sort_by(|left, right| {
         let ordering = match sort.column {
@@ -5945,8 +7161,13 @@ fn sort_players(players: &mut [celeste_core::ui::ConnectedPlayer], sort: Option<
             ColumnId::Pronouns => text(left.pronouns.as_deref(), right.pronouns.as_deref()),
             ColumnId::Avatar => text(left.avatar_name.as_deref(), right.avatar_name.as_deref()),
             ColumnId::Performance => text(
-                left.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()),
-                right.avatar_info.as_ref().and_then(|info| info.performance_rating.as_deref()),
+                left.avatar_info
+                    .as_ref()
+                    .and_then(|info| info.performance_rating.as_deref()),
+                right
+                    .avatar_info
+                    .as_ref()
+                    .and_then(|info| info.performance_rating.as_deref()),
             ),
             ColumnId::AccAge => left.account_age.cmp(&right.account_age),
             ColumnId::Joined => left.joined.cmp(&right.joined),
@@ -5954,7 +7175,10 @@ fn sort_players(players: &mut [celeste_core::ui::ConnectedPlayer], sort: Option<
             ColumnId::Advisory => text(left.advisory.as_deref(), right.advisory.as_deref()),
             // Sorting by count puts the accounts worth looking at
             // together, which is the point of the column.
-            ColumnId::WatchedGroups => left.watched_memberships.len().cmp(&right.watched_memberships.len()),
+            ColumnId::WatchedGroups => left
+                .watched_memberships
+                .len()
+                .cmp(&right.watched_memberships.len()),
             ColumnId::Age18 => text(
                 left.age_verification_status.as_deref(),
                 right.age_verification_status.as_deref(),
@@ -5966,11 +7190,13 @@ fn sort_players(players: &mut [celeste_core::ui::ConnectedPlayer], sort: Option<
             | ColumnId::CopyId
             | ColumnId::Ban
             | ColumnId::Unban
-            | ColumnId::Invite => {
-                std::cmp::Ordering::Equal
-            }
+            | ColumnId::Invite => std::cmp::Ordering::Equal,
         };
-        if sort.ascending { ordering } else { ordering.reverse() }
+        if sort.ascending {
+            ordering
+        } else {
+            ordering.reverse()
+        }
     });
 }
 
@@ -6013,6 +7239,125 @@ fn known_choices_for(id: &str) -> Option<Vec<(String, String)>> {
 
 const BUNDLED_WINDOW_ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
 
+fn base_system_font_paths() -> Vec<PathBuf> {
+    #[cfg(target_os = "linux")]
+    let candidates = [
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect::<Vec<_>>();
+
+    #[cfg(target_os = "windows")]
+    let candidates = {
+        let fonts = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+            .join("Fonts");
+        ["segoeui.ttf", "seguisym.ttf", "arial.ttf"]
+            .into_iter()
+            .map(|name| fonts.join(name))
+            .collect::<Vec<_>>()
+    };
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let candidates = Vec::<PathBuf>::new();
+
+    let mut found = Vec::new();
+    for path in candidates {
+        if path.is_file() && !found.contains(&path) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+fn system_font_paths_for(characters: &std::collections::BTreeSet<char>) -> Vec<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut found = Vec::new();
+        for character in characters.iter().take(16) {
+            let pattern = format!("sans-serif:charset={:x}", *character as u32);
+            let Ok(output) = std::process::Command::new("fc-match")
+                .args(["-f", "%{file}", &pattern])
+                .output()
+            else {
+                break;
+            };
+            if !output.status.success() {
+                continue;
+            }
+            let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            // ab_glyph supports TrueType/OpenType faces (including a face
+            // selected from TTC), but not bitmap-only colour emoji fonts.
+            if path.is_file()
+                && ["ttf", "otf", "ttc"].contains(&extension.to_ascii_lowercase().as_str())
+                && !path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.contains("ColorEmoji"))
+                && !found.contains(&path)
+            {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let fonts = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+            .join("Fonts");
+        // These cover Japanese, Korean and Simplified/Traditional Chinese.
+        // They are loaded only after egui reports a missing live-name glyph.
+        [
+            "YuGothR.ttc",
+            "meiryo.ttc",
+            "malgun.ttf",
+            "msyh.ttc",
+            "msjh.ttc",
+        ]
+        .into_iter()
+        .map(|name| fonts.join(name))
+        .filter(|path| path.is_file())
+        .collect()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = characters;
+        Vec::new()
+    }
+}
+
+fn apply_font_fallbacks(ctx: &egui::Context, paths: &[PathBuf]) {
+    let mut definitions = egui::FontDefinitions::default();
+    for (index, path) in paths.iter().enumerate() {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let name = format!("celeste-system-fallback-{index}");
+        definitions
+            .font_data
+            .insert(name.clone(), egui::FontData::from_owned(bytes));
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            if let Some(fonts) = definitions.families.get_mut(&family) {
+                fonts.push(name.clone());
+            }
+        }
+    }
+    ctx.set_fonts(definitions);
+}
+
 fn decode_window_icon(bytes: &[u8]) -> Result<egui::IconData, image::ImageError> {
     let image = image::load_from_memory(bytes)?.to_rgba8();
     let (width, height) = image.dimensions();
@@ -6033,14 +7378,19 @@ fn load_window_icon(data_dir: &std::path::Path) -> Option<egui::IconData> {
         .and_then(|exe| exe.parent().map(|dir| dir.join("icon.png")));
     let candidates = [Some(data_dir.join("icon.png")), beside_binary];
     for path in candidates.into_iter().flatten() {
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
         match decode_window_icon(&bytes) {
             Ok(icon) => {
                 tracing::info!("Using window icon {}", path.display());
                 return Some(icon);
             }
             Err(error) => {
-                tracing::warn!("Ignoring unreadable window icon {}: {error}", path.display());
+                tracing::warn!(
+                    "Ignoring unreadable window icon {}: {error}",
+                    path.display()
+                );
             }
         }
     }
@@ -6077,7 +7427,9 @@ fn row_foreground(player: &celeste_core::ui::ConnectedPlayer) -> Option<egui::Co
     if let Some((r, g, b)) = player.text_color {
         return Some(egui::Color32::from_rgb(r, g, b));
     }
-    player.pronouns_flagged.then(|| crate::theme::PRONOUNS_FLAGGED_TEXT)
+    player
+        .pronouns_flagged
+        .then(|| crate::theme::PRONOUNS_FLAGGED_TEXT)
 }
 
 pub fn run(
@@ -6088,17 +7440,25 @@ pub fn run(
     tts: Arc<crate::tts::TtsService>,
     tts_route: Arc<crate::tts::TtsSinkAdapter>,
     pronoun_lists: Arc<celeste_core::pronoun_lists::PronounLists>,
-    two_factor_tx: std::sync::mpsc::Sender<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
-    two_factor_rx: std::sync::mpsc::Receiver<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
+    two_factor_tx: std::sync::mpsc::Sender<(
+        Arc<celeste_vrchat::client::VrChatClient>,
+        Vec<String>,
+    )>,
+    two_factor_rx: std::sync::mpsc::Receiver<(
+        Arc<celeste_vrchat::client::VrChatClient>,
+        Vec<String>,
+    )>,
     managed_clients: Arc<celeste_vrchat::managed_clients::ManagedClientStore>,
 ) -> eframe::Result<()> {
-    let bounds = shared.settings.ui_bounds.get_or_null().filter(|bounds| {
-        bounds.width > 0 && bounds.height > 0
-    });
+    let bounds = shared
+        .settings
+        .ui_bounds
+        .get_or_null()
+        .filter(|bounds| bounds.width > 0 && bounds.height > 0);
     // A data-folder or beside-the-binary `icon.png` can still override the
     // bundled Celeste mark without a rebuild.
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_app_id(celeste_core::identity::DESKTOP_APP_ID);
+    let mut viewport =
+        egui::ViewportBuilder::default().with_app_id(celeste_core::identity::DESKTOP_APP_ID);
     if let Some(icon) = load_window_icon(&data_dir) {
         viewport = viewport.with_icon(icon);
     }
@@ -6159,7 +7519,10 @@ fn spawn_unattended_vrchat_login(
     runtime_handle: &tokio::runtime::Handle,
     slot: celeste_discord::data::SharedVrChatClient,
     settings: Arc<Settings>,
-    two_factor_tx: std::sync::mpsc::Sender<(Arc<celeste_vrchat::client::VrChatClient>, Vec<String>)>,
+    two_factor_tx: std::sync::mpsc::Sender<(
+        Arc<celeste_vrchat::client::VrChatClient>,
+        Vec<String>,
+    )>,
 ) {
     runtime_handle.spawn(async move {
         match celeste_vrchat::client::login_with_stored_credentials_detailed(&settings).await {
@@ -6203,7 +7566,10 @@ mod tests {
         for (label, value) in &catalogue {
             assert!(!label.is_empty(), "every choice needs a name to pick it by");
             assert!(!label.starts_with("http"), "a URL is not a name: {label}");
-            assert!(value.starts_with("http"), "the stored value is still the URL");
+            assert!(
+                value.starts_with("http"),
+                "the stored value is still the URL"
+            );
         }
         // A free list has no catalogue, so it must not be rendered as one.
         assert!(known_choices_for("enforce_instances_world_list").is_none());
@@ -6247,11 +7613,26 @@ mod tests {
 
         let copied = celeste_core::paths::copy_data_dir(&from, &to).unwrap();
 
-        assert!(to.join("settings.json").is_file(), "settings must come across");
-        assert!(to.join("secure-prefs.json").is_file(), "the login must come across");
-        assert!(to.join("usr").join("usr_1.json").is_file(), "per-user data must come across");
-        assert!(!to.join("logs").exists(), "logs regenerate; don't carry them");
-        assert!(!to.join("caches").exists(), "caches regenerate; don't carry them");
+        assert!(
+            to.join("settings.json").is_file(),
+            "settings must come across"
+        );
+        assert!(
+            to.join("secure-prefs.json").is_file(),
+            "the login must come across"
+        );
+        assert!(
+            to.join("usr").join("usr_1.json").is_file(),
+            "per-user data must come across"
+        );
+        assert!(
+            !to.join("logs").exists(),
+            "logs regenerate; don't carry them"
+        );
+        assert!(
+            !to.join("caches").exists(),
+            "caches regenerate; don't carry them"
+        );
         assert_eq!(copied, 3);
         // The original is left intact: a half-finished move of a live data
         // directory is unrecoverable.
@@ -6265,33 +7646,58 @@ mod tests {
     /// advisory pipeline's whole visible output was missing.
     #[test]
     fn a_watched_players_advisory_colour_reaches_the_renderer() {
-        let mut player = celeste_core::ui::ConnectedPlayer::new("usr_1", "Someone", chrono::Utc::now().naive_utc());
+        let mut player = celeste_core::ui::ConnectedPlayer::new(
+            "usr_1",
+            "Someone",
+            chrono::Utc::now().naive_utc(),
+        );
         assert_eq!(row_foreground(&player), None);
         assert_eq!(row_background(&player), None);
 
         player.text_color = Some((200, 30, 30));
-        assert_eq!(row_foreground(&player), Some(egui::Color32::from_rgb(200, 30, 30)));
+        assert_eq!(
+            row_foreground(&player),
+            Some(egui::Color32::from_rgb(200, 30, 30))
+        );
     }
 
     #[test]
     fn flagged_pronouns_get_javas_amber_pair() {
-        let mut player = celeste_core::ui::ConnectedPlayer::new("usr_1", "Someone", chrono::Utc::now().naive_utc());
+        let mut player = celeste_core::ui::ConnectedPlayer::new(
+            "usr_1",
+            "Someone",
+            chrono::Utc::now().naive_utc(),
+        );
         player.pronouns_flagged = true;
-        assert_eq!(row_foreground(&player), Some(egui::Color32::from_rgb(235, 190, 80)));
-        assert_eq!(row_background(&player), Some(egui::Color32::from_rgb(80, 55, 10)));
+        assert_eq!(
+            row_foreground(&player),
+            Some(egui::Color32::from_rgb(235, 190, 80))
+        );
+        assert_eq!(
+            row_background(&player),
+            Some(egui::Color32::from_rgb(80, 55, 10))
+        );
     }
 
     /// Java's background condition is narrow on purpose: an advisory colour
     /// wins, and a departed player never gets the amber highlight.
     #[test]
     fn an_advisory_colour_or_a_departure_suppresses_the_amber_background() {
-        let mut player = celeste_core::ui::ConnectedPlayer::new("usr_1", "Someone", chrono::Utc::now().naive_utc());
+        let mut player = celeste_core::ui::ConnectedPlayer::new(
+            "usr_1",
+            "Someone",
+            chrono::Utc::now().naive_utc(),
+        );
         player.pronouns_flagged = true;
         player.text_color = Some((200, 30, 30));
         assert_eq!(row_background(&player), None);
-        assert_eq!(row_foreground(&player), Some(egui::Color32::from_rgb(200, 30, 30)));
+        assert_eq!(
+            row_foreground(&player),
+            Some(egui::Color32::from_rgb(200, 30, 30))
+        );
 
-        let mut departed = celeste_core::ui::ConnectedPlayer::new("usr_2", "Gone", chrono::Utc::now().naive_utc());
+        let mut departed =
+            celeste_core::ui::ConnectedPlayer::new("usr_2", "Gone", chrono::Utc::now().naive_utc());
         departed.pronouns_flagged = true;
         departed.left = Some(chrono::Utc::now().naive_utc());
         assert_eq!(row_background(&departed), None);
@@ -6309,7 +7715,11 @@ mod tests {
         // because Java only ever showed the truncated advisory string.
         let mut seen = std::collections::HashSet::new();
         for column in ColumnId::ALL {
-            assert!(seen.insert(column), "duplicate column in ColumnId::ALL: {:?}", column);
+            assert!(
+                seen.insert(column),
+                "duplicate column in ColumnId::ALL: {:?}",
+                column
+            );
         }
         assert_eq!(ColumnId::ALL.len(), 18);
         assert_eq!(ColumnId::DEFAULT_VISIBLE.len(), 16);
@@ -6357,6 +7767,45 @@ mod tests {
     }
 
     #[test]
+    fn a_dragged_fitted_column_keeps_the_width_the_user_chose() {
+        let columns = [
+            ColumnId::Name,
+            ColumnId::Id,
+            ColumnId::WatchedGroups,
+            ColumnId::Advisory,
+            ColumnId::Ban,
+        ];
+        let mut preferred = ColumnId::ALL
+            .into_iter()
+            .map(|column| (column, column.initial_width()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let available = 620.0;
+        let before = fitted_column_widths(&columns, &preferred, available);
+        let groups_index = columns
+            .iter()
+            .position(|column| *column == ColumnId::WatchedGroups)
+            .unwrap();
+        let desired = before[groups_index] + 70.0;
+
+        let stored = preference_for_fitted_width(
+            &columns,
+            &preferred,
+            available,
+            ColumnId::WatchedGroups,
+            desired,
+        );
+        preferred.insert(ColumnId::WatchedGroups, stored);
+        let after = fitted_column_widths(&columns, &preferred, available);
+
+        assert!(
+            (after[groups_index] - desired).abs() < 0.01,
+            "requested {desired}, got {}",
+            after[groups_index]
+        );
+        assert!((after.iter().sum::<f32>() - available).abs() < 0.01);
+    }
+
+    #[test]
     fn dragging_a_header_swaps_the_two_columns() {
         // Exercises the same swap logic `instance_tab` applies on a
         // successful header drop, without needing a full egui context.
@@ -6376,12 +7825,18 @@ mod tests {
         ];
         sort_players(
             &mut players,
-            Some(TableSort { column: ColumnId::Name, ascending: true }),
+            Some(TableSort {
+                column: ColumnId::Name,
+                ascending: true,
+            }),
         );
         assert_eq!(players[0].name, "alpha");
         sort_players(
             &mut players,
-            Some(TableSort { column: ColumnId::Name, ascending: false }),
+            Some(TableSort {
+                column: ColumnId::Name,
+                ascending: false,
+            }),
         );
         assert_eq!(players[0].name, "Zulu");
     }
@@ -6402,9 +7857,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = Settings::open(dir.path());
         let saved = std::collections::HashMap::from([
-            ("Name".to_string(), UiPropsInfo { index: 1, width: 222 }),
-            ("Id".to_string(), UiPropsInfo { index: 0, width: 333 }),
-            ("Ban".to_string(), UiPropsInfo { index: -1, width: 70 }),
+            (
+                "Name".to_string(),
+                UiPropsInfo {
+                    index: 1,
+                    width: 222,
+                },
+            ),
+            (
+                "Id".to_string(),
+                UiPropsInfo {
+                    index: 0,
+                    width: 333,
+                },
+            ),
+            (
+                "Ban".to_string(),
+                UiPropsInfo {
+                    index: -1,
+                    width: 70,
+                },
+            ),
         ]);
         settings.store.set_object("ui_instance_columns", &saved);
 
@@ -6419,10 +7892,22 @@ mod tests {
     #[test]
     fn settings_use_intentional_sections_instead_of_prefix_guessing() {
         assert_eq!(CelesteApp::setting_group("ui_language"), "Appearance");
-        assert_eq!(CelesteApp::setting_group("ui_confirm_group_invite"), "Interface");
-        assert_eq!(CelesteApp::setting_group("verified_role_snowflake"), "Verification");
-        assert_eq!(CelesteApp::setting_group("discord_ping_outstanding_user_ban"), "Outstanding moderation");
-        assert_eq!(CelesteApp::setting_group("custom_avatar_search_providers"), "Avatar search");
+        assert_eq!(
+            CelesteApp::setting_group("ui_confirm_group_invite"),
+            "Interface"
+        );
+        assert_eq!(
+            CelesteApp::setting_group("verified_role_snowflake"),
+            "Verification"
+        );
+        assert_eq!(
+            CelesteApp::setting_group("discord_ping_outstanding_user_ban"),
+            "Outstanding moderation"
+        );
+        assert_eq!(
+            CelesteApp::setting_group("custom_avatar_search_providers"),
+            "Avatar search"
+        );
     }
 
     #[test]
@@ -6430,11 +7915,7 @@ mod tests {
         let mut current = SettingCategory::General;
         let mut search = "voice channel".to_string();
 
-        CelesteApp::activate_settings_category(
-            &mut current,
-            &mut search,
-            SettingCategory::Discord,
-        );
+        CelesteApp::activate_settings_category(&mut current, &mut search, SettingCategory::Discord);
 
         assert_eq!(current, SettingCategory::Discord);
         assert!(search.is_empty());
@@ -6462,17 +7943,24 @@ mod tests {
 
     #[test]
     fn notification_matrix_owns_shared_event_toggles() {
-        assert!(CelesteApp::notification_matrix_id("tts_announce_watched_users"));
+        assert!(CelesteApp::notification_matrix_id(
+            "tts_announce_watched_users"
+        ));
         assert!(CelesteApp::notification_matrix_id("toast_notify_staff"));
         assert!(!CelesteApp::notification_matrix_id("tts_voice_name"));
-        assert!(!CelesteApp::notification_matrix_id("notify_desktop_enabled"));
+        assert!(!CelesteApp::notification_matrix_id(
+            "notify_desktop_enabled"
+        ));
     }
 
     #[test]
     fn world_id_resolver_accepts_an_id_or_vrchat_url() {
         let id = "wrld_01234567-89ab-cdef-0123-456789abcdef";
         assert_eq!(resolve_world_id(id).as_deref(), Some(id));
-        assert_eq!(resolve_world_id(&format!("https://vrchat.com/home/world/{id}/info")).as_deref(), Some(id));
+        assert_eq!(
+            resolve_world_id(&format!("https://vrchat.com/home/world/{id}/info")).as_deref(),
+            Some(id)
+        );
         assert_eq!(resolve_world_id("wrld_not-a-uuid"), None);
     }
 
@@ -6480,17 +7968,28 @@ mod tests {
     fn instance_location_resolver_accepts_raw_and_launch_urls() {
         let world = "wrld_01234567-89ab-cdef-0123-456789abcdef";
         let location = format!("{world}:12345~group(grp_1)~region(us)");
-        assert_eq!(resolve_instance_location(&location).as_deref(), Some(location.as_str()));
+        assert_eq!(
+            resolve_instance_location(&location).as_deref(),
+            Some(location.as_str())
+        );
         let url = format!(
             "https://vrchat.com/home/launch?worldId={world}&instanceId=12345%7Egroup%28grp_1%29%7Eregion%28us%29"
         );
-        assert_eq!(resolve_instance_location(&url).as_deref(), Some(location.as_str()));
+        assert_eq!(
+            resolve_instance_location(&url).as_deref(),
+            Some(location.as_str())
+        );
     }
 
     #[test]
     fn instance_name_validation_matches_java() {
         assert_eq!(validate_instance_display_name("  ").unwrap(), None);
-        assert_eq!(validate_instance_display_name(" Movie night ").unwrap().as_deref(), Some("Movie night"));
+        assert_eq!(
+            validate_instance_display_name(" Movie night ")
+                .unwrap()
+                .as_deref(),
+            Some("Movie night")
+        );
         assert!(validate_instance_display_name("has/slash").is_err());
         assert!(validate_instance_display_name(&"x".repeat(33)).is_err());
     }
@@ -6502,7 +8001,12 @@ mod tests {
         form.age_gate = true;
         form.avatar_gate = "Good".into();
         form.display_name = "Movie night".into();
-        let request = create_instance_request(&form, "wrld_01234567-89ab-cdef-0123-456789abcdef", "grp_owner").unwrap();
+        let request = create_instance_request(
+            &form,
+            "wrld_01234567-89ab-cdef-0123-456789abcdef",
+            "grp_owner",
+        )
+        .unwrap();
         assert_eq!(request["type"], "group");
         assert_eq!(request["groupAccessType"], "plus");
         assert_eq!(request["minimumAvatarPerformance"], "Good");
@@ -6514,7 +8018,12 @@ mod tests {
     fn invite_plus_request_is_personal_and_requestable() {
         let mut form = CreateInstanceForm::default();
         form.kind = InstanceKind::InvitePlus;
-        let request = create_instance_request(&form, "wrld_01234567-89ab-cdef-0123-456789abcdef", "usr_owner").unwrap();
+        let request = create_instance_request(
+            &form,
+            "wrld_01234567-89ab-cdef-0123-456789abcdef",
+            "usr_owner",
+        )
+        .unwrap();
         assert_eq!(request["type"], "private");
         assert_eq!(request["canRequestInvite"], true);
         assert!(request.get("groupAccessType").is_none());
@@ -6549,6 +8058,33 @@ mod tests {
         for chapter in TutorialChapter::ORDER {
             assert!(!chapter.steps().is_empty(), "{:?} has no steps", chapter);
         }
+    }
+
+    #[test]
+    fn tutorial_voice_labels_are_human_readable() {
+        assert_eq!(CelesteApp::tutorial_voice_label(""), "System default");
+        assert_eq!(
+            CelesteApp::tutorial_voice_label("espeak-ng/en-us"),
+            "en-us (espeak-ng)"
+        );
+        assert_eq!(
+            CelesteApp::tutorial_voice_label("Legacy Voice"),
+            "Legacy Voice"
+        );
+    }
+
+    #[test]
+    fn narrated_tour_steps_include_the_visible_guidance() {
+        let step = TUTORIAL_STEPS
+            .iter()
+            .copied()
+            .find(|step| step.demo_data)
+            .expect("the tour has a demonstration-data step");
+        let spoken = CelesteApp::tutorial_spoken_text(step);
+        assert!(spoken.contains(step.title));
+        assert!(spoken.contains(step.body));
+        assert!(spoken.contains(step.try_it));
+        assert!(spoken.contains("temporary demonstration data"));
     }
 
     /// A chapter's steps must be contiguous. The window numbers steps as
@@ -6587,7 +8123,10 @@ mod tests {
                 seen_advanced = true;
             }
         }
-        assert!(seen_advanced, "there should be at least one advanced chapter");
+        assert!(
+            seen_advanced,
+            "there should be at least one advanced chapter"
+        );
     }
 
     /// Chapters that need an integration are the advanced ones; an
@@ -6614,16 +8153,21 @@ mod tests {
     fn the_tour_window_dodges_its_own_spotlight() {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
         let rect = |x, y, w, h| {
-            Some(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)))
+            Some(egui::Rect::from_min_size(
+                egui::pos2(x, y),
+                egui::vec2(w, h),
+            ))
         };
 
         // Something on the right (toolbar, Help): window goes left.
-        let (align, offset) = CelesteApp::tutorial_anchor_for(screen, rect(1200.0, 60.0, 300.0, 40.0));
+        let (align, offset) =
+            CelesteApp::tutorial_anchor_for(screen, rect(1200.0, 60.0, 300.0, 40.0));
         assert_eq!(align, egui::Align2::LEFT_TOP);
         assert!(offset[0] > 0.0, "a left anchor offsets inward");
 
         // Something on the left (settings sidebar): window stays right.
-        let (align, offset) = CelesteApp::tutorial_anchor_for(screen, rect(20.0, 200.0, 240.0, 400.0));
+        let (align, offset) =
+            CelesteApp::tutorial_anchor_for(screen, rect(20.0, 200.0, 240.0, 400.0));
         assert_eq!(align, egui::Align2::RIGHT_TOP);
         assert!(offset[0] < 0.0, "a right anchor offsets inward");
 
@@ -6639,5 +8183,80 @@ mod tests {
         // No measured target yet: fall back to the original corner.
         let (align, _) = CelesteApp::tutorial_anchor_for(screen, None);
         assert_eq!(align, egui::Align2::RIGHT_TOP);
+    }
+
+    #[test]
+    fn broad_tour_targets_use_the_quiet_bottom_right_corner() {
+        for target in [
+            TutorialTarget::PlayerTable,
+            TutorialTarget::ToolbarControls,
+            TutorialTarget::SettingsContent,
+        ] {
+            assert_eq!(
+                CelesteApp::tutorial_forced_anchor(target),
+                Some(egui::Align2::RIGHT_BOTTOM),
+                "{target:?} should not cover the controls it explains"
+            );
+        }
+        assert_eq!(
+            CelesteApp::tutorial_forced_anchor(TutorialTarget::SettingsSidebar),
+            None
+        );
+    }
+
+    #[test]
+    fn public_credits_contain_only_the_requested_people_and_communities() {
+        let credits: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../resources/credits.json")).unwrap();
+        let names = credits
+            .iter()
+            .filter_map(|credit| credit.get("name").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "VRChat",
+                "VRChat API",
+                "KozyBlake",
+                "Claude",
+                "OpenAI Codex",
+                "The Synapse",
+                "VRC Kmart",
+            ]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_font_fallbacks_cover_ui_arrows_and_cjk_names_when_available() {
+        let mut paths = base_system_font_paths();
+        assert!(
+            !paths.is_empty(),
+            "at least one normal Linux font is available"
+        );
+        let cjk = ['界']
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        for path in system_font_paths_for(&cjk) {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+
+        let ctx = egui::Context::default();
+        apply_font_fallbacks(&ctx, &paths);
+        ctx.begin_pass(egui::RawInput::default());
+        ctx.fonts(|fonts| {
+            let font = egui::FontId::proportional(crate::theme::TEXT_BODY);
+            assert!(fonts.has_glyph(&font, '→'));
+            if paths.iter().any(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains("CJK"))
+            }) {
+                assert!(fonts.has_glyph(&font, '界'));
+            }
+        });
+        let _ = ctx.end_pass();
     }
 }
