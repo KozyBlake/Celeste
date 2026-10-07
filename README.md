@@ -13,6 +13,7 @@ A self-hostable VRChat group management utility with Discord integration.
 - [Settings reference](SETTINGS.md)
 - [Building from source](BUILDING.md)
 - [Installation](#installation)
+- [License](https://github.com/KozyBlake/Celeste?tab=License-1-ov-file)
 
 ---
 
@@ -362,11 +363,15 @@ If no engine is installed, Celeste opens an explanatory warning instead of a voi
 
 ## Credits and licence
 
-Celeste is MIT licensed, and the licence it inherits is Scarlet's. Scarlet was
-written by **Vinyarion** of the **Sybyline Network**, who holds the copyright
-in `LICENSE`; that notice stays, and so does the credits list the app shows
-under Help. This is a rewrite of their work, not a replacement of their
-authorship.
+Celeste is licensed under the **[PolyForm Noncommercial License 1.0.0](https://github.com/KozyBlake/Celeste?tab=License-1-ov-file)**.
+It is source-available for permitted noncommercial use under the terms of that
+license.
+
+Celeste is a rewrite of Scarlet. Scarlet was written by **Vinyarion** of the
+**Sybyline Network** and released under the MIT License. The applicable Scarlet
+copyright and licence notices remain in place, and so does the credits list the
+app shows under Help. This is a rewrite of their work, not a replacement of
+their authorship.
 
 Scarlet's logo is **not** included here and is not Celeste's. It belonged to
 that project and was never mine to carry over. Celeste uses its own crescent
