@@ -1601,22 +1601,22 @@ impl CelesteApp {
                     .button(if resume_at.is_some() { "Resume guided tour" } else { "Guided tour" })
                     .clicked()
                 {
-                    self.start_tutorial(resume_at.unwrap_or(0));
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize([960.0, 700.0].into()));
+                    self.start_tutorial(ui.ctx(), resume_at.unwrap_or(0));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     ui.close_menu();
                 }
                 if resume_at.is_some() && ui.button("Start tour over").clicked() {
                     if let Some(settings) = &self.settings {
                         settings.tutorial_progress_step.set(Some(-1), "guided-tour");
                     }
-                    self.start_tutorial(0);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize([960.0, 700.0].into()));
+                    self.start_tutorial(ui.ctx(), 0);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     ui.close_menu();
                 }
                 if ui.button("Tour chapters…").clicked() {
                     self.tutorial_step = None;
                     self.tutorial_menu = true;
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize([960.0, 700.0].into()));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     ui.close_menu();
                 }
                 if ui.button("Diagnostics").clicked() {
@@ -4338,7 +4338,11 @@ impl CelesteApp {
         report
     }
 
-    fn start_tutorial(&mut self, step: usize) {
+    fn start_tutorial(&mut self, ctx: &egui::Context, step: usize) {
+        // Give the tour the whole screen. The spotlight points at real UI,
+        // and in a small window the areas it describes are cramped or
+        // scrolled out of view before the tour can highlight them.
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
         let step = step.min(TUTORIAL_STEPS.len().saturating_sub(1));
         self.tutorial_step = Some(step);
         self.record_tutorial_progress(step);
@@ -4477,6 +4481,57 @@ impl CelesteApp {
         (discord, vrchat, label)
     }
 
+    /// Where to put the tour window so it does not cover what it is
+    /// pointing at.
+    ///
+    /// The window was anchored to the top right regardless of the
+    /// spotlight, so any step describing something on the right - the
+    /// toolbar, the rightmost columns, Help - was explaining a thing it
+    /// was sitting on top of. This picks the opposite side of the screen
+    /// from the target instead. A target spanning most of the width (the
+    /// player table) cannot be dodged sideways, so those are dodged
+    /// vertically.
+    fn tutorial_window_anchor(
+        ctx: &egui::Context,
+        target: Option<egui::Rect>,
+    ) -> (egui::Align2, [f32; 2]) {
+        const SIDE: f32 = 24.0;
+        // Clears the header and tab bar when the window sits at the top.
+        const TOP: f32 = 118.0;
+        const BOTTOM: f32 = -24.0;
+
+        let _ = (SIDE, TOP, BOTTOM);
+        Self::tutorial_anchor_for(ctx.screen_rect(), target)
+    }
+
+    /// Geometry half of [`Self::tutorial_window_anchor`], split out so the
+    /// placement rules can be tested without an egui context.
+    fn tutorial_anchor_for(
+        screen: egui::Rect,
+        target: Option<egui::Rect>,
+    ) -> (egui::Align2, [f32; 2]) {
+        const SIDE: f32 = 24.0;
+        const TOP: f32 = 118.0;
+        const BOTTOM: f32 = -24.0;
+
+        let Some(target) = target else {
+            return (egui::Align2::RIGHT_TOP, [-SIDE, TOP]);
+        };
+
+        if target.width() > screen.width() * 0.6 {
+            // Too wide to sit beside: go above or below it instead.
+            if target.center().y < screen.center().y {
+                (egui::Align2::RIGHT_BOTTOM, [-SIDE, BOTTOM])
+            } else {
+                (egui::Align2::RIGHT_TOP, [-SIDE, TOP])
+            }
+        } else if target.center().x > screen.center().x {
+            (egui::Align2::LEFT_TOP, [SIDE, TOP])
+        } else {
+            (egui::Align2::RIGHT_TOP, [-SIDE, TOP])
+        }
+    }
+
     /// The chapter chooser: shown after the essential path, and reachable
     /// from Help so a single chapter can be revisited without replaying
     /// the whole tour.
@@ -4539,7 +4594,7 @@ impl CelesteApp {
         self.tutorial_show_all = show_all;
         if let Some(step) = start {
             self.tutorial_menu = false;
-            self.start_tutorial(step);
+            self.start_tutorial(ctx, step);
             ctx.request_repaint();
         } else if close {
             self.tutorial_menu = false;
@@ -4627,6 +4682,7 @@ impl CelesteApp {
         let has_previous = self.tutorial_prev_step(index).is_some();
         let chapter_steps = chapter.steps();
         let within = chapter_steps.iter().position(|i| *i == index).map(|i| i + 1).unwrap_or(1);
+        let (anchor_align, anchor_offset) = Self::tutorial_window_anchor(ctx, target);
         egui::Window::new(format!(
             "Guided tour — {} ({} of {}){}",
             chapter.title(),
@@ -4639,7 +4695,7 @@ impl CelesteApp {
             .collapsible(false)
             .resizable(false)
             .default_width(440.0)
-            .anchor(egui::Align2::RIGHT_TOP, [-24.0, 118.0])
+            .anchor(anchor_align, anchor_offset)
             .show(ctx, |ui| {
                 ui.heading(step.title);
                 ui.add_space(8.0);
@@ -5716,16 +5772,10 @@ impl eframe::App for CelesteApp {
                 }
                 self.wizard = None;
                 if let Some(step) = self.resume_tutorial_step.take() {
-                    self.start_tutorial(step);
+                    self.start_tutorial(ctx, step);
                     self.tutorial_setup_had_discord = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                        [960.0, 700.0].into(),
-                    ));
                 } else if start_tutorial {
-                    self.start_tutorial(0);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                        [960.0, 700.0].into(),
-                    ));
+                    self.start_tutorial(ctx, 0);
                 }
                 // Fall through to render the normal UI below on this same frame.
             }
@@ -6555,5 +6605,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The window must never sit on top of the thing it is explaining.
+    /// This was the reported bug: a fixed top-right anchor covered the
+    /// toolbar, the rightmost columns, and Help.
+    #[test]
+    fn the_tour_window_dodges_its_own_spotlight() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        let rect = |x, y, w, h| {
+            Some(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)))
+        };
+
+        // Something on the right (toolbar, Help): window goes left.
+        let (align, offset) = CelesteApp::tutorial_anchor_for(screen, rect(1200.0, 60.0, 300.0, 40.0));
+        assert_eq!(align, egui::Align2::LEFT_TOP);
+        assert!(offset[0] > 0.0, "a left anchor offsets inward");
+
+        // Something on the left (settings sidebar): window stays right.
+        let (align, offset) = CelesteApp::tutorial_anchor_for(screen, rect(20.0, 200.0, 240.0, 400.0));
+        assert_eq!(align, egui::Align2::RIGHT_TOP);
+        assert!(offset[0] < 0.0, "a right anchor offsets inward");
+
+        // Full-width target in the upper half (the player table) cannot be
+        // dodged sideways, so the window drops below it.
+        let (align, _) = CelesteApp::tutorial_anchor_for(screen, rect(0.0, 100.0, 1600.0, 300.0));
+        assert_eq!(align, egui::Align2::RIGHT_BOTTOM);
+
+        // Full-width target low down (the status bar): window goes up.
+        let (align, _) = CelesteApp::tutorial_anchor_for(screen, rect(0.0, 820.0, 1600.0, 40.0));
+        assert_eq!(align, egui::Align2::RIGHT_TOP);
+
+        // No measured target yet: fall back to the original corner.
+        let (align, _) = CelesteApp::tutorial_anchor_for(screen, None);
+        assert_eq!(align, egui::Align2::RIGHT_TOP);
     }
 }
