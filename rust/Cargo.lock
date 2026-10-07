@@ -755,6 +755,166 @@ dependencies = [
 ]
 
 [[package]]
+name = "celeste"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "celeste-core",
+ "celeste-dave",
+ "celeste-discord",
+ "celeste-events",
+ "celeste-gif",
+ "celeste-ui",
+ "celeste-vrchat",
+ "chrono",
+ "songbird",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "winresource",
+]
+
+[[package]]
+name = "celeste-core"
+version = "0.10.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64 0.22.1",
+ "bzip2 0.6.1",
+ "chrono",
+ "csv",
+ "deunicode",
+ "flate2",
+ "lru",
+ "lzma-rust2 0.21.0",
+ "pbkdf2",
+ "rand 0.8.8",
+ "regex",
+ "serde",
+ "serde_json",
+ "sevenz-rust",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unicode-general-category",
+ "unicode-normalization",
+ "unicode-script",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "celeste-dave"
+version = "0.10.0"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "celeste-discord"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "celeste-core",
+ "celeste-events",
+ "celeste-gif",
+ "celeste-vrchat",
+ "chrono",
+ "chrono-tz",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serenity",
+ "sha2 0.10.9",
+ "songbird",
+ "symphonia",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "celeste-events"
+version = "0.10.0"
+dependencies = [
+ "async-trait",
+ "celeste-core",
+ "celeste-vrchat",
+ "chrono",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "celeste-gif"
+version = "0.10.0"
+dependencies = [
+ "base64 0.22.1",
+ "image",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "celeste-ui"
+version = "0.10.0"
+dependencies = [
+ "celeste-core",
+ "celeste-discord",
+ "celeste-events",
+ "celeste-vrchat",
+ "chrono",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "image",
+ "open",
+ "reqwest",
+ "rfd",
+ "serde",
+ "serde_json",
+ "songbird",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "celeste-vrchat"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "celeste-core",
+ "chrono",
+ "hmac",
+ "reqwest",
+ "reqwest_cookie_store",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sysinfo",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5253,166 +5413,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scarlet"
-version = "0.10.0"
-dependencies = [
- "anyhow",
- "chrono",
- "scarlet-core",
- "scarlet-dave",
- "scarlet-discord",
- "scarlet-events",
- "scarlet-gif",
- "scarlet-ui",
- "scarlet-vrchat",
- "songbird",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "winresource",
-]
-
-[[package]]
-name = "scarlet-core"
-version = "0.10.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "base64 0.22.1",
- "bzip2 0.6.1",
- "chrono",
- "csv",
- "deunicode",
- "flate2",
- "lru",
- "lzma-rust2 0.21.0",
- "pbkdf2",
- "rand 0.8.8",
- "regex",
- "serde",
- "serde_json",
- "sevenz-rust",
- "sha2 0.10.9",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "unicode-general-category",
- "unicode-normalization",
- "unicode-script",
- "uuid",
- "zip",
-]
-
-[[package]]
-name = "scarlet-dave"
-version = "0.10.0"
-dependencies = [
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "scarlet-discord"
-version = "0.10.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "chrono-tz",
- "regex",
- "reqwest",
- "scarlet-core",
- "scarlet-events",
- "scarlet-gif",
- "scarlet-vrchat",
- "serde",
- "serde_json",
- "serenity",
- "sha2 0.10.9",
- "songbird",
- "symphonia",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "scarlet-events"
-version = "0.10.0"
-dependencies = [
- "async-trait",
- "chrono",
- "scarlet-core",
- "scarlet-vrchat",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "wiremock",
-]
-
-[[package]]
-name = "scarlet-gif"
-version = "0.10.0"
-dependencies = [
- "base64 0.22.1",
- "image",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "scarlet-ui"
-version = "0.10.0"
-dependencies = [
- "chrono",
- "eframe",
- "egui",
- "egui_extras",
- "image",
- "open",
- "reqwest",
- "rfd",
- "scarlet-core",
- "scarlet-discord",
- "scarlet-events",
- "scarlet-vrchat",
- "serde",
- "serde_json",
- "songbird",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "scarlet-vrchat"
-version = "0.10.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "hmac",
- "reqwest",
- "reqwest_cookie_store",
- "scarlet-core",
- "serde",
- "serde_json",
- "sha1",
- "sysinfo",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "uuid",
- "wiremock",
 ]
 
 [[package]]

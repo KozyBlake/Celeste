@@ -370,8 +370,9 @@ under Help. This is a rewrite of their work, not a replacement of their
 authorship.
 
 Scarlet's logo is **not** included here and is not Celeste's. It belonged to
-that project and was never mine to carry over. Celeste currently has no logo
-of its own.
+that project and was never mine to carry over. Celeste uses its own crescent
+logo, including dedicated sizes for application windows, taskbars and small
+system icons.
 
 The Discord setup screenshots in `images/` are crops of Discord's own
 developer dashboard.

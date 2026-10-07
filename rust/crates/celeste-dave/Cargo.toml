@@ -1,0 +1,9 @@
+[package]
+name = "celeste-dave"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust port of the vendored libdave-maven (moe.kyokobot.libdave) DAVE E2EE library"
+
+[dependencies]
+thiserror.workspace = true

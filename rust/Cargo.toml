@@ -1,20 +1,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/scarlet",
-    "crates/scarlet-core",
-    "crates/scarlet-gif",
-    "crates/scarlet-discord",
-    "crates/scarlet-vrchat",
-    "crates/scarlet-dave",
-    "crates/scarlet-ui",
-    "crates/scarlet-events",
+    "crates/celeste",
+    "crates/celeste-core",
+    "crates/celeste-gif",
+    "crates/celeste-discord",
+    "crates/celeste-vrchat",
+    "crates/celeste-dave",
+    "crates/celeste-ui",
+    "crates/celeste-events",
 ]
 
 [workspace.package]
 version = "0.10.0"
 edition = "2021"
-license = "AGPL-3.0-only"
+license = "MIT"
 repository = "https://github.com/KozyBlake/ScarletRust"
 
 [workspace.dependencies]
@@ -63,10 +63,10 @@ flate2 = "1"
 bzip2 = "0.6"
 lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz"] }
 
-scarlet-core = { path = "crates/scarlet-core" }
-scarlet-gif = { path = "crates/scarlet-gif" }
-scarlet-discord = { path = "crates/scarlet-discord" }
-scarlet-vrchat = { path = "crates/scarlet-vrchat" }
-scarlet-dave = { path = "crates/scarlet-dave" }
-scarlet-ui = { path = "crates/scarlet-ui" }
-scarlet-events = { path = "crates/scarlet-events" }
+celeste-core = { path = "crates/celeste-core" }
+celeste-gif = { path = "crates/celeste-gif" }
+celeste-discord = { path = "crates/celeste-discord" }
+celeste-vrchat = { path = "crates/celeste-vrchat" }
+celeste-dave = { path = "crates/celeste-dave" }
+celeste-ui = { path = "crates/celeste-ui" }
+celeste-events = { path = "crates/celeste-events" }

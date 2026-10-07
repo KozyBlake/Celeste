@@ -26,7 +26,7 @@ cargo build --release
 ```
 
 The binary is `rust/target/release/celeste`. Internal library crate names keep
-the `scarlet` spelling for source compatibility, but the executable uses the
+the `celeste` spelling throughout the Rust workspace, and the executable uses the
 user-visible project name so Linux process monitors and desktop launchers show
 `celeste` consistently.
 
@@ -44,25 +44,25 @@ On a memory-constrained machine, building every test binary at once can get
 the job OOM-killed. Run it per package instead:
 
 ```sh
-cargo test --release -p scarlet-core -p scarlet-ui -- --test-threads=2
-cargo test --release -p scarlet-discord -p scarlet-vrchat -p scarlet-events \
-                     -p scarlet-gif -p scarlet-dave -p scarlet -- --test-threads=2
+cargo test --release -p celeste-core -p celeste-ui -- --test-threads=2
+cargo test --release -p celeste-discord -p celeste-vrchat -p celeste-events \
+                     -p celeste-gif -p celeste-dave -p celeste -- --test-threads=2
 ```
 
 ### The one test worth knowing about
 
 ```sh
-cargo test -p scarlet-discord command_surface_matches_java
+cargo test -p celeste-discord command_surface_matches_java
 ```
 
 This compares the Discord commands Celeste actually registers against
-`crates/scarlet-discord/java_commands.txt`, a committed snapshot of
+`crates/celeste-discord/java_commands.txt`, a committed snapshot of
 Scarlet's full command inventory. It fails with a list naming exactly which
 commands went missing. 130 are ported and 31 are deliberately absent; see
 the README.
 
 If you rename a command, add the pair to `RENAMED_FROM_JAVA` in
-`crates/scarlet-discord/src/commands/mod.rs` — do not edit the snapshot,
+`crates/celeste-discord/src/commands/mod.rs` — do not edit the snapshot,
 which is the record of what Scarlet had.
 
 ## Workspace layout
@@ -70,14 +70,14 @@ which is the record of what Scarlet had.
 ```
 rust/
   crates/
-    scarlet-core/      settings, i18n, paths, data files, logging
-    scarlet-vrchat/    VRChat API client, entity cache, rate limiter
-    scarlet-discord/   bot, slash commands, components, voice/TTS
-    scarlet-ui/        egui desktop application
-    scarlet-events/    VRChat log tailer and event pipeline
-    scarlet-gif/       GIF encode/decode for animated emoji
-    scarlet-dave/      Discord end-to-end voice encryption
-    scarlet/           the binary
+    celeste-core/      settings, i18n, paths, data files, logging
+    celeste-vrchat/    VRChat API client, entity cache, rate limiter
+    celeste-discord/   bot, slash commands, components, voice/TTS
+    celeste-ui/        egui desktop application
+    celeste-events/    VRChat log tailer and event pipeline
+    celeste-gif/       GIF encode/decode for animated emoji
+    celeste-dave/      Discord end-to-end voice encryption
+    celeste/           the binary
   PORTING.md           decisions, deliberate deviations, scope
   HANDOFF.md           working brief for the next session
 ```
@@ -102,7 +102,7 @@ CELESTE_HOME=/tmp/celeste-scratch cargo run --release
 
 ```sh
 RUST_LOG=debug cargo run --release
-RUST_LOG=scarlet_vrchat=trace,warn cargo run --release
+RUST_LOG=celeste_vrchat=trace,warn cargo run --release
 ```
 
 Logs also go to the `logs/` folder inside the data directory.

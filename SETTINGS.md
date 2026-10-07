@@ -1,11 +1,11 @@
 # Celeste settings reference
 
 **This file is generated.** It is built from the settings registry by
-`crates/scarlet-core/src/settings/doc.rs`, and a test fails if it falls out
+`crates/celeste-core/src/settings/doc.rs`, and a test fails if it falls out
 of date. To regenerate after adding or changing a setting:
 
 ```sh
-cd rust && UPDATE_SETTINGS_MD=1 cargo test -p scarlet-core settings_md_is_current
+cd rust && UPDATE_SETTINGS_MD=1 cargo test -p celeste-core settings_md_is_current
 ```
 
 Edit the description in `settings/help.rs`, not this file.
