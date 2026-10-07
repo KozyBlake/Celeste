@@ -38,6 +38,458 @@ enum Tab {
     Cli,
 }
 
+/// A named run of tutorial steps.
+///
+/// The tour is split so a first-time operator can finish something
+/// coherent without sitting through operator-only material. Essential
+/// chapters run end to end; advanced ones are offered afterwards and can
+/// also be launched individually from Help.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TutorialChapter {
+    Basics,
+    InstanceAndRoster,
+    VoiceAndSettings,
+    HelpAndTroubleshooting,
+    ModerationAndIntegrations,
+    ManagedClients,
+    DataAndRecovery,
+}
+
+/// What a chapter needs configured before it describes anything real.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TutorialNeeds {
+    Nothing,
+    Discord,
+    VrChat,
+}
+
+impl TutorialChapter {
+    /// Running order. Essential chapters come first so the tour has a
+    /// natural end for someone who does not want the advanced material.
+    const ORDER: [TutorialChapter; 7] = [
+        TutorialChapter::Basics,
+        TutorialChapter::InstanceAndRoster,
+        TutorialChapter::VoiceAndSettings,
+        TutorialChapter::HelpAndTroubleshooting,
+        TutorialChapter::ModerationAndIntegrations,
+        TutorialChapter::ManagedClients,
+        TutorialChapter::DataAndRecovery,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            TutorialChapter::Basics => "Basics",
+            TutorialChapter::InstanceAndRoster => "Your instance and roster",
+            TutorialChapter::VoiceAndSettings => "Voice and settings",
+            TutorialChapter::HelpAndTroubleshooting => "Help and troubleshooting",
+            TutorialChapter::ModerationAndIntegrations => "Moderation and integrations",
+            TutorialChapter::ManagedClients => "Managed VRChat clients",
+            TutorialChapter::DataAndRecovery => "Data, CLI, and recovery",
+        }
+    }
+
+    fn essential(self) -> bool {
+        matches!(
+            self,
+            TutorialChapter::Basics
+                | TutorialChapter::InstanceAndRoster
+                | TutorialChapter::VoiceAndSettings
+                | TutorialChapter::HelpAndTroubleshooting
+        )
+    }
+
+    fn needs(self) -> TutorialNeeds {
+        match self {
+            TutorialChapter::ModerationAndIntegrations => TutorialNeeds::Discord,
+            TutorialChapter::ManagedClients => TutorialNeeds::VrChat,
+            _ => TutorialNeeds::Nothing,
+        }
+    }
+
+    /// Steps belonging to this chapter, as indices into [`TUTORIAL_STEPS`].
+    fn steps(self) -> Vec<usize> {
+        TUTORIAL_STEPS
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step.chapter == self)
+            .map(|(index, _)| index)
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TutorialStep {
+    chapter: TutorialChapter,
+    tab: Tab,
+    target: TutorialTarget,
+    settings_category: Option<SettingCategory>,
+    demo_data: bool,
+    title: &'static str,
+    body: &'static str,
+    try_it: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum TutorialTarget {
+    Header,
+    TabBar,
+    MainContent,
+    InstanceCard,
+    PlayerTable,
+    ToolbarControls,
+    SettingsSidebar,
+    SettingsContent,
+    StatusBar,
+    Help,
+}
+
+#[derive(Default)]
+struct TutorialLayout {
+    header: Option<egui::Rect>,
+    tab_bar: Option<egui::Rect>,
+    toolbar_controls: Option<egui::Rect>,
+    main_content: Option<egui::Rect>,
+    instance_card: Option<egui::Rect>,
+    player_table: Option<egui::Rect>,
+    settings_sidebar: Option<egui::Rect>,
+    settings_content: Option<egui::Rect>,
+    status_bar: Option<egui::Rect>,
+    help: Option<egui::Rect>,
+}
+
+struct TutorialDemo {
+    state: UiState,
+    directory: PathBuf,
+}
+
+impl TutorialDemo {
+    fn create() -> Option<Self> {
+        use celeste_core::trust_rank::TrustRank;
+        use celeste_core::ui::{AvatarBundleInfo, InstanceState, PlayerJoin};
+        use celeste_core::watched_membership::WatchedMembership;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "celeste-guided-tour-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).ok()?;
+
+        let fixture = serde_json::json!({
+            "tutorialOnly": true,
+            "instance": {
+                "world": "Celeste Tutorial World",
+                "location": "wrld_tutorial:42420~group(grp_tutorial)~region(us)"
+            },
+            "players": [
+                {"id":"usr_tutorial_normal","name":"Example Visitor","kind":"ordinary"},
+                {"id":"usr_tutorial_watched","name":"Example Watched User","kind":"watched"},
+                {"id":"usr_tutorial_flagged","name":"Example Flagged Profile","kind":"flagged"},
+                {"id":"usr_tutorial_left","name":"Example Departed Player","kind":"departed"}
+            ]
+        });
+        let watched_users = serde_json::json!({
+            "usr_tutorial_watched": {
+                "message": "Tutorial: watched user and group match",
+                "priority": 100
+            }
+        });
+        let watched_groups = serde_json::json!({
+            "grp_tutorial_warning": {
+                "type": "NUISANCE",
+                "message": "Tutorial group — not a real moderation record"
+            }
+        });
+        for (name, value) in [
+            ("tutorial_instance.json", fixture),
+            ("watched_users.json", watched_users),
+            ("watched_groups.json", watched_groups),
+        ] {
+            let bytes = serde_json::to_vec_pretty(&value).ok()?;
+            if std::fs::write(directory.join(name), bytes).is_err() {
+                let _ = std::fs::remove_dir_all(&directory);
+                return None;
+            }
+        }
+
+        let state = UiState::new();
+        let now = chrono::Local::now().naive_local();
+        state.set_instance(Some(InstanceState {
+            location: "wrld_tutorial:42420~group(grp_tutorial)~region(us)".to_string(),
+            world_name: Some("Celeste Tutorial World — DEMO DATA".to_string()),
+            joined: now - chrono::Duration::minutes(18),
+            is_group_instance: true,
+        }));
+        state.refresh_vrchat_api_status("VRChat: tutorial data (not signed in)");
+
+        let mut ordinary = PlayerJoin::new(
+            "usr_tutorial_normal",
+            "Example Visitor",
+            now - chrono::Duration::minutes(12),
+        );
+        ordinary.pronouns = Some("they/them".to_string());
+        ordinary.account_age = Some((1, 4, 8));
+        ordinary.trust_rank = TrustRank::User;
+        ordinary.age_verification_status = Some("18+".to_string());
+        ordinary.avatar_name = Some("Tutorial Avatar".to_string());
+        ordinary.avatar_info = Some(AvatarBundleInfo {
+            performance_rating: Some("Good".to_string()),
+            file_id: Some("file_tutorial_bundle".to_string()),
+            file_name: Some("tutorial-avatar.vrca".to_string()),
+            owner_id: Some("usr_tutorial_creator".to_string()),
+            avatar_id: Some("avtr_tutorial".to_string()),
+        });
+        state.player_join(false, ordinary);
+
+        let mut watched = PlayerJoin::new(
+            "usr_tutorial_watched",
+            "Example Watched User",
+            now - chrono::Duration::minutes(9),
+        );
+        watched.pronouns = Some("she/her".to_string());
+        watched.account_age = Some((0, 1, 12));
+        watched.trust_rank = TrustRank::Known;
+        watched.advisory = Some("DEMO: watched user; member of a watched group".to_string());
+        watched.text_color = Some((255, 176, 76));
+        watched.priority = 100;
+        watched.watched_memberships = vec![WatchedMembership {
+            group_id: "grp_tutorial_warning".to_string(),
+            kind: "NUISANCE".to_string(),
+            current_name: Some("Tutorial Watched Group".to_string()),
+            message: Some("Demo only — inspect this membership during the tour".to_string()),
+            hidden: false,
+            critical: true,
+            silent: false,
+        }];
+        state.player_join(false, watched);
+
+        let mut flagged = PlayerJoin::new(
+            "usr_tutorial_flagged",
+            "Example Flagged Profile",
+            now - chrono::Duration::minutes(7),
+        );
+        flagged.pronouns = Some("example.invalid/link".to_string());
+        flagged.pronouns_flagged = true;
+        flagged.account_age = Some((0, 0, 2));
+        flagged.trust_rank = TrustRank::Visitor;
+        flagged.advisory = Some("DEMO: new account and flagged profile text".to_string());
+        flagged.text_color = Some((255, 208, 96));
+        flagged.priority = 60;
+        flagged.avatar_name = Some("Very Poor Tutorial Avatar".to_string());
+        flagged.avatar_info = Some(AvatarBundleInfo {
+            performance_rating: Some("VeryPoor".to_string()),
+            ..Default::default()
+        });
+        state.player_join(false, flagged);
+
+        let departed = PlayerJoin::new(
+            "usr_tutorial_left",
+            "Example Departed Player",
+            now - chrono::Duration::minutes(15),
+        );
+        state.player_join(false, departed);
+        state.player_leave(
+            false,
+            "usr_tutorial_left",
+            "Example Departed Player",
+            now - chrono::Duration::minutes(3),
+        );
+
+        Some(Self { state, directory })
+    }
+}
+
+impl Drop for TutorialDemo {
+    fn drop(&mut self) {
+        // `directory` is a uniquely generated child of the OS temp folder;
+        // it never points at CELESTE_HOME or at the user's chosen data path.
+        if self
+            .directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("celeste-guided-tour-"))
+        {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+}
+
+const TUTORIAL_STEPS: [TutorialStep; 17] = [
+    TutorialStep {
+        chapter: TutorialChapter::Basics,
+        tab: Tab::Instance,
+        target: TutorialTarget::Header,
+        settings_category: None,
+        demo_data: false,
+        title: "Your Celeste setup",
+        body: "Celeste can run as a local VRChat moderation logger, add VRChat API features, connect a Discord bot, or use everything together. The summary below reflects what is configured now; anything skipped during setup can be added later without losing existing data.",
+        try_it: "The tour never sends commands, changes Discord, or moderates anyone. You can exit now and replay it later from Help.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::Basics,
+        tab: Tab::Instance,
+        target: TutorialTarget::TabBar,
+        settings_category: None,
+        demo_data: false,
+        title: "Finding your way around",
+        body: "Instance is the live roster. Clients manages long-running VRChat coverage. Settings controls every available feature. CLI is a local maintenance console. The toolbar holds common actions, while the bottom bar reports the current local session.",
+        try_it: "The tour selects each area automatically. You can use these tabs normally after the tour ends.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::Basics,
+        tab: Tab::Instance,
+        target: TutorialTarget::Header,
+        settings_category: None,
+        demo_data: false,
+        title: "Three separate connections",
+        body: "Local log monitoring, VRChat API sign-in, and Discord are independent. The roster can work from VRChat's local logs without an API login or Discord. Profile, group, instance-creation, invite, ban, and audit features require the appropriate VRChat sign-in and group permissions. Discord posting, commands, and Discord voice require a connected bot.",
+        try_it: "The badge reports VRChat API sign-in—not whether local log monitoring is working. Celeste explains missing requirements when an action cannot run.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::InstanceAndRoster,
+        tab: Tab::Instance,
+        target: TutorialTarget::InstanceCard,
+        settings_category: None,
+        demo_data: true,
+        title: "How Celeste detects an instance",
+        body: "Celeste follows VRChat's local output log to learn the world, exact instance location, whether it belongs to the configured group, when it was joined, and how many players are present. Detection can take a moment immediately after VRChat joins or changes worlds.",
+        try_it: "This highlighted instance and every player shown during the next lessons are clearly marked tutorial data and are never added to your real history.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::InstanceAndRoster,
+        tab: Tab::Instance,
+        target: TutorialTarget::PlayerTable,
+        settings_category: None,
+        demo_data: true,
+        title: "Reading the player roster",
+        body: "Rows combine display name, user ID, pronouns, avatar and performance details, account age, join/leave times, age verification, trust rank, and advisories. Present players lead the list; departed players remain dimmed so the session history stays useful.",
+        try_it: "The sample rows demonstrate an ordinary player, a watched user/group warning, a flagged profile, and a departed player. None are real VRChat accounts.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::InstanceAndRoster,
+        tab: Tab::Instance,
+        target: TutorialTarget::PlayerTable,
+        settings_category: None,
+        demo_data: true,
+        title: "Advisories, columns, and actions",
+        body: "Advisories can come from watched users, watched groups or avatars, suspicious names, pronoun validation, account age, avatar performance, and other enabled checks. Click a sortable heading to order rows, drag headings to reorder columns, drag an edge to resize, and right-click a heading to hide or restore columns.",
+        try_it: "Open Profile, Ban, Unban, Invite, and similar actions require VRChat API sign-in and suitable group permissions. External actions are disabled on this tutorial's fake rows.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::InstanceAndRoster,
+        tab: Tab::Instance,
+        target: TutorialTarget::ToolbarControls,
+        settings_category: None,
+        demo_data: false,
+        title: "Creating instances and importing groups",
+        body: "Create instance accepts a world ID or URL and lets you choose access, region, queue, age verification, and an optional name. Launching or managing the result requires VRChat sign-in and the relevant group permissions. Import groups adds watched-group data from a supported file or URL; it is not the same as importing an old Scarlet installation.",
+        try_it: "Tools opens the data folder, synchronizes Discord commands when a bot is configured, and clears only the current on-screen instance roster after confirmation.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::VoiceAndSettings,
+        tab: Tab::Instance,
+        target: TutorialTarget::ToolbarControls,
+        settings_category: None,
+        demo_data: false,
+        title: "Voice and notification controls",
+        body: "Voice: On pauses or resumes callouts, and Skip voice stops the current announcement. TTS can use this computer's default audio device or Discord voice. Discord voice requires a configured bot and voice channel; local output does not. Notification settings decide which events become callouts, desktop notices, Discord posts, or roster advisories.",
+        try_it: "Settings → Notifications can test TTS and open the operating system's sound controls if Celeste uses the wrong device.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::VoiceAndSettings,
+        tab: Tab::Settings,
+        target: TutorialTarget::SettingsSidebar,
+        settings_category: Some(SettingCategory::General),
+        demo_data: false,
+        title: "Finding and saving settings",
+        body: "Categories organize the available settings and show how many controls they contain. Search looks across every category. Changes save as you make them; unavailable subsystems are hidden. Hover a setting's explanation to see the internal ID used by Discord's settings command.",
+        try_it: "Leaving a category safely commits a value you were editing. Actions such as imports or credential resets remain explicit buttons rather than automatic settings.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::VoiceAndSettings,
+        tab: Tab::Settings,
+        target: TutorialTarget::SettingsContent,
+        settings_category: Some(SettingCategory::General),
+        demo_data: false,
+        title: "Make Celeste feel like yours",
+        body: "General includes UI scale, accent colour, accent-coloured section headings, interface language, departed-player dimming, confirmation preferences, and CLI visibility. Appearance changes do not alter moderation decisions or stored moderation data.",
+        try_it: "Choose accent colour and Set UI scale are in the General action card. You can change them again at any time.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::HelpAndTroubleshooting,
+        tab: Tab::Instance,
+        target: TutorialTarget::StatusBar,
+        settings_category: None,
+        demo_data: false,
+        title: "A quick troubleshooting order",
+        body: "First check whether the bottom bar found the local instance. Then check the VRChat API badge, Discord connectivity if that feature is in use, and TTS output. A missing local instance usually concerns the VRChat log; a failed API action concerns sign-in or permissions; missing Discord output concerns the bot, channel, or routing settings.",
+        try_it: "Give a fresh instance a moment to register. If it remains wrong, collect Diagnostics before restarting so the useful evidence is not lost.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::HelpAndTroubleshooting,
+        tab: Tab::Instance,
+        target: TutorialTarget::Help,
+        settings_category: None,
+        demo_data: false,
+        title: "Help and diagnostics",
+        body: "Help can replay this tour, generate a diagnostic report, and open project, policy, and credit links. Diagnostics is the best starting point for a bug report because it captures the relevant paths and subsystem state without exposing stored passwords or tokens.",
+        try_it: "Use Help → Diagnostics and Copy report when something goes wrong. The tour's temporary files are removed when you finish or exit.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::ModerationAndIntegrations,
+        tab: Tab::Settings,
+        target: TutorialTarget::SettingsContent,
+        settings_category: Some(SettingCategory::Moderation),
+        demo_data: false,
+        title: "Moderation, advisories, and Discord",
+        body: "Moderation and Notifications control evidence, warnings, watched-list behavior, and which events become alerts. Discord controls bot behavior, permission delegation, event routing, voice channels, moderation tags, staff lists, and outstanding actions. Discord commands themselves must be tested inside your server and require the bot plus appropriate Discord or delegated Celeste permissions.",
+        try_it: "Start conservatively: enable only the notices your staff needs, then expand the notification matrix after confirming where each event is routed.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::ModerationAndIntegrations,
+        tab: Tab::Settings,
+        target: TutorialTarget::SettingsContent,
+        settings_category: Some(SettingCategory::Integrations),
+        demo_data: false,
+        title: "VRChat and external integrations",
+        body: "Integrations covers VRChat polling, avatar searches, instance following, and provider management. VRChat credentials and cached sessions are encrypted; 2FA is requested again when VRChat requires it. Group actions also need a group ID and sufficient permissions. Avatar search uses the configured providers and does not rely on World Balancer.",
+        try_it: "System can reopen VRChat setup or clear credentials and the cached session if authentication becomes stuck. Clearing credentials means signing in again.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::ManagedClients,
+        tab: Tab::Clients,
+        target: TutorialTarget::MainContent,
+        settings_category: None,
+        demo_data: false,
+        title: "Managed VRChat clients",
+        body: "Clients is an advanced feature for long-running moderation coverage. A slot maps one numbered Steam/VRChat profile to an expected identity and exact instance. Celeste can detect a stopped process, restart that profile through the normal Steam/EAC path, and rejoin its assigned location without storing that account's password.",
+        try_it: "Ordinary single-client users can leave this empty. Multi-client operators should configure and verify one slot at a time before enabling automatic restart or replacement-instance creation.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::DataAndRecovery,
+        tab: Tab::Settings,
+        target: TutorialTarget::SettingsContent,
+        settings_category: Some(SettingCategory::System),
+        demo_data: false,
+        title: "Data, migration, cleanup, and recovery",
+        body: "System shows Celeste's data folder and can open or move it, import legacy Scarlet data, clean old caches and logs, restart Celeste, rerun VRChat setup, or reset a broken VRChat session. Scarlet import is additive: existing Celeste records win, credentials and settings are skipped, and a backup is created so you can verify the result.",
+        try_it: "Pronoun good/bad lists are managed from General and reloaded after editing. Cache cleanup protects active files and does not delete durable moderation lists or history.",
+    },
+    TutorialStep {
+        chapter: TutorialChapter::DataAndRecovery,
+        tab: Tab::Cli,
+        target: TutorialTarget::MainContent,
+        settings_category: None,
+        demo_data: false,
+        title: "Local CLI and action safety",
+        body: "The CLI is Celeste's local maintenance console—not Discord chat. `help` lists commands for diagnostics, TTS tests, data-folder access, imports, ID linking, and restart. Read-only actions are immediate; destructive or moderation actions use confirmations where practical and still require the relevant connection and permissions.",
+        try_it: "Try `help` safely. You can hide the CLI later from View → Show CLI tab without disabling any background moderation feature.",
+    },
+];
+
 /// One column of the Instance tab's player table, matching `propstable`'s
 /// `addProperty` call order in `ScarletUI.java`. Kept as an enum (rather
 /// than just an index) so [`CelesteApp::column_order`] can be reordered by
@@ -536,6 +988,18 @@ pub struct CelesteApp {
     /// there's no settings store to run it against at all), at which point
     /// `update()` renders the normal toolbar/tabs/table instead.
     wizard: Option<crate::setup::SetupWizard>,
+    /// Settings-only page opened from setup's finish screen. It deliberately
+    /// keeps the wizard alive and hides the normal toolbar/tabs/status UI.
+    setup_settings_review: bool,
+    tutorial_step: Option<usize>,
+    /// Showing the chapter chooser rather than a step.
+    tutorial_menu: bool,
+    /// Ignore the setup profile and show every chapter ("Show anyway").
+    tutorial_show_all: bool,
+    tutorial_layout: TutorialLayout,
+    tutorial_demo: Option<TutorialDemo>,
+    resume_tutorial_step: Option<usize>,
+    tutorial_setup_had_discord: bool,
     /// The authenticated VRChat client, shared with `celeste-discord`'s
     /// command handlers via its `TypeMap` (see `celeste_discord::data`).
     /// `None` until a login succeeds — from the wizard this session, or an
@@ -756,6 +1220,14 @@ impl CelesteApp {
             staff_mode,
             runtime_handle,
             wizard,
+            setup_settings_review: false,
+            tutorial_step: None,
+            tutorial_menu: false,
+            tutorial_show_all: false,
+            tutorial_layout: TutorialLayout::default(),
+            tutorial_demo: None,
+            resume_tutorial_step: None,
+            tutorial_setup_had_discord: false,
             vrchat_slot,
             avatar_search,
             discord_http,
@@ -1005,7 +1477,7 @@ impl CelesteApp {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        let header = ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(celeste_core::identity::NAME).strong().size(crate::theme::TEXT_HEADING));
                 ui.label(
@@ -1032,16 +1504,18 @@ impl CelesteApp {
                     });
             });
         });
+        self.tutorial_layout.header = Some(header.response.rect);
 
         ui.add_space(9.0);
         ui.separator();
         ui.add_space(3.0);
-        ui.horizontal_wrapped(|ui| {
-            egui::Frame::none()
+        let controls = ui.horizontal_wrapped(|ui| {
+            let tabs = egui::Frame::none()
                 .fill(crate::theme::WELL)
                 .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
                 .inner_margin(egui::Margin::same(crate::theme::GAP_TIGHT))
                 .show(ui, |ui| self.tab_bar(ui));
+            self.tutorial_layout.tab_bar = Some(tabs.response.rect);
             ui.separator();
 
             if ui
@@ -1121,7 +1595,30 @@ impl CelesteApp {
                 }
             });
 
-            ui.menu_button("Help", |ui| {
+            let help = ui.menu_button("Help", |ui| {
+                let resume_at = self.tutorial_resume_step();
+                if ui
+                    .button(if resume_at.is_some() { "Resume guided tour" } else { "Guided tour" })
+                    .clicked()
+                {
+                    self.start_tutorial(resume_at.unwrap_or(0));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize([960.0, 700.0].into()));
+                    ui.close_menu();
+                }
+                if resume_at.is_some() && ui.button("Start tour over").clicked() {
+                    if let Some(settings) = &self.settings {
+                        settings.tutorial_progress_step.set(Some(-1), "guided-tour");
+                    }
+                    self.start_tutorial(0);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize([960.0, 700.0].into()));
+                    ui.close_menu();
+                }
+                if ui.button("Tour chapters…").clicked() {
+                    self.tutorial_step = None;
+                    self.tutorial_menu = true;
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize([960.0, 700.0].into()));
+                    ui.close_menu();
+                }
                 if ui.button("Diagnostics").clicked() {
                     self.diagnostics_open = true;
                     ui.close_menu();
@@ -1146,7 +1643,9 @@ impl CelesteApp {
                     }
                 }
             });
+            self.tutorial_layout.help = Some(help.response.rect);
         });
+        self.tutorial_layout.toolbar_controls = Some(controls.response.rect);
     }
 
     /// Port of `ScarletUI.discordUpdateCommandList` ->
@@ -1323,7 +1822,14 @@ impl CelesteApp {
         .inner
     }
 
-    fn render_cell(&mut self, ui: &mut egui::Ui, player: &celeste_core::ui::ConnectedPlayer, column: ColumnId) {
+    fn render_cell(
+        &mut self,
+        ui: &mut egui::Ui,
+        player: &celeste_core::ui::ConnectedPlayer,
+        column: ColumnId,
+        display_state: &UiState,
+        external_actions_enabled: bool,
+    ) {
         match column {
             ColumnId::Name => {
                 Self::text_cell(ui, &player.name);
@@ -1345,7 +1851,7 @@ impl CelesteApp {
             }
             ColumnId::AvatarStats => {
                 if Self::table_button(ui, "View").clicked() {
-                    let location = self.state.instance().map(|instance| instance.location);
+                    let location = display_state.instance().map(|instance| instance.location);
                     self.avatar_stats_open = Some(AvatarStatsView {
                         player_name: player.name.clone(),
                         avatar_name: player.avatar_name.clone(),
@@ -1400,7 +1906,11 @@ impl CelesteApp {
                 ui.add(egui::Label::new(egui::RichText::new(player.trust_rank.label()).color(color)).truncate());
             }
             ColumnId::Profile => {
-                if Self::table_button(ui, "Open").clicked() {
+                let response = ui
+                    .add_enabled_ui(external_actions_enabled, |ui| Self::table_button(ui, "Open"))
+                    .inner
+                    .on_disabled_hover_text("Disabled for temporary tutorial data");
+                if response.clicked() {
                     ui.ctx().open_url(egui::OpenUrl::same_tab(format!("https://vrchat.com/home/user/{}", player.id)));
                 }
             }
@@ -1410,19 +1920,31 @@ impl CelesteApp {
                 }
             }
             ColumnId::Ban => {
-                if Self::table_button(ui, "Ban").clicked() {
+                let response = ui
+                    .add_enabled_ui(external_actions_enabled, |ui| Self::table_button(ui, "Ban"))
+                    .inner
+                    .on_disabled_hover_text("Disabled for temporary tutorial data");
+                if response.clicked() {
                     // Java confirms before banning from the table; so does
                     // this, because a stray click in a row list is easy.
                     self.group_action_confirm = Some((GroupAction::Ban, player.id.clone(), player.name.clone()));
                 }
             }
             ColumnId::Unban => {
-                if Self::table_button(ui, "Unban").clicked() {
+                let response = ui
+                    .add_enabled_ui(external_actions_enabled, |ui| Self::table_button(ui, "Unban"))
+                    .inner
+                    .on_disabled_hover_text("Disabled for temporary tutorial data");
+                if response.clicked() {
                     self.group_action_confirm = Some((GroupAction::Unban, player.id.clone(), player.name.clone()));
                 }
             }
             ColumnId::Invite => {
-                if Self::table_button(ui, "Invite").clicked() {
+                let response = ui
+                    .add_enabled_ui(external_actions_enabled, |ui| Self::table_button(ui, "Invite"))
+                    .inner
+                    .on_disabled_hover_text("Disabled for temporary tutorial data");
+                if response.clicked() {
                     let confirm = self
                         .settings
                         .as_ref()
@@ -1440,14 +1962,16 @@ impl CelesteApp {
     fn instance_tab(&mut self, ui: &mut egui::Ui) {
         use egui_extras::{Column, TableBuilder};
 
-        let mut players = self.state.ordered_players();
+        let display_state = self.tutorial_state();
+        let tutorial_demo = self.tutorial_uses_demo_data();
+        let mut players = display_state.ordered_players();
         sort_players(&mut players, self.table_sort);
         if players.is_empty() {
             return self.instance_empty_state(ui);
         }
-        let (present, left, total) = self.state.status_counts();
+        let (present, left, total) = display_state.status_counts();
         let compact_height = ui.available_height() < 300.0;
-        let instance = self.state.instance();
+        let instance = display_state.instance();
         let instance_name = instance
             .as_ref()
             .and_then(|instance| instance.world_name.clone())
@@ -1664,7 +2188,13 @@ impl CelesteApp {
                                         // asks for.
                                         ui.set_opacity(dim_opacity);
                                     }
-                                    self.render_cell(ui, player, *column);
+                                    self.render_cell(
+                                        ui,
+                                        player,
+                                        *column,
+                                        &display_state,
+                                        !tutorial_demo,
+                                    );
                                 });
                             }
                         });
@@ -3808,6 +4338,411 @@ impl CelesteApp {
         report
     }
 
+    fn start_tutorial(&mut self, step: usize) {
+        let step = step.min(TUTORIAL_STEPS.len().saturating_sub(1));
+        self.tutorial_step = Some(step);
+        self.record_tutorial_progress(step);
+        if self.tutorial_demo.is_none() {
+            self.tutorial_demo = TutorialDemo::create();
+            if self.tutorial_demo.is_none() {
+                tracing::warn!("Could not create isolated guided-tour demonstration data");
+            }
+        }
+    }
+
+    /// Remember the furthest step reached, so leaving the tour does not
+    /// throw the progress away. Deliberately a high-water mark: stepping
+    /// back to re-read something and then quitting should not rewind what
+    /// Help offers to resume.
+    fn record_tutorial_progress(&self, step: usize) {
+        let Some(settings) = &self.settings else { return };
+        let step = step as i32;
+        if settings.tutorial_progress_step.get() < step {
+            settings.tutorial_progress_step.set(Some(step), "guided-tour");
+        }
+    }
+
+    /// The step Help should resume at, if the tour was left part-way and
+    /// is not already finished.
+    fn tutorial_resume_step(&self) -> Option<usize> {
+        let settings = self.settings.as_ref()?;
+        let reached = settings.tutorial_progress_step.get();
+        if reached < 0 {
+            return None;
+        }
+        let reached = reached as usize;
+        (reached + 1 < TUTORIAL_STEPS.len()).then_some(reached)
+    }
+
+    /// Whether this step is shown, honouring the "Show anyway" override.
+    fn tutorial_step_applies(&self, index: usize) -> bool {
+        self.tutorial_show_all
+            || TUTORIAL_STEPS
+                .get(index)
+                .is_some_and(|step| self.tutorial_chapter_applies(step.chapter))
+    }
+
+    /// Next shown step after `from`, skipping chapters that do not apply.
+    fn tutorial_next_step(&self, from: usize) -> Option<usize> {
+        ((from + 1)..TUTORIAL_STEPS.len()).find(|index| self.tutorial_step_applies(*index))
+    }
+
+    /// Previous shown step before `from`.
+    fn tutorial_prev_step(&self, from: usize) -> Option<usize> {
+        (0..from).rev().find(|index| self.tutorial_step_applies(*index))
+    }
+
+    /// True when `from` is the last step of the essential path, so the tour
+    /// has somewhere natural to stop rather than running an operator-only
+    /// chapter at a first-time user.
+    fn tutorial_ends_essentials(&self, from: usize) -> bool {
+        let Some(step) = TUTORIAL_STEPS.get(from) else { return false };
+        if !step.chapter.essential() {
+            return false;
+        }
+        self.tutorial_next_step(from)
+            .and_then(|next| TUTORIAL_STEPS.get(next))
+            .is_none_or(|next| !next.chapter.essential())
+    }
+
+    /// Whether a chapter describes something this install has configured.
+    ///
+    /// Blake's rule: go by what the operator actually chose at setup, and
+    /// if they never chose, show everything. So a chapter is only held back
+    /// when a setup profile was explicitly stored and excludes it - a
+    /// detected-but-unchosen state is not treated as a decision, and the
+    /// tour never silently hides a feature from someone who never said
+    /// they did not want it.
+    fn tutorial_chapter_applies(&self, chapter: TutorialChapter) -> bool {
+        let needs = chapter.needs();
+        if needs == TutorialNeeds::Nothing {
+            return true;
+        }
+        let Some(settings) = &self.settings else { return true };
+        let Some(profile) = settings.store.get_object::<String>("setup_profile") else {
+            // No profile was ever chosen: show everything.
+            return true;
+        };
+        match (profile.as_str(), needs) {
+            ("local_logger", _) => false,
+            ("vrchat_only", TutorialNeeds::Discord) => false,
+            ("discord_only", TutorialNeeds::VrChat) => false,
+            _ => true,
+        }
+    }
+
+    fn tutorial_uses_demo_data(&self) -> bool {
+        self.tutorial_step
+            .and_then(|index| TUTORIAL_STEPS.get(index))
+            .is_some_and(|step| step.demo_data)
+            && self.tutorial_demo.is_some()
+    }
+
+    fn tutorial_state(&self) -> UiState {
+        if self.tutorial_uses_demo_data() {
+            self.tutorial_demo
+                .as_ref()
+                .map(|demo| demo.state.clone())
+                .unwrap_or_else(|| self.state.clone())
+        } else {
+            self.state.clone()
+        }
+    }
+
+    fn integration_setup_status(&self) -> (bool, bool, &'static str) {
+        let Some(settings) = &self.settings else {
+            return (false, false, "Local moderation logger");
+        };
+        let secret = |key| {
+            celeste_core::settings::registry::registry_string_encrypted(
+                settings.encrypted.clone(),
+                key,
+            )
+            .get_or_null()
+            .is_some_and(|value| !value.trim().is_empty())
+        };
+        let discord = secret("discord.token");
+        let vrchat = secret("global:username") && secret("global:password");
+        let stored = settings.store.get_object::<String>("setup_profile");
+        let label = match stored.as_deref() {
+            Some("full") => "Full setup",
+            Some("vrchat_only") => "VRChat only",
+            Some("discord_only") => "Discord only",
+            Some("local_logger") => "Local moderation logger",
+            _ if discord && vrchat => "Full setup (detected)",
+            _ if vrchat => "VRChat only (detected)",
+            _ if discord => "Discord only (detected)",
+            _ => "Local moderation logger (detected)",
+        };
+        (discord, vrchat, label)
+    }
+
+    /// The chapter chooser: shown after the essential path, and reachable
+    /// from Help so a single chapter can be revisited without replaying
+    /// the whole tour.
+    fn tutorial_menu_window(&mut self, ctx: &egui::Context) {
+        if !self.tutorial_menu {
+            return;
+        }
+        let mut start: Option<usize> = None;
+        let mut close = false;
+        let mut show_all = self.tutorial_show_all;
+        let any_hidden = TutorialChapter::ORDER
+            .iter()
+            .any(|chapter| !self.tutorial_chapter_applies(*chapter));
+
+        egui::Window::new("Guided tour — chapters")
+            .id(egui::Id::new("celeste-guided-tour-menu"))
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(440.0)
+            .anchor(egui::Align2::RIGHT_TOP, [-24.0, 118.0])
+            .show(ctx, |ui| {
+                ui.label("Pick a chapter to run on its own. Essentials cover everything needed to moderate; the advanced chapters are for operators.");
+                ui.add_space(10.0);
+                for chapter in TutorialChapter::ORDER {
+                    let applies = self.tutorial_chapter_applies(chapter);
+                    let steps = chapter.steps();
+                    if steps.is_empty() {
+                        continue;
+                    }
+                    Self::inset_frame().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(chapter.title()).strong());
+                            if !chapter.essential() {
+                                ui.colored_label(crate::theme::INFO, "advanced");
+                            }
+                            if !applies {
+                                ui.colored_label(crate::theme::WARN, "not part of your setup");
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.weak(format!("{} step{}", steps.len(), if steps.len() == 1 { "" } else { "s" }));
+                            if (applies || show_all) && ui.button("Run chapter").clicked() {
+                                start = steps.first().copied();
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                }
+                if any_hidden {
+                    ui.add_space(4.0);
+                    ui.checkbox(&mut show_all, "Show chapters that are not part of my setup");
+                }
+                ui.add_space(12.0);
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+
+        self.tutorial_show_all = show_all;
+        if let Some(step) = start {
+            self.tutorial_menu = false;
+            self.start_tutorial(step);
+            ctx.request_repaint();
+        } else if close {
+            self.tutorial_menu = false;
+            self.tutorial_demo = None;
+            ctx.request_repaint();
+        }
+    }
+
+    fn tutorial_window(&mut self, ctx: &egui::Context) {
+        self.tutorial_menu_window(ctx);
+        let Some(index) = self.tutorial_step else { return };
+        let Some(step) = TUTORIAL_STEPS.get(index).copied() else {
+            self.tutorial_step = None;
+            return;
+        };
+
+        // Open the area being described rather than asking a new user to
+        // find it from prose alone.
+        self.tab = step.tab;
+        let target = match step.target {
+            TutorialTarget::Header => self.tutorial_layout.header,
+            TutorialTarget::TabBar => self.tutorial_layout.tab_bar,
+            TutorialTarget::MainContent => self.tutorial_layout.main_content,
+            TutorialTarget::InstanceCard => self.tutorial_layout.instance_card,
+            TutorialTarget::PlayerTable => self.tutorial_layout.player_table,
+            TutorialTarget::ToolbarControls => self.tutorial_layout.toolbar_controls,
+            TutorialTarget::SettingsSidebar => self.tutorial_layout.settings_sidebar,
+            TutorialTarget::SettingsContent => self.tutorial_layout.settings_content,
+            TutorialTarget::StatusBar => self.tutorial_layout.status_bar,
+            TutorialTarget::Help => self.tutorial_layout.help,
+        };
+
+        if let Some(target) = target {
+            let screen = ctx.screen_rect();
+            let target = target.expand(6.0).intersect(screen.shrink(2.0));
+            let shade = egui::Color32::from_black_alpha(205);
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Middle,
+                egui::Id::new("celeste-guided-tour-spotlight"),
+            ));
+            for rect in [
+                egui::Rect::from_min_max(screen.min, egui::pos2(screen.max.x, target.min.y)),
+                egui::Rect::from_min_max(egui::pos2(screen.min.x, target.max.y), screen.max),
+                egui::Rect::from_min_max(
+                    egui::pos2(screen.min.x, target.min.y),
+                    egui::pos2(target.min.x, target.max.y),
+                ),
+                egui::Rect::from_min_max(
+                    egui::pos2(target.max.x, target.min.y),
+                    egui::pos2(screen.max.x, target.max.y),
+                ),
+            ] {
+                if rect.is_positive() {
+                    painter.rect_filled(rect, 0.0, shade);
+                }
+            }
+            painter.rect_stroke(
+                target.expand(2.0),
+                crate::theme::RADIUS_PANEL + 2.0,
+                egui::Stroke::new(5.0_f32, self.accent.gamma_multiply(0.28)),
+            );
+            painter.rect_stroke(
+                target,
+                crate::theme::RADIUS_PANEL,
+                egui::Stroke::new(2.0_f32, self.accent),
+            );
+            painter.text(
+                target.left_top() + egui::vec2(2.0, -8.0),
+                egui::Align2::LEFT_BOTTOM,
+                "LOOK HERE",
+                egui::FontId::proportional(12.0),
+                self.accent,
+            );
+        }
+
+        let mut previous = false;
+        let mut next = false;
+        let mut close = false;
+        let mut complete_full_setup = false;
+        let (discord_configured, vrchat_configured, setup_label) =
+            self.integration_setup_status();
+        let chapter = step.chapter;
+        let ends_essentials = self.tutorial_ends_essentials(index);
+        let last_step = self.tutorial_next_step(index).is_none();
+        let has_previous = self.tutorial_prev_step(index).is_some();
+        let chapter_steps = chapter.steps();
+        let within = chapter_steps.iter().position(|i| *i == index).map(|i| i + 1).unwrap_or(1);
+        egui::Window::new(format!(
+            "Guided tour — {} ({} of {}){}",
+            chapter.title(),
+            within,
+            chapter_steps.len(),
+            if chapter.essential() { "" } else { "  ·  advanced" }
+        ))
+            .id(egui::Id::new("celeste-guided-tour"))
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(440.0)
+            .anchor(egui::Align2::RIGHT_TOP, [-24.0, 118.0])
+            .show(ctx, |ui| {
+                ui.heading(step.title);
+                ui.add_space(8.0);
+                ui.label(step.body);
+                if index == 0 {
+                    ui.add_space(10.0);
+                    Self::inset_frame().show(ui, |ui| {
+                        ui.label(egui::RichText::new(setup_label).strong());
+                        ui.label(format!(
+                            "Discord bot: {}",
+                            if discord_configured { "configured" } else { "not configured" }
+                        ));
+                        ui.label(format!(
+                            "VRChat API: {}",
+                            if vrchat_configured { "configured" } else { "not configured" }
+                        ));
+                        ui.label("Local VRChat log monitoring: available without either sign-in");
+                    });
+                    if (!discord_configured || !vrchat_configured)
+                        && ui.button("Complete full setup…").clicked()
+                    {
+                        complete_full_setup = true;
+                    }
+                }
+                if step.demo_data {
+                    ui.add_space(8.0);
+                    ui.colored_label(
+                        crate::theme::WARN,
+                        "DEMO DATA — temporary tutorial JSON, not your Celeste records",
+                    );
+                }
+                ui.add_space(12.0);
+                Self::inset_frame().show(ui, |ui| {
+                    ui.label(egui::RichText::new("Try or notice this").strong());
+                    ui.label(step.try_it);
+                });
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    previous = ui
+                        .add_enabled(has_previous, egui::Button::new("Back"))
+                        .clicked();
+                    next = ui
+                        .button(if ends_essentials {
+                            "Finish essentials"
+                        } else if last_step {
+                            "Finish tour"
+                        } else {
+                            "Next"
+                        })
+                        .clicked();
+                    if ui.button("Exit tour").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        if complete_full_setup {
+            if let Some(settings) = self.settings.clone() {
+                let mut wizard = crate::setup::SetupWizard::for_full_setup(
+                    &settings,
+                    self.runtime_handle.clone(),
+                );
+                if !wizard.is_done() {
+                    wizard.resize_for_current_stage_next_frame();
+                    self.resume_tutorial_step = Some(index);
+                    self.tutorial_setup_had_discord = discord_configured;
+                    self.tutorial_step = None;
+                    self.tutorial_demo = None;
+                    self.wizard = Some(wizard);
+                    ctx.request_repaint();
+                    return;
+                }
+            }
+        }
+
+        if close {
+            self.tutorial_step = None;
+            self.tutorial_menu = false;
+            self.tutorial_demo = None;
+        } else if next {
+            // Finishing the essential path opens the chapter chooser rather
+            // than dropping a first-time user straight into operator-only
+            // material - or ending the tour before they know it exists.
+            match self.tutorial_next_step(index) {
+                Some(following) if !self.tutorial_ends_essentials(index) => {
+                    self.tutorial_step = Some(following);
+                    self.record_tutorial_progress(following);
+                }
+                _ => {
+                    self.tutorial_step = None;
+                    self.tutorial_menu = true;
+                    self.record_tutorial_progress(TUTORIAL_STEPS.len().saturating_sub(1));
+                }
+            }
+            ctx.request_repaint();
+        } else if previous {
+            if let Some(earlier) = self.tutorial_prev_step(index) {
+                self.tutorial_step = Some(earlier);
+            }
+            ctx.request_repaint();
+        }
+    }
+
     fn utility_windows(&mut self, ctx: &egui::Context) {
         if self.clear_instance_confirm {
             let mut confirm = false;
@@ -4600,12 +5535,62 @@ impl eframe::App for CelesteApp {
         self.install_visual_style(ctx);
         self.persist_window_bounds(ctx);
 
+        // Restarts requested by setup, Settings, CLI, or Discord close the
+        // renderer first. The binary is relaunched by main only after
+        // `run_native` has returned, preventing EGL/WGL shutdown races.
+        if self.process_controller.restart_queued() {
+            if !self.exit_confirmed {
+                self.exit_confirmed = true;
+                self.shutdown();
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
         // A migration result is a blocking handoff: show it before either
         // the remaining first-run wizard or the normal application. That
         // guarantees the user sees the credential reminder and verifies the
         // result instead of having it buried behind another setup page.
         if self.legacy_import_result.is_some() {
             self.legacy_import_result_page(ctx);
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            return;
+        }
+
+        if self.setup_settings_review {
+            let mut back = false;
+            egui::TopBottomPanel::top("setup_settings_header")
+                .frame(
+                    egui::Frame::none()
+                        .fill(crate::theme::PANEL)
+                        .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Back to setup").clicked() {
+                            back = true;
+                        }
+                        ui.separator();
+                        ui.heading("Review settings");
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "Changes save immediately. Celeste will not start its integrations until you return and choose Start Celeste.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(crate::theme::INK))
+                .show(ctx, |ui| self.settings_tab(ui));
+            if back {
+                self.flush_pending_setting_edits();
+                self.setup_settings_review = false;
+                if let Some(wizard) = self.wizard.as_mut() {
+                    wizard.resize_for_current_stage_next_frame();
+                }
+            }
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
             return;
         }
@@ -4672,8 +5657,9 @@ impl eframe::App for CelesteApp {
         match outcome {
             Some(crate::setup::SetupOutcome::JustFinished {
                 discord_token,
-                open_settings,
+                start_tutorial,
             }) => {
+                let resuming_tutorial = self.resume_tutorial_step.is_some();
                 self.staff_mode = discord_token.as_deref().map(str::trim).unwrap_or("").is_empty();
 
                 match wizard_vrchat_client {
@@ -4689,7 +5675,7 @@ impl eframe::App for CelesteApp {
                     // VRChat was skipped in the wizard (or setup was
                     // already done and there was no wizard step to reuse
                     // from) -- fall back to an unattended login attempt.
-                    None => {
+                    None if !resuming_tutorial => {
                         if let Some(settings) = self.settings.clone() {
                             spawn_unattended_vrchat_login(
                                 &self.runtime_handle,
@@ -4699,9 +5685,14 @@ impl eframe::App for CelesteApp {
                             );
                         }
                     }
+                    None => {}
                 }
 
-                if let Some(settings) = self.settings.clone() {
+                // `if cond && let Some(x) = ...` is a let chain, which needs
+                // edition 2024; this workspace is on 2021. `Option::filter`
+                // expresses the same guard without re-indenting the block.
+                let tutorial_allows_discord = !resuming_tutorial || !self.tutorial_setup_had_discord;
+                if let Some(settings) = self.settings.clone().filter(|_| tutorial_allows_discord) {
                     self.runtime_handle.spawn(celeste_discord::client::connect_and_serve(
                         discord_token,
                         celeste_discord::data::SharedState {
@@ -4724,10 +5715,25 @@ impl eframe::App for CelesteApp {
                     ));
                 }
                 self.wizard = None;
-                if open_settings {
-                    self.tab = Tab::Settings;
+                if let Some(step) = self.resume_tutorial_step.take() {
+                    self.start_tutorial(step);
+                    self.tutorial_setup_had_discord = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                        [960.0, 700.0].into(),
+                    ));
+                } else if start_tutorial {
+                    self.start_tutorial(0);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                        [960.0, 700.0].into(),
+                    ));
                 }
                 // Fall through to render the normal UI below on this same frame.
+            }
+            Some(crate::setup::SetupOutcome::ReviewSettings) => {
+                self.setup_settings_review = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([960.0, 700.0].into()));
+                ctx.request_repaint();
+                return;
             }
             Some(crate::setup::SetupOutcome::TestTts) => {
                 self.tts_route.submit_routed(
@@ -4756,6 +5762,14 @@ impl eframe::App for CelesteApp {
             None => {}
         }
 
+        if let Some(step) = self
+            .tutorial_step
+            .and_then(|index| TUTORIAL_STEPS.get(index))
+        {
+            self.tab = step.tab;
+        }
+        self.tutorial_layout = TutorialLayout::default();
+
         egui::TopBottomPanel::top("toolbar")
             .frame(
                 egui::Frame::none()
@@ -4766,14 +5780,15 @@ impl eframe::App for CelesteApp {
             self.toolbar(ui);
         });
 
-        egui::TopBottomPanel::bottom("status_bar")
+        let status_state = self.tutorial_state();
+        let status_bar = egui::TopBottomPanel::bottom("status_bar")
             .frame(
                 egui::Frame::none()
                     .fill(crate::theme::PANEL)
                     .inner_margin(egui::Margin::symmetric(12.0, 6.0)),
             )
             .show(ctx, |ui| {
-            let (present, left, total) = self.state.status_counts();
+            let (present, left, total) = status_state.status_counts();
             // Java's `updateStatusBar`, through the same message catalogue
             // so the wording (and its translations) stay in one place.
             let text = if total == 0 {
@@ -4789,7 +5804,7 @@ impl eframe::App for CelesteApp {
                 // Which instance those players are in. Java never showed
                 // this; without it there is no way to tell "no instance
                 // open" from "instance open, nobody joined yet".
-                match self.state.instance() {
+                match status_state.instance() {
                     Some(instance) => {
                         ui.separator();
                         let label = instance.world_name.clone().unwrap_or_else(|| instance.location.clone());
@@ -4804,13 +5819,14 @@ impl eframe::App for CelesteApp {
                 // A dropped TTS announcement is otherwise silent in every
                 // sense: nothing plays and nothing is shown.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(problem) = self.state.tts_status() {
+                    if let Some(problem) = status_state.tts_status() {
                         ui.colored_label(crate::theme::WARN, "Voice warning")
                             .on_hover_text(&problem);
                     }
                 });
             });
         });
+        self.tutorial_layout.status_bar = Some(status_bar.response.rect);
 
         self.watched_groups_window(ctx);
         self.crash_report_window(ctx);
@@ -4823,7 +5839,7 @@ impl eframe::App for CelesteApp {
         self.settings_action_windows(ctx);
         self.utility_windows(ctx);
 
-        egui::CentralPanel::default()
+        let main_content = egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
                     .fill(crate::theme::INK)
@@ -4835,6 +5851,12 @@ impl eframe::App for CelesteApp {
             Tab::Settings => self.settings_tab(ui),
             Tab::Cli => self.cli_tab(ui),
         });
+        self.tutorial_layout.main_content = Some(main_content.response.rect);
+
+        // Render this last so the explanation remains above the area it is
+        // describing. Changing steps selects the corresponding tab for the
+        // next frame without performing any action in that tab.
+        self.tutorial_window(ctx);
 
         // Immediate-mode redraw: request another frame so live updates from
         // background polling tasks (mutating `UiState` from other threads)
@@ -5039,6 +6061,7 @@ pub fn run(
             .with_position([100.0, 100.0])
             .with_inner_size([600.0, 400.0]);
     }
+    viewport = viewport.with_min_inner_size([560.0, 360.0]);
     let options = eframe::NativeOptions {
         viewport,
         renderer: crate::platform::native_renderer(),
@@ -5460,5 +6483,77 @@ mod tests {
         assert_eq!(format_account_age((4, 0, 3)), "4y 3d");
         assert_eq!(format_account_age((0, 7, 0)), "7m");
         assert_eq!(format_account_age((0, 0, 0)), "0D");
+    }
+
+    /// Each step must belong to a chapter that actually runs, or it would
+    /// be unreachable from both the linear path and the chooser.
+    #[test]
+    fn every_step_belongs_to_a_listed_chapter() {
+        for step in TUTORIAL_STEPS.iter() {
+            assert!(
+                TutorialChapter::ORDER.contains(&step.chapter),
+                "{:?} is not in TutorialChapter::ORDER",
+                step.chapter
+            );
+        }
+        for chapter in TutorialChapter::ORDER {
+            assert!(!chapter.steps().is_empty(), "{:?} has no steps", chapter);
+        }
+    }
+
+    /// A chapter's steps must be contiguous. The window numbers steps as
+    /// "3 of 4" within a chapter and Back/Next walk the flat array, so a
+    /// split chapter would count wrongly and appear to jump elsewhere
+    /// mid-chapter.
+    #[test]
+    fn chapters_are_contiguous_runs() {
+        for chapter in TutorialChapter::ORDER {
+            let steps = chapter.steps();
+            let first = steps[0];
+            for (offset, index) in steps.iter().enumerate() {
+                assert_eq!(
+                    *index,
+                    first + offset,
+                    "{:?} is split across the step array",
+                    chapter
+                );
+            }
+        }
+    }
+
+    /// Essentials must come first, or "Finish essentials" would strand
+    /// essential material behind an advanced chapter.
+    #[test]
+    fn the_essential_path_runs_before_the_advanced_one() {
+        let mut seen_advanced = false;
+        for step in TUTORIAL_STEPS.iter() {
+            if step.chapter.essential() {
+                assert!(
+                    !seen_advanced,
+                    "essential chapter {:?} follows an advanced one",
+                    step.chapter
+                );
+            } else {
+                seen_advanced = true;
+            }
+        }
+        assert!(seen_advanced, "there should be at least one advanced chapter");
+    }
+
+    /// Chapters that need an integration are the advanced ones; an
+    /// essential chapter must never be skippable, or a local-only user
+    /// would lose part of the basic path.
+    #[test]
+    fn essential_chapters_never_depend_on_an_integration() {
+        for chapter in TutorialChapter::ORDER {
+            if chapter.essential() {
+                assert_eq!(
+                    chapter.needs(),
+                    TutorialNeeds::Nothing,
+                    "{:?} is essential but gated on an integration",
+                    chapter
+                );
+            }
+        }
     }
 }

@@ -144,6 +144,7 @@ pub struct Settings {
     // --- Scarlet.java: System ---
     pub vibecoded_notice_acknowledged: Arc<FileValued<bool>>,
     pub setup_profile_prompted: Arc<FileValued<bool>>,
+    pub tutorial_progress_step: Arc<FileValued<i32>>,
     pub discord_setup_prompted: Arc<FileValued<bool>>,
     pub vrchat_setup_prompted: Arc<FileValued<bool>>,
 
@@ -505,6 +506,18 @@ impl Settings {
                 "Initial setup type has been selected",
                 SettingCategory::System,
                 false,
+            ),
+            // How far the guided tour got, so leaving it mid-way does not
+            // mean starting over. -1 means "never started"; the tour writes
+            // the furthest step reached, not the current one, so stepping
+            // back and quitting does not throw progress away.
+            tutorial_progress_step: registry.int_range(
+                "tutorial_progress_step",
+                "Furthest guided-tour step reached (-1 = not started)",
+                SettingCategory::System,
+                -1,
+                -1,
+                512,
             ),
             // Not a direct Java field -- see celeste_ui::setup module docs
             // for why the Discord setup step is gated on this instead of
