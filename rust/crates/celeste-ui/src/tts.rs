@@ -16,6 +16,15 @@ const NUISANCE_ALERT: &[u8] = include_bytes!("../resources/tts/bl_sfx_siren_chir
 // Keep the Windows script in one testable string. Rendering first and then
 // playing the WAV mirrors Scarlet's reliable path and avoids SAPI silently
 // choosing an unavailable output endpoint in VMs or remote sessions.
+// Plays a rendered wave file. Like the synthesis script, the path travels
+// in the environment: arguments written after `-Command` are appended to
+// the command text rather than bound to `$args`, so `$args[0]` was always
+// null here and the chime never played.
+#[cfg(target_os = "windows")]
+const WINDOWS_PLAY_SCRIPT: &str = "$ErrorActionPreference='Stop'; \
+     $p=[System.Media.SoundPlayer]::new($env:CELESTE_SFX_WAV); \
+     try { $p.PlaySync() } finally { $p.Dispose() }";
+
 const WINDOWS_SAPI_SCRIPT: &str = r#"
 $ErrorActionPreference='Stop'
 $wav=$env:CELESTE_TTS_WAV
@@ -763,7 +772,7 @@ fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn();
     }
     #[cfg(target_os = "macos")]
@@ -786,13 +795,18 @@ fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "$p=[System.Media.SoundPlayer]::new($args[0]); $p.PlaySync()",
+                WINDOWS_PLAY_SCRIPT,
             ])
-            .arg(path);
+            .env("CELESTE_SFX_WAV", path);
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
-        return command.spawn();
+        return command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            // Reported by the same waiter that reports speech failures.
+            .stderr(Stdio::piped())
+            .spawn();
     }
     #[allow(unreachable_code)]
     Err(std::io::Error::new(
@@ -911,6 +925,42 @@ mod tests {
         assert!(WINDOWS_SAPI_SCRIPT.contains("SelectVoice"));
         assert!(WINDOWS_SAPI_SCRIPT.contains("Remove-Item"));
         assert!(WINDOWS_SAPI_SCRIPT.contains("exit 1"));
+    }
+
+    /// `$args` does not work with `-Command`.
+    ///
+    /// PowerShell documents that when `-Command` takes a string it must be
+    /// last: anything written after it is appended to the command text
+    /// rather than bound to `$args`. A script reading `$args[0]` therefore
+    /// gets `$null` and throws. That shipped twice - once in Discord
+    /// synthesis, and once in the chime player, where it meant no alert
+    /// sound ever played on Windows - so this is a standing check rather
+    /// than a third discovery. Values travel in the environment instead.
+    #[test]
+    fn no_powershell_script_reads_args() {
+        // Built at runtime so this test's own source does not match it.
+        let needle = format!("{}args[", '\u{24}');
+        let source = include_str!("tts.rs");
+        for (number, line) in source.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            assert!(
+                !line.contains(&needle),
+                "line {} indexes PowerShell's argument array, which is empty under \
+                 -Command; pass the value in the environment instead: {}",
+                number + 1,
+                line.trim()
+            );
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_chime_player_takes_its_path_from_the_environment() {
+        assert!(WINDOWS_PLAY_SCRIPT.contains("$env:CELESTE_SFX_WAV"));
+        assert!(WINDOWS_PLAY_SCRIPT.contains("PlaySync"));
+        assert!(WINDOWS_PLAY_SCRIPT.contains("Dispose"));
     }
 
     #[test]
