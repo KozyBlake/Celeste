@@ -36,7 +36,10 @@ impl VoiceId {
                 engine: engine.to_string(),
                 voice: voice.to_string(),
             },
-            None => VoiceId { engine: String::new(), voice: id.to_string() },
+            None => VoiceId {
+                engine: String::new(),
+                voice: id.to_string(),
+            },
         }
     }
 
@@ -89,7 +92,9 @@ fn detect() -> Vec<String> {
 /// `awk 'NR>1 {print $2}'` does.
 #[cfg(target_os = "linux")]
 fn push_espeak(out: &mut Vec<String>, command: &str) {
-    let Some(lines) = run(command, &["--voices"]) else { return };
+    let Some(lines) = run(command, &["--voices"]) else {
+        return;
+    };
     let mut names: Vec<String> = lines
         .lines()
         .skip(1)
@@ -111,7 +116,9 @@ fn push_espeak(out: &mut Vec<String>, command: &str) {
 /// splits on whitespace and colons and filters the prose words out.
 #[cfg(target_os = "linux")]
 fn push_flite(out: &mut Vec<String>, command: &str) {
-    let Some(text) = run(command, &["-lv"]) else { return };
+    let Some(text) = run(command, &["-lv"]) else {
+        return;
+    };
     const NOISE: [&str; 5] = ["voices", "available", "voice", "list", "internal"];
     let mut names: Vec<String> = text
         .replace(':', " ")
@@ -143,7 +150,9 @@ fn push_pico(out: &mut Vec<String>) {
 
 #[cfg(target_os = "macos")]
 fn detect() -> Vec<String> {
-    let Some(text) = run("say", &["-v", "?"]) else { return Vec::new() };
+    let Some(text) = run("say", &["-v", "?"]) else {
+        return Vec::new();
+    };
     let names: Vec<String> = text
         .lines()
         .filter_map(|line| line.split_whitespace().next())
@@ -156,11 +165,20 @@ fn detect() -> Vec<String> {
 
 #[cfg(target_os = "windows")]
 fn detect() -> Vec<String> {
-    const SCRIPT: &str = "Add-Type -AssemblyName System.Speech; \
-         [System.Speech.Synthesis.SpeechSynthesizer]::new().GetInstalledVoices() | \
-         ForEach-Object { $_.VoiceInfo.Name }";
-    for shell in ["pwsh", "powershell"] {
-        if let Some(text) = run(shell, &["-NoProfile", "-NonInteractive", "-Command", SCRIPT]) {
+    const SCRIPT: &str = "$ErrorActionPreference='Stop'; \
+         Add-Type -AssemblyName System.Speech; \
+         $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); \
+         try { $s.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name } } \
+         finally { $s.Dispose() }";
+    // Windows PowerShell ships with Windows and targets the full .NET
+    // Framework that owns System.Speech. PowerShell 7 (`pwsh`) may be on
+    // PATH too, but its .NET runtime is less reliable for SAPI, so it is a
+    // fallback rather than the first choice.
+    for shell in ["powershell", "pwsh"] {
+        if let Some(text) = run(
+            shell,
+            &["-NoProfile", "-NonInteractive", "-Command", SCRIPT],
+        ) {
             let names: Vec<String> = text
                 .lines()
                 .map(str::trim)
@@ -210,7 +228,10 @@ fn is_simple_voice_token(token: &str) -> bool {
 #[allow(dead_code)]
 fn run(command: &str, args: &[&str]) -> Option<String> {
     let program = find_executable(command)?;
-    let output = std::process::Command::new(program).args(args).output().ok()?;
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -225,11 +246,29 @@ fn run(command: &str, args: &[&str]) -> Option<String> {
 /// `powershell.exe` even though `Command::new("powershell")` would run it.
 /// Keep this shared so desktop and Discord TTS make the same decision.
 pub fn find_executable(command: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
     let names = executable_names(command);
-    std::env::split_paths(&path)
-        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
-        .find(|candidate| candidate.is_file())
+    // A GUI process can inherit a reduced or even missing PATH. Do not let
+    // that prevent the Windows fallback below from checking the location
+    // where Windows PowerShell is installed by the operating system.
+    let found = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+            .find(|candidate| candidate.is_file())
+    });
+    #[cfg(windows)]
+    if found.is_none() && command.eq_ignore_ascii_case("powershell") {
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            let bundled = std::path::PathBuf::from(root)
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            if bundled.is_file() {
+                return Some(bundled);
+            }
+        }
+    }
+    found
 }
 
 fn executable_names(command: &str) -> Vec<String> {
@@ -237,8 +276,8 @@ fn executable_names(command: &str) -> Vec<String> {
     {
         let mut names = vec![command.to_owned()];
         if std::path::Path::new(command).extension().is_none() {
-            let extensions = std::env::var("PATHEXT")
-                .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+            let extensions =
+                std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
             names.extend(
                 extensions
                     .split(';')
@@ -351,7 +390,11 @@ mod tests {
 ///
 /// `None` when the engine named by `voice` is not installed. Callers fall
 /// back to whatever engine they can find.
-pub fn render_command(voice: &str, text: &str, output: &std::path::Path) -> Option<(std::path::PathBuf, Vec<std::ffi::OsString>)> {
+pub fn render_command(
+    voice: &str,
+    text: &str,
+    output: &std::path::Path,
+) -> Option<(std::path::PathBuf, Vec<std::ffi::OsString>)> {
     use std::ffi::OsString;
 
     let parsed = VoiceId::parse(voice);
@@ -411,7 +454,9 @@ mod render_command_tests {
     use std::path::Path;
 
     fn strings(args: &[std::ffi::OsString]) -> Vec<String> {
-        args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+        args.iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
     }
 
     /// The bug this guards: the Discord path stripped `flite/` off and ran
@@ -419,19 +464,28 @@ mod render_command_tests {
     /// A flite voice must produce a flite command, with flite's own flags.
     #[test]
     fn a_flite_voice_renders_with_flite_not_espeak() {
-        let Some((program, args)) = render_command("flite/slt", "hello", Path::new("/tmp/x.wav")) else {
+        let Some((program, args)) = render_command("flite/slt", "hello", Path::new("/tmp/x.wav"))
+        else {
             return; // flite isn't installed here; nothing to assert
         };
         assert!(program.to_string_lossy().contains("flite"));
         let args = strings(&args);
-        assert!(args.contains(&"-voice".to_string()), "flite names its flag -voice: {args:?}");
+        assert!(
+            args.contains(&"-voice".to_string()),
+            "flite names its flag -voice: {args:?}"
+        );
         assert!(args.contains(&"slt".to_string()));
-        assert!(!args.contains(&"-v".to_string()), "that is eSpeak's flag, not flite's");
+        assert!(
+            !args.contains(&"-v".to_string()),
+            "that is eSpeak's flag, not flite's"
+        );
     }
 
     #[test]
     fn an_espeak_voice_renders_with_espeak_flags() {
-        let Some((program, args)) = render_command("espeak-ng/en-us", "hello", Path::new("/tmp/x.wav")) else {
+        let Some((program, args)) =
+            render_command("espeak-ng/en-us", "hello", Path::new("/tmp/x.wav"))
+        else {
             return;
         };
         assert!(program.to_string_lossy().contains("espeak"));
