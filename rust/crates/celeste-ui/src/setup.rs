@@ -133,6 +133,7 @@ impl Default for SetupProfile {
 enum Action {
     None,
     VibecodedContinue,
+    FinishAddIntegrations,
     CopyInviteLink,
     LegacyImport(
         std::path::PathBuf,
@@ -347,6 +348,31 @@ impl SetupWizard {
     /// user changes their mind during the guided tour. Existing secrets and
     /// configuration are preserved; this merely makes skipped prompts
     /// eligible to appear again.
+    /// Integrations this install does not have, named for a person.
+    ///
+    /// Used for the final offer at the end of setup. Based on what is
+    /// actually stored rather than on the profile that was chosen, so
+    /// someone who picked full setup and then skipped past the Discord
+    /// step is still offered it.
+    fn skipped_integrations(&self) -> Vec<&'static str> {
+        use celeste_core::settings::registry::registry_string_encrypted;
+        let stored = |key: &str| {
+            registry_string_encrypted(self.settings.encrypted.clone(), key)
+                .get_or_null()
+                .is_some_and(|value| !value.trim().is_empty())
+        };
+        let mut missing = Vec::new();
+        if !stored("discord.token") {
+            missing.push("Discord");
+        }
+        if !(stored(celeste_vrchat::client::USERNAME_KEY)
+            && stored(celeste_vrchat::client::PASSWORD_KEY))
+        {
+            missing.push("VRChat");
+        }
+        missing
+    }
+
     pub fn for_full_setup(
         settings: &Arc<Settings>,
         runtime_handle: tokio::runtime::Handle,
@@ -1000,6 +1026,19 @@ impl SetupWizard {
     fn apply_action(&mut self, action: Action) {
         match action {
             Action::None => {}
+            Action::FinishAddIntegrations => {
+                // Rebuild as a full setup so the stages that were skipped
+                // are presented again, rather than finishing and asking
+                // the person to find Settings.
+                let rebuilt =
+                    SetupWizard::for_full_setup(&self.settings, self.runtime_handle.clone());
+                if rebuilt.is_done() {
+                    self.stage = Stage::Finish;
+                } else {
+                    *self = rebuilt;
+                    self.resize_for_current_stage_next_frame();
+                }
+            }
             Action::CopyInviteLink => {
                 // The application id is only known once the bot is
                 // connected, which is after this step. A placeholder the
@@ -1311,6 +1350,7 @@ impl SetupWizard {
                     ),
                     Stage::Finish => render_finish_stage(
                         ui,
+                        self.skipped_integrations(),
                         self.settings.tts_use_default_audio_device.get(),
                         self.audio_settings_notice.as_deref(),
                         #[cfg(target_os = "linux")]
@@ -1349,8 +1389,19 @@ impl SetupWizard {
     }
 }
 
+/// "Discord" / "VRChat" / "Discord and VRChat".
+fn join_words(words: &[&str]) -> String {
+    match words {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [first, second] => format!("{first} and {second}"),
+        _ => words.join(", "),
+    }
+}
+
 fn render_finish_stage(
     ui: &mut egui::Ui,
+    skipped: Vec<&'static str>,
     use_default_audio_device: bool,
     audio_settings_notice: Option<&str>,
     #[cfg(target_os = "linux")] desktop_launcher_notice: Option<&str>,
@@ -1389,6 +1440,36 @@ fn render_finish_stage(
         .clicked()
     {
         *action = Action::FinishStart;
+    }
+
+    // A last offer for whatever was skipped. Choosing the local logger
+    // should not mean never being told the rest exists; a person who
+    // declines an integration at step one often does so because they do
+    // not yet know what it is for.
+    if !skipped.is_empty() {
+        ui.add_space(crate::theme::GAP);
+        crate::theme::panel_frame(crate::theme::PANEL).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            centered_label(
+                ui,
+                egui::RichText::new(format!("Want to try {}?", join_words(&skipped))).strong(),
+            );
+            centered_label(
+                ui,
+                egui::RichText::new(
+                    "You skipped this, which is fine - Celeste logs locally without it. You can \
+                     add it now, or later from Settings, System.",
+                )
+                .small()
+                .color(crate::theme::TEXT_DIM),
+            );
+            ui.add_space(crate::theme::GAP_TIGHT);
+            ui.vertical_centered(|ui| {
+                if ui.button("Set it up now").clicked() {
+                    *action = Action::FinishAddIntegrations;
+                }
+            });
+        });
     }
 
     ui.add_space(crate::theme::GAP);

@@ -6256,6 +6256,7 @@ impl CelesteApp {
         }
         let mut start: Option<usize> = None;
         let mut close = false;
+        let mut set_up = false;
         let mut show_all = self.tutorial_show_all;
         let any_hidden = TutorialChapter::ORDER
             .iter()
@@ -6270,6 +6271,21 @@ impl CelesteApp {
             .anchor(egui::Align2::RIGHT_TOP, [-24.0, 118.0])
             .show(ctx, |ui| {
                 ui.label("Pick a chapter to run on its own. Essentials cover everything needed to moderate; the advanced chapters are for operators.");
+                if any_hidden {
+                    ui.add_space(6.0);
+                    Self::inset_frame().show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "There is more Celeste can do than you set up.",
+                            )
+                            .strong(),
+                        );
+                        ui.label(
+                            "The chapters below marked \"not set up yet\" still run, so you can \
+                             see what they do before deciding. Nothing is configured by watching.",
+                        );
+                    });
+                }
                 ui.add_space(10.0);
                 for chapter in TutorialChapter::ORDER {
                     let applies = self.tutorial_chapter_applies(chapter);
@@ -6284,21 +6300,32 @@ impl CelesteApp {
                                 ui.colored_label(crate::theme::INFO, "advanced");
                             }
                             if !applies {
-                                ui.colored_label(crate::theme::WARN, "not part of your setup");
+                                ui.colored_label(crate::theme::INFO, "not set up yet");
                             }
                         });
                         ui.horizontal(|ui| {
                             ui.weak(format!("{} step{}", steps.len(), if steps.len() == 1 { "" } else { "s" }));
-                            if (applies || show_all) && ui.button("Run chapter").clicked() {
+                            // A chapter outside the chosen setup is still
+                            // offered, not withheld. Hiding it means the
+                            // person who most needs to learn the feature
+                            // exists is the one who never hears about it.
+                            let label = if applies { "Run chapter" } else { "See what it does" };
+                            if ui.button(label).clicked() {
                                 start = steps.first().copied();
+                                // Explicitly choosing a skipped chapter
+                                // must also stop Next from skipping its
+                                // steps, or it would walk straight back
+                                // out after the first one.
+                                if !applies {
+                                    show_all = true;
+                                }
+                            }
+                            if !applies && ui.button("Set it up").clicked() {
+                                set_up = true;
                             }
                         });
                     });
                     ui.add_space(6.0);
-                }
-                if any_hidden {
-                    ui.add_space(4.0);
-                    ui.checkbox(&mut show_all, "Show chapters that are not part of my setup");
                 }
                 ui.add_space(12.0);
                 if ui.button("Close").clicked() {
@@ -6307,6 +6334,13 @@ impl CelesteApp {
             });
 
         self.tutorial_show_all = show_all;
+        if set_up {
+            self.tutorial_menu = false;
+            self.tutorial_demo = None;
+            self.open_full_setup = true;
+            ctx.request_repaint();
+            return;
+        }
         if let Some(step) = start {
             self.tutorial_menu = false;
             self.start_tutorial(ctx, step);
