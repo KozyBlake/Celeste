@@ -22,6 +22,7 @@
 pub mod app;
 pub mod data_dir_prompt;
 pub mod dialogs;
+pub mod guide;
 pub mod platform;
 pub mod setup;
 pub mod splash;

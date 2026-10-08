@@ -946,7 +946,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         settings_category: Some(SettingCategory::Moderation),
         demo_data: false,
         title: "Moderation, advisories, and Discord",
-        body: "Moderation and Notifications control evidence, warnings, watched-list behavior, and which events become alerts. Discord controls bot behavior, permission delegation, event routing, voice channels, moderation tags, staff lists, and outstanding actions. Discord commands themselves must be tested inside your server and require the bot plus appropriate Discord or delegated Celeste permissions.",
+        body: "Moderation and Notifications control evidence, warnings, watched-list behavior, and which events become alerts. Discord controls bot behavior, event routing, voice channels, moderation tags, staff lists, and outstanding actions. Permissions are explained in one place rather than here: Help, \"Setup and permissions\" covers what the bot needs from your server and what people need from Celeste, which are two different things and the usual source of confusion.",
         try_it: "Start conservatively: enable only the notices your staff needs, then expand the notification matrix after confirming where each event is routed.",
     },
     TutorialStep {
@@ -1812,6 +1812,9 @@ pub struct CelesteApp {
     avatar_provider_error: Option<String>,
     clear_instance_confirm: bool,
     diagnostics_open: bool,
+    /// The "Setup and permissions" page: the one explanation, always
+    /// reachable rather than trapped in a wizard that runs once.
+    setup_guide_open: bool,
     credits_open: bool,
     visual_style_installed: bool,
     /// egui ships a deliberately compact font set. System fallbacks fill in
@@ -2043,6 +2046,7 @@ impl CelesteApp {
             avatar_provider_error: None,
             clear_instance_confirm: false,
             diagnostics_open: false,
+            setup_guide_open: false,
             credits_open: false,
             visual_style_installed: false,
             font_fallbacks_installed: false,
@@ -2465,6 +2469,10 @@ impl CelesteApp {
                     self.tutorial_menu = true;
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                    ui.close_menu();
+                }
+                if ui.button("Setup and permissions").clicked() {
+                    self.setup_guide_open = true;
                     ui.close_menu();
                 }
                 if ui.button("Diagnostics").clicked() {
@@ -5303,6 +5311,9 @@ impl CelesteApp {
                 if ui.button("Set up Discord and VRChat").clicked() {
                     self.open_full_setup = true;
                 }
+                if ui.button("Read the setup and permissions guide").clicked() {
+                    self.setup_guide_open = true;
+                }
                 ui.label(
                     egui::RichText::new(
                         "Adds an integration you skipped at first run. Existing credentials are left alone.",
@@ -5757,7 +5768,7 @@ impl CelesteApp {
             }
         };
         const SWITCH: &str =
-            "Settings, System, \"Set up Discord and VRChat\" adds an integration you skipped.";
+            "Help, \"Setup and permissions\" explains what each integration adds and can set one up.";
 
         match self.vrchat_slot.try_read() {
             Ok(slot) if slot.is_some() => {
@@ -6781,6 +6792,38 @@ impl CelesteApp {
                 self.clear_instance_confirm = false;
             } else if cancel {
                 self.clear_instance_confirm = false;
+            }
+        }
+
+        if self.setup_guide_open {
+            let mut open = true;
+            let mut action = crate::guide::GuideAction::None;
+            egui::Window::new("Setup and permissions")
+                .default_width(640.0)
+                .default_height(520.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        action = crate::guide::render(ui, true);
+                    });
+                });
+            match action {
+                crate::guide::GuideAction::CopyInvite => {
+                    let link = celeste_discord::setup_guide::invite_url(0)
+                        .replace("client_id=0", "client_id=CLIENT_ID");
+                    ctx.copy_text(link);
+                    self.state.append_cli_output(
+                        "Invite link copied. Replace CLIENT_ID with your application id from the Discord Developer Portal.",
+                    );
+                }
+                crate::guide::GuideAction::OpenFullSetup => {
+                    self.setup_guide_open = false;
+                    self.open_full_setup = true;
+                }
+                crate::guide::GuideAction::None => {}
+            }
+            if !open {
+                self.setup_guide_open = false;
             }
         }
 

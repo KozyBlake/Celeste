@@ -1888,47 +1888,16 @@ fn render_discord_stage(
          to run in staff mode (VRChat-only, no Discord bot).",
     );
     ui.add_space(8.0);
-    // Two separate things have to be right and people reliably assume
-    // there is only one, so both are offered here. Collapsed by default
-    // once a token exists: an operator who has done this before should
-    // not be walked through it again, and an empty token is the only
-    // signal available that this is a first attempt.
-    let first_attempt = token.trim().is_empty();
-    egui::CollapsingHeader::new("How to create the bot and invite it")
-        .default_open(first_attempt)
-        .show(ui, |ui| {
-            for (number, step) in celeste_discord::setup_guide::bot_steps().iter().enumerate() {
-                ui.label(format!("{}. {}", number + 1, step));
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button("Copy invite link").clicked() {
-                    *action = Action::CopyInviteLink;
-                }
-                ui.label(
-                    egui::RichText::new(
-                        "Paste your application ID into the link where it says CLIENT_ID.",
-                    )
-                    .small()
-                    .weak(),
-                );
-            });
-        });
-    egui::CollapsingHeader::new("Who will be allowed to use Celeste")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(
-                    "Inviting the bot does not grant anyone the right to use it. These are \
-                     separate from Discord roles, and can be set up after the bot is running.",
-                )
-                .small(),
-            );
-            ui.add_space(4.0);
-            for (number, step) in celeste_discord::setup_guide::access_steps().iter().enumerate() {
-                ui.label(format!("{}. {}", number + 1, step));
-            }
-        });
+    // Rendered from the one shared guide rather than a copy that can
+    // drift, and not behind a collapsing header: a person at this step
+    // should be able to see what is required without first guessing
+    // which heading hides it.
+    crate::theme::panel_frame(crate::theme::PANEL).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        if crate::guide::render(ui, false) == crate::guide::GuideAction::CopyInvite {
+            *action = Action::CopyInviteLink;
+        }
+    });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label("Bot token:");
