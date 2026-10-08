@@ -133,6 +133,7 @@ impl Default for SetupProfile {
 enum Action {
     None,
     VibecodedContinue,
+    CopyInviteLink,
     LegacyImport(
         std::path::PathBuf,
         Option<std::path::PathBuf>,
@@ -999,6 +1000,18 @@ impl SetupWizard {
     fn apply_action(&mut self, action: Action) {
         match action {
             Action::None => {}
+            Action::CopyInviteLink => {
+                // The application id is only known once the bot is
+                // connected, which is after this step. A placeholder the
+                // person substitutes is honest about that; inventing an
+                // id, or deriving one from a token they have not entered
+                // yet, would produce a link that silently fails.
+                let link = celeste_discord::setup_guide::invite_url(0)
+                    .replace("client_id=0", "client_id=CLIENT_ID");
+                self.audio_settings_notice = Some(format!(
+                    "Invite link copied. Replace CLIENT_ID with your application id from the Developer Portal.\n{link}"
+                ));
+            }
             Action::VibecodedContinue => {
                 self.stage = self.legacy_import_stage();
             }
@@ -1793,6 +1806,48 @@ fn render_discord_stage(
         "Enter a Discord bot token to enable Discord moderation features, or leave this blank \
          to run in staff mode (VRChat-only, no Discord bot).",
     );
+    ui.add_space(8.0);
+    // Two separate things have to be right and people reliably assume
+    // there is only one, so both are offered here. Collapsed by default
+    // once a token exists: an operator who has done this before should
+    // not be walked through it again, and an empty token is the only
+    // signal available that this is a first attempt.
+    let first_attempt = token.trim().is_empty();
+    egui::CollapsingHeader::new("How to create the bot and invite it")
+        .default_open(first_attempt)
+        .show(ui, |ui| {
+            for (number, step) in celeste_discord::setup_guide::bot_steps().iter().enumerate() {
+                ui.label(format!("{}. {}", number + 1, step));
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Copy invite link").clicked() {
+                    *action = Action::CopyInviteLink;
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "Paste your application ID into the link where it says CLIENT_ID.",
+                    )
+                    .small()
+                    .weak(),
+                );
+            });
+        });
+    egui::CollapsingHeader::new("Who will be allowed to use Celeste")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "Inviting the bot does not grant anyone the right to use it. These are \
+                     separate from Discord roles, and can be set up after the bot is running.",
+                )
+                .small(),
+            );
+            ui.add_space(4.0);
+            for (number, step) in celeste_discord::setup_guide::access_steps().iter().enumerate() {
+                ui.label(format!("{}. {}", number + 1, step));
+            }
+        });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label("Bot token:");

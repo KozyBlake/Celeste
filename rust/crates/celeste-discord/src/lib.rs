@@ -10,6 +10,7 @@
 //! (registration -> dispatch -> reply) proving the pipeline works, for
 //! future commands to follow the same shape.
 
+pub mod setup_guide;
 pub mod avatar_search;
 pub mod client;
 pub mod commands;
