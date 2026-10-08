@@ -1693,6 +1693,9 @@ pub struct CelesteApp {
     tutorial_step: Option<usize>,
     /// Showing the chapter chooser rather than a step.
     tutorial_menu: bool,
+    /// Settings asked to run the full setup wizard; handled where the
+    /// wizard can be constructed.
+    open_full_setup: bool,
     /// Ignore the setup profile and show every chapter ("Show anyway").
     tutorial_show_all: bool,
     tutorial_layout: TutorialLayout,
@@ -1968,6 +1971,7 @@ impl CelesteApp {
             setup_settings_review: false,
             tutorial_step: None,
             tutorial_menu: false,
+            open_full_setup: false,
             tutorial_show_all: false,
             tutorial_layout: TutorialLayout::default(),
             tutorial_demo: None,
@@ -5293,6 +5297,19 @@ impl CelesteApp {
             }
             if category == SettingCategory::System {
                 ui.separator();
+                // Changing your mind about an integration was previously
+                // only possible from inside the guided tour, which is not
+                // where anyone looks for it a month later.
+                if ui.button("Set up Discord and VRChat").clicked() {
+                    self.open_full_setup = true;
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "Adds an integration you skipped at first run. Existing credentials are left alone.",
+                    )
+                    .small()
+                    .weak(),
+                );
                 if ui.button("Set up VRChat on next launch").clicked() {
                     if let Some(settings) = &self.settings {
                         settings.vrchat_setup_prompted.set(Some(false), "ui");
@@ -5719,14 +5736,41 @@ impl CelesteApp {
             )),
         }
 
+        // Whether a missing integration is a fault depends on what the
+        // operator asked for at setup. Someone who chose the local logger
+        // has not lost anything by having no Discord bot; someone who
+        // chose full setup and has no bot has a broken install. Without a
+        // stored choice there is nothing to hold them to, so an absent
+        // integration is reported as a choice rather than a fault.
+        let profile = self
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.store.get_object::<String>("setup_profile"));
+        let wanted = |integration: &str| -> bool {
+            match profile.as_deref() {
+                Some("full") => true,
+                Some("vrchat_only") => integration == "vrchat",
+                Some("discord_only") => integration == "discord",
+                Some("local_logger") => false,
+                // No recorded choice: do not invent an expectation.
+                _ => false,
+            }
+        };
+        const SWITCH: &str =
+            "Settings, System, \"Set up Discord and VRChat\" adds an integration you skipped.";
+
         match self.vrchat_slot.try_read() {
             Ok(slot) if slot.is_some() => {
                 report.push(Finding::ok("VRChat", "Signed in."))
             }
-            Ok(_) => report.push(Finding::blocked(
+            Ok(_) if wanted("vrchat") => report.push(Finding::blocked(
                 "VRChat",
                 "Not signed in, so group bans, audit polling, and profile checks are unavailable.",
                 "Sign in from Settings, or re-run VRChat setup if the stored session expired.",
+            )),
+            Ok(_) => report.push(Finding::ok(
+                "VRChat",
+                format!("Not signed in; reading local logs only. {SWITCH}"),
             )),
             // A locked slot means a sign-in is in flight; calling that a
             // failure would make the check flap during startup.
@@ -5741,10 +5785,14 @@ impl CelesteApp {
                 "A bot token is stored but Celeste is not connected, so no commands or event posts will work.",
                 "Check the token is still valid and that the bot has not been removed from the server.",
             )),
-            // No token is a supported way to run Celeste, not a fault.
+            (Ok(false), false) if wanted("discord") => report.push(Finding::blocked(
+                "Discord",
+                "This install was set up to use Discord, but no bot token is stored, so commands and event posts will not work.",
+                SWITCH,
+            )),
             (Ok(false), false) => report.push(Finding::ok(
                 "Discord",
-                "Not configured; Celeste is running as a local logger.",
+                format!("Not configured; running as a local logger. {SWITCH}"),
             )),
             (Err(_), _) => report.push(Finding::ok("Discord", "Connecting.")),
         }
@@ -6648,7 +6696,30 @@ impl CelesteApp {
         }
     }
 
+    /// Honour a Settings request to run the full setup wizard.
+    ///
+    /// Settings only raises a flag: the wizard needs the runtime handle
+    /// and replaces the whole view, which is not something to do from
+    /// inside the settings list's closure.
+    fn open_full_setup_if_requested(&mut self, ctx: &egui::Context) {
+        if !std::mem::take(&mut self.open_full_setup) {
+            return;
+        }
+        let Some(settings) = self.settings.clone() else { return };
+        let mut wizard =
+            crate::setup::SetupWizard::for_full_setup(&settings, self.runtime_handle.clone());
+        if wizard.is_done() {
+            self.state
+                .append_cli_output("Discord and VRChat are already set up; nothing to add.");
+            return;
+        }
+        wizard.resize_for_current_stage_next_frame();
+        self.wizard = Some(wizard);
+        ctx.request_repaint();
+    }
+
     fn utility_windows(&mut self, ctx: &egui::Context) {
+        self.open_full_setup_if_requested(ctx);
         if self.clear_instance_confirm {
             let mut confirm = false;
             let mut cancel = false;

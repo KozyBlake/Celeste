@@ -229,4 +229,45 @@ mod tests {
         report.push(Finding::blocked("C", "p", "r"));
         assert_eq!(report.headline(), "2 things not working, 1 to look at.");
     }
+
+    /// A missing integration is only a fault if the operator asked for
+    /// it. The first version of this check reported "no Discord token" as
+    /// fine for everyone, which is right for someone running the local
+    /// logger and wrong for someone who chose full setup and now has a
+    /// silently broken install.
+    ///
+    /// This encodes the rule the UI applies, so the intent is recorded
+    /// somewhere a reader will find it.
+    #[test]
+    fn an_absent_integration_is_a_fault_only_when_it_was_chosen() {
+        fn wanted(profile: Option<&str>, integration: &str) -> bool {
+            match profile {
+                Some("full") => true,
+                Some("vrchat_only") => integration == "vrchat",
+                Some("discord_only") => integration == "discord",
+                Some("local_logger") => false,
+                _ => false,
+            }
+        }
+
+        assert!(wanted(Some("full"), "discord"));
+        assert!(wanted(Some("full"), "vrchat"));
+
+        assert!(wanted(Some("discord_only"), "discord"));
+        assert!(!wanted(Some("discord_only"), "vrchat"));
+
+        assert!(wanted(Some("vrchat_only"), "vrchat"));
+        assert!(!wanted(Some("vrchat_only"), "discord"));
+
+        // Choosing the local logger means neither is expected.
+        assert!(!wanted(Some("local_logger"), "discord"));
+        assert!(!wanted(Some("local_logger"), "vrchat"));
+
+        // No recorded choice must not invent an expectation, or an
+        // install that predates the profile would report faults for
+        // things its owner never asked for.
+        assert!(!wanted(None, "discord"));
+        assert!(!wanted(None, "vrchat"));
+        assert!(!wanted(Some("something_added_later"), "discord"));
+    }
 }
