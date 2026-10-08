@@ -16,8 +16,14 @@ pub struct DiscordVoiceTts {
 }
 
 enum VoiceRequest {
-    Speak { text: String, voice: String },
-    Audio { bytes: &'static [u8], name: &'static str },
+    Speak {
+        text: String,
+        voice: String,
+    },
+    Audio {
+        bytes: &'static [u8],
+        name: &'static str,
+    },
     /// Drop whatever is speaking in Discord voice and move to the next
     /// queued clip.
     ///
@@ -92,8 +98,9 @@ impl DiscordVoiceTts {
                     );
                     continue;
                 };
-                let channel_id =
-                    config.string("audioChannelSf").and_then(|id| id.parse::<u64>().ok());
+                let channel_id = config
+                    .string("audioChannelSf")
+                    .and_then(|id| id.parse::<u64>().ok());
                 let Some(channel_id) = channel_id else {
                     report(
                         &worker_status,
@@ -105,10 +112,12 @@ impl DiscordVoiceTts {
                 let result = match request {
                     VoiceRequest::Skip => unreachable!("handled above"),
                     VoiceRequest::Speak { text, voice } => {
-                        synthesize_and_queue(manager.clone(), guild_id, channel_id, text, voice).await
+                        synthesize_and_queue(manager.clone(), guild_id, channel_id, text, voice)
+                            .await
                     }
                     VoiceRequest::Audio { bytes, name } => {
-                        queue_bundled_audio(manager.clone(), guild_id, channel_id, bytes, name).await
+                        queue_bundled_audio(manager.clone(), guild_id, channel_id, bytes, name)
+                            .await
                     }
                 };
                 match result {
@@ -161,11 +170,11 @@ async fn queue_bundled_audio(
     bytes: &'static [u8],
     name: &'static str,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(bytes.starts_with(b"RIFF") && bytes.len() > 44, "bundled alert is not a valid WAV");
-    let output = std::env::temp_dir().join(format!(
-        "celeste-{name}-{}.wav",
-        uuid::Uuid::new_v4()
-    ));
+    anyhow::ensure!(
+        bytes.starts_with(b"RIFF") && bytes.len() > 44,
+        "bundled alert is not a valid WAV"
+    );
+    let output = std::env::temp_dir().join(format!("celeste-{name}-{}.wav", uuid::Uuid::new_v4()));
     tokio::fs::write(&output, bytes).await?;
     queue_audio_file(manager, guild_id, channel_id, output).await
 }
@@ -241,10 +250,7 @@ impl DeleteAudioFile {
     }
 
     async fn remove(&self) {
-        if !self
-            .removed
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
+        if !self.removed.swap(true, std::sync::atomic::Ordering::AcqRel) {
             if let Err(error) = tokio::fs::remove_file(self.path.as_ref()).await {
                 if error.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!(
@@ -272,8 +278,15 @@ async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Resul
     // the voice id, so a Flite voice became `espeak -v slt`, which fails
     // and writes nothing - the "wrote no audio file" error in the log.
     if let Some((program, args)) = celeste_core::tts_voices::render_command(voice, text, output) {
-        let status = tokio::process::Command::new(&program).args(&args).status().await?;
-        anyhow::ensure!(status.success(), "{} exited with {status}", program.display());
+        let status = tokio::process::Command::new(&program)
+            .args(&args)
+            .status()
+            .await?;
+        anyhow::ensure!(
+            status.success(),
+            "{} exited with {status}",
+            program.display()
+        );
         return Ok(());
     }
 
@@ -303,18 +316,56 @@ async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Resul
     }
     #[cfg(target_os = "windows")]
     {
-        let executable = find_on_path("pwsh")
-            .or_else(|| find_on_path("powershell"))
+        // Windows PowerShell ships against the full .NET Framework that
+        // provides System.Speech. PowerShell 7 is only a fallback because
+        // SAPI is not consistently available in its .NET runtime.
+        let executable = find_on_path("powershell")
+            .or_else(|| find_on_path("pwsh"))
             .ok_or_else(|| anyhow::anyhow!("Discord TTS requires PowerShell on Windows"))?;
-        let script = "Add-Type -AssemblyName System.Speech; $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); if($args[2]){$s.SelectVoice($args[2])}; $s.SetOutputToWaveFile($args[0]); $s.Speak($args[1]); $s.Dispose()";
-        let status = tokio::process::Command::new(executable)
+        // Environment variables preserve paths, quotes, Unicode, and an
+        // intentionally blank default voice. Positional arguments after
+        // `-Command` can be collapsed or shifted by Windows PowerShell.
+        // `SetOutputToNull` before disposing is what closes the wave file
+        // and finalizes its RIFF header. Disposing alone can leave a file
+        // songbird then refuses, which looks like silent Discord TTS
+        // rather than an error. The desktop script already did this.
+        let script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Speech; $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); try { $v=$env:CELESTE_TTS_VOICE; if (![string]::IsNullOrWhiteSpace($v)) { try { $s.SelectVoice($v) } catch { } }; $s.SetOutputToWaveFile($env:CELESTE_TTS_WAV); $s.Speak($env:CELESTE_TTS_TEXT); $s.SetOutputToNull() } finally { $s.Dispose() }";
+        // `output()` rather than `status()`: PowerShell reports the SAPI
+        // failure on stderr, and a windowless GUI process has nowhere for
+        // an inherited stderr to go, so the reason was being thrown away.
+        let result = tokio::process::Command::new(executable)
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .arg(output)
-            .arg(text)
-            .arg(celeste_core::tts_voices::VoiceId::parse(voice).voice)
-            .status()
+            .env("CELESTE_TTS_WAV", output)
+            .env("CELESTE_TTS_TEXT", text)
+            .env(
+                "CELESTE_TTS_VOICE",
+                celeste_core::tts_voices::VoiceId::parse(voice).voice,
+            )
+            .output()
             .await?;
-        anyhow::ensure!(status.success(), "PowerShell TTS exited with {status}");
+        if !result.status.success() {
+            let detail = String::from_utf8_lossy(&result.stderr);
+            let detail = detail.trim();
+            anyhow::bail!(
+                "PowerShell TTS exited with {}{}",
+                result.status,
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                }
+            );
+        }
+        // A zero-exit run that wrote nothing playable is the failure mode
+        // that previously reached songbird as silence.
+        let rendered = std::fs::metadata(output)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        anyhow::ensure!(
+            rendered > 44,
+            "PowerShell TTS reported success but wrote no audio ({rendered} bytes); \
+             the selected SAPI voice may not be usable by this account"
+        );
         return Ok(());
     }
     #[allow(unreachable_code)]
@@ -339,16 +390,28 @@ mod tests {
         report(&status, "no voice channel");
         report(&status, "no voice channel");
         assert_eq!(
-            status.lock().unwrap_or_else(|e| e.into_inner()).last_problem.as_deref(),
+            status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .last_problem
+                .as_deref(),
             Some("no voice channel")
         );
         report(&status, "something else");
         assert_eq!(
-            status.lock().unwrap_or_else(|e| e.into_inner()).last_problem.as_deref(),
+            status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .last_problem
+                .as_deref(),
             Some("something else")
         );
         clear(&status);
-        assert!(status.lock().unwrap_or_else(|e| e.into_inner()).last_problem.is_none());
+        assert!(status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_problem
+            .is_none());
     }
 
     #[test]

@@ -13,6 +13,37 @@ use std::time::Duration;
 const MIXED_CHARACTER_ALERT: &[u8] = include_bytes!("../resources/tts/mixed-character-alert.wav");
 const NUISANCE_ALERT: &[u8] = include_bytes!("../resources/tts/bl_sfx_siren_chirp.wav");
 
+// Keep the Windows script in one testable string. Rendering first and then
+// playing the WAV mirrors Scarlet's reliable path and avoids SAPI silently
+// choosing an unavailable output endpoint in VMs or remote sessions.
+const WINDOWS_SAPI_SCRIPT: &str = r#"
+$ErrorActionPreference='Stop'
+$wav=$env:CELESTE_TTS_WAV
+$s=$null
+try {
+  Add-Type -AssemblyName System.Speech
+  $s=[System.Speech.Synthesis.SpeechSynthesizer]::new()
+  $v=$env:CELESTE_TTS_VOICE
+  if (![string]::IsNullOrWhiteSpace($v)) {
+    try { $s.SelectVoice($v) } catch { }
+  }
+  $s.SetOutputToWaveFile($wav)
+  $s.Speak($env:CELESTE_TTS_TEXT)
+  $s.SetOutputToNull()
+  $s.Dispose()
+  $s=$null
+  $p=[System.Media.SoundPlayer]::new($wav)
+  $p.PlaySync()
+  $p.Dispose()
+} catch {
+  [Console]::Error.WriteLine($_.Exception.ToString())
+  exit 1
+} finally {
+  if ($null -ne $s) { $s.Dispose() }
+  if (![string]::IsNullOrWhiteSpace($wav)) { Remove-Item -LiteralPath $wav -Force -ErrorAction SilentlyContinue }
+}
+"#;
+
 #[derive(Debug, Clone)]
 enum Engine {
     Espeak(PathBuf),
@@ -41,8 +72,8 @@ impl Engine {
             "flite" => find_on_path("flite").map(Self::Flite),
             "pico2wave" => find_on_path("pico2wave").map(Self::Pico),
             "say" => find_on_path("say").map(Self::MacSay),
-            "sapi" => find_on_path("pwsh")
-                .or_else(|| find_on_path("powershell"))
+            "sapi" => find_on_path("powershell")
+                .or_else(|| find_on_path("pwsh"))
                 .map(Self::PowerShell),
             _ => None,
         };
@@ -59,8 +90,8 @@ impl Engine {
         } else if cfg!(target_os = "macos") {
             find_on_path("say").map(Self::MacSay)
         } else if cfg!(target_os = "windows") {
-            find_on_path("pwsh")
-                .or_else(|| find_on_path("powershell"))
+            find_on_path("powershell")
+                .or_else(|| find_on_path("pwsh"))
                 .map(Self::PowerShell)
         } else {
             None
@@ -233,14 +264,23 @@ impl Engine {
                 // can collapse it, shifting the text into `$args[0]` and
                 // leaving nothing to speak. Environment values preserve
                 // both strings verbatim, including quotes and non-ASCII.
+                let wav = std::env::temp_dir().join(format!(
+                    "celeste-sapi-{}-{}.wav",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or_default()
+                ));
                 command
                     .env("CELESTE_TTS_VOICE", voice)
-                    .env("CELESTE_TTS_TEXT", text);
+                    .env("CELESTE_TTS_TEXT", text)
+                    .env("CELESTE_TTS_WAV", &wav);
                 command.args([
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "Add-Type -AssemblyName System.Speech; $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); try { $v=$env:CELESTE_TTS_VOICE; if (![string]::IsNullOrWhiteSpace($v)) { $s.SelectVoice($v) }; $s.Speak($env:CELESTE_TTS_TEXT) } finally { $s.Dispose() }",
+                    WINDOWS_SAPI_SCRIPT,
                 ]);
                 // A GUI application must not flash a console window for
                 // every announcement or voice preview.
@@ -256,7 +296,11 @@ impl Engine {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            // Kept, not discarded: the Windows script writes the SAPI
+            // exception here, and a GUI process has no console for it to
+            // land in. Without this a failing voice is silent in every
+            // sense - no audio and no reason.
+            .stderr(Stdio::piped())
             .spawn()
     }
 }
@@ -415,7 +459,7 @@ impl TtsService {
             return Ok(());
         }
         if self.engine_name.is_none() {
-            return Err("No supported TTS engine is installed (tried eSpeak NG/eSpeak, Speech Dispatcher, and Flite).".into());
+            return Err("No supported local TTS engine was found (Windows SAPI, macOS say, or a supported Linux speech engine).".into());
         }
         self.pending.fetch_add(1, Ordering::SeqCst);
         if self
@@ -646,7 +690,32 @@ fn worker(
                     .and_then(|child| child.try_wait().ok())
                     .flatten()
                 {
-                    Some(_) => {
+                    Some(status) => {
+                        if !status.success() {
+                            let detail = guard
+                                .as_mut()
+                                .and_then(|child| child.stderr.take())
+                                .and_then(|stderr| {
+                                    use std::io::Read;
+                                    let mut buffer = String::new();
+                                    // Bounded: a runaway engine must not be
+                                    // able to fill the log with one failure.
+                                    stderr.take(8 * 1024).read_to_string(&mut buffer).ok()?;
+                                    let trimmed = buffer.trim().to_string();
+                                    (!trimmed.is_empty()).then_some(trimmed)
+                                });
+                            match detail {
+                                Some(detail) => tracing::warn!(
+                                    %status,
+                                    %detail,
+                                    "TTS process exited without producing playable speech"
+                                ),
+                                None => tracing::warn!(
+                                    %status,
+                                    "TTS process exited without producing playable speech"
+                                ),
+                            }
+                        }
                         guard.take();
                         true
                     }
@@ -706,8 +775,8 @@ fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
     }
     #[cfg(target_os = "windows")]
     {
-        let player = find_on_path("pwsh")
-            .or_else(|| find_on_path("powershell"))
+        let player = find_on_path("powershell")
+            .or_else(|| find_on_path("pwsh"))
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "PowerShell is unavailable")
             })?;
@@ -833,6 +902,15 @@ mod tests {
             assert_eq!(&bytes[8..12], b"WAVE");
             assert!(bytes.len() > 44);
         }
+    }
+
+    #[test]
+    fn windows_sapi_renders_then_plays_and_cleans_up_a_wav() {
+        assert!(WINDOWS_SAPI_SCRIPT.contains("SetOutputToWaveFile"));
+        assert!(WINDOWS_SAPI_SCRIPT.contains("PlaySync"));
+        assert!(WINDOWS_SAPI_SCRIPT.contains("SelectVoice"));
+        assert!(WINDOWS_SAPI_SCRIPT.contains("Remove-Item"));
+        assert!(WINDOWS_SAPI_SCRIPT.contains("exit 1"));
     }
 
     #[test]
