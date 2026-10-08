@@ -431,6 +431,37 @@ impl TtsService {
         }
     }
 
+    /// Whether a separate program is available to play a wave file.
+    ///
+    /// Speech does not need one - every engine can make its own noise -
+    /// but an alert chime is a wave file with nothing to play it, so on a
+    /// host with no player the chimes are silent while speech works. That
+    /// asymmetry is invisible from the UI, so the health check asks here.
+    pub fn alert_player_name(&self) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        {
+            let prefix = resolve_player_prefix()?;
+            return prefix.first().map(|player| {
+                std::path::Path::new(player)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| player.clone())
+            });
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return find_on_path("afplay").map(|_| "afplay".to_string());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return find_on_path("powershell")
+                .or_else(|| find_on_path("pwsh"))
+                .map(|_| "PowerShell".to_string());
+        }
+        #[allow(unreachable_code)]
+        None
+    }
+
     pub fn engine_name(&self) -> Option<&'static str> {
         self.engine_name
     }

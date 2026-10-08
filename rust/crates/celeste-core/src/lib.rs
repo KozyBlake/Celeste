@@ -22,6 +22,7 @@ pub mod names;
 pub mod pacer;
 pub mod paths;
 pub mod permission;
+pub mod readiness;
 pub mod pronoun_lists;
 pub mod pronoun_validator;
 pub mod secure_store;

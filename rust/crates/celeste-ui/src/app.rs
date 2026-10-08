@@ -1283,9 +1283,10 @@ fn create_instance_request(
 
 fn canonicalize_cli_command(op: &str) -> String {
     let low = op.trim().to_ascii_lowercase();
-    const CANONICAL: [&str; 25] = [
+    const CANONICAL: [&str; 26] = [
         "info",
         "help",
+        "check",
         "logout",
         "exit",
         "halt",
@@ -5673,6 +5674,105 @@ impl CelesteApp {
         }
     }
 
+    /// Check what is working and what is not, in terms the operator can
+    /// act on.
+    ///
+    /// Deliberately separate from `diagnostics_report`, which lists state.
+    /// State tells you what Celeste is configured with and leaves you to
+    /// work out which part is wrong; this names the problem and the fix.
+    fn readiness_report(&self) -> celeste_core::readiness::Report {
+        use celeste_core::readiness::{Finding, Report};
+        let mut report = Report::default();
+
+        match self.tts.engine_name() {
+            Some(engine) => {
+                report.push(Finding::ok("Text to speech", format!("Using {engine}.")))
+            }
+            None => report.push(Finding::blocked(
+                "Text to speech",
+                "No speech engine is installed, so announcements cannot be spoken.",
+                if cfg!(target_os = "linux") {
+                    "Install eSpeak NG (`espeak-ng`), Flite, or speech-dispatcher."
+                } else if cfg!(target_os = "windows") {
+                    "Windows SAPI voices are missing; add one under Settings, Time & language, Speech."
+                } else {
+                    "macOS provides `say` as standard; check it is on PATH."
+                },
+            )),
+        }
+
+        // Speech can fall back to letting the engine play for itself, so a
+        // missing player is not fatal - but it silently costs the chimes.
+        match self.tts.alert_player_name() {
+            Some(player) => report.push(Finding::ok(
+                "Alert chimes",
+                format!("Playing through {player}."),
+            )),
+            None => report.push(Finding::degraded(
+                "Alert chimes",
+                "No program was found to play a sound file, so alert chimes are silent. Spoken announcements still work.",
+                if cfg!(target_os = "linux") {
+                    "Install pipewire for `pw-play`, or libpulse for `paplay`. `CELESTE_TTS_PLAYER` overrides the choice."
+                } else {
+                    "PowerShell is required to play the bundled chimes."
+                },
+            )),
+        }
+
+        match self.vrchat_slot.try_read() {
+            Ok(slot) if slot.is_some() => {
+                report.push(Finding::ok("VRChat", "Signed in."))
+            }
+            Ok(_) => report.push(Finding::blocked(
+                "VRChat",
+                "Not signed in, so group bans, audit polling, and profile checks are unavailable.",
+                "Sign in from Settings, or re-run VRChat setup if the stored session expired.",
+            )),
+            // A locked slot means a sign-in is in flight; calling that a
+            // failure would make the check flap during startup.
+            Err(_) => report.push(Finding::ok("VRChat", "Signing in.")),
+        }
+
+        let token_configured = self.integration_setup_status().0;
+        match (self.discord_http.try_read().map(|http| http.is_some()), token_configured) {
+            (Ok(true), _) => report.push(Finding::ok("Discord", "Connected.")),
+            (Ok(false), true) => report.push(Finding::blocked(
+                "Discord",
+                "A bot token is stored but Celeste is not connected, so no commands or event posts will work.",
+                "Check the token is still valid and that the bot has not been removed from the server.",
+            )),
+            // No token is a supported way to run Celeste, not a fault.
+            (Ok(false), false) => report.push(Finding::ok(
+                "Discord",
+                "Not configured; Celeste is running as a local logger.",
+            )),
+            (Err(_), _) => report.push(Finding::ok("Discord", "Connecting.")),
+        }
+
+        if let Some(settings) = &self.settings {
+            let group = settings
+                .store
+                .get_string(celeste_vrchat::client::GROUP_ID_KEY)
+                .unwrap_or_default();
+            if group.trim().is_empty() {
+                report.push(Finding::degraded(
+                    "VRChat group",
+                    "No group is configured, so group moderation and audit events are unavailable.",
+                    "Set the group in Settings, or re-run setup.",
+                ));
+            } else {
+                report.push(Finding::ok("VRChat group", format!("Watching {group}.")));
+            }
+        }
+
+        report.push(Finding::ok(
+            "Logs",
+            format!("Writing to {}.", self.data_dir.join("logs").display()),
+        ));
+
+        report
+    }
+
     fn diagnostics_report(&self) -> String {
         let vrchat = self
             .vrchat_slot
@@ -5696,7 +5796,9 @@ impl CelesteApp {
                 }
             })
             .unwrap_or("busy");
-        let mut report = format!(
+        let mut report = self.readiness_report().to_text();
+        report.push('\n');
+        report.push_str(&format!(
             "Celeste {}\nData folder: {}\n\nVRChat\n  Session: {}\n  Status: {}\n\nDiscord\n  Gateway/HTTP: {}\n\nText to speech\n  Local engine: {}\n",
             celeste_core::identity::VERSION,
             self.data_dir.display(),
@@ -5704,7 +5806,7 @@ impl CelesteApp {
             self.state.connection_status(),
             discord,
             self.tts.engine_name().unwrap_or("not installed"),
-        );
+        ));
         if let Some(settings) = &self.settings {
             let last_audit = settings
                 .last_audit_query
@@ -7323,8 +7425,12 @@ impl CelesteApp {
             .map_or((command.as_str(), ""), |(op, rest)| (op, rest.trim()));
         let op = canonicalize_cli_command(raw_op);
         match op.as_str() {
+            "check" => {
+                let report = self.readiness_report();
+                self.state.append_cli_output(&report.to_text());
+            }
             "help" | "info" => self.state.append_cli_output(
-                "Celeste CLI commands:\n  help/info                 show this list\n  logout                   log out of VRChat\n  exit/halt/quit/stop       stop Celeste\n  reboot/restart            restart Celeste\n  explore                  open the data folder\n  tts <text>               speak text\n  link <usr_id> <snowflake> link VRChat and Discord users\n  importgroups <file|URL>   import watched groups CSV\n  importgroupsjson <file|URL> import watched groups JSON\n  clear                    clear this output",
+                "Celeste CLI commands:\n  help/info                 show this list\n  check                    check what is working and what is not\n  logout                   log out of VRChat\n  exit/halt/quit/stop       stop Celeste\n  reboot/restart            restart Celeste\n  explore                  open the data folder\n  tts <text>               speak text\n  link <usr_id> <snowflake> link VRChat and Discord users\n  importgroups <file|URL>   import watched groups CSV\n  importgroupsjson <file|URL> import watched groups JSON\n  clear                    clear this output",
             ),
             "clear" => self.state.clear_cli_log(),
             "explore" => {
