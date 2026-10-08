@@ -164,6 +164,56 @@ struct TutorialLayout {
 struct TutorialDemo {
     state: UiState,
     directory: PathBuf,
+    roster_mode: Option<TutorialRosterMode>,
+    roster_scene: Option<usize>,
+    roster_started: std::time::Instant,
+    roster_event: usize,
+    ambient_last_event: std::time::Instant,
+    ambient_next_id: usize,
+    ambient_present: Vec<String>,
+    ambient_should_leave: bool,
+    pending_scroll_target: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TutorialRosterMode {
+    Lightweight,
+    Busy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TutorialRosterCue {
+    Speech(String),
+    NuisanceAlert(String),
+    MixedCharacterAlert(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TutorialScenarioPhase {
+    WaitingForIntroduction,
+    PlayingExample,
+    WaitingForWrapUp,
+    Complete,
+}
+
+impl TutorialRosterMode {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Lightweight => "Lightweight community instance",
+            Self::Busy => "Busy instance with escalating risk",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Lightweight => {
+                "About a dozen people are present. A community moderator, an ordinary watched-group member, and a mixed-character display name demonstrate routine informational and warning callouts."
+            }
+            Self::Busy => {
+                "Roughly 35–40 people are present. A real VRChat Nuisance trust rank, a critical watched group, a risky new account, and departures appear without simulating a rapid raid."
+            }
+        }
+    }
 }
 
 impl TutorialDemo {
@@ -202,9 +252,17 @@ impl TutorialDemo {
             }
         });
         let watched_groups = serde_json::json!({
-            "grp_tutorial_warning": {
-                "type": "NUISANCE",
-                "message": "Tutorial group — not a real moderation record"
+            "grp_tutorial_moderators": {
+                "type": "COMMUNITY",
+                "message": "Tutorial community moderator — not a real moderation record"
+            },
+            "grp_tutorial_watched": {
+                "type": "OTHER",
+                "message": "Tutorial general watchlist — not a real moderation record"
+            },
+            "grp_tutorial_critical": {
+                "type": "MALICIOUS",
+                "message": "Tutorial critical watchlist — not a real moderation record"
             }
         });
         for (name, value) in [
@@ -302,7 +360,446 @@ impl TutorialDemo {
             now - chrono::Duration::minutes(3),
         );
 
-        Some(Self { state, directory })
+        Some(Self {
+            state,
+            directory,
+            roster_mode: None,
+            roster_scene: None,
+            roster_started: std::time::Instant::now(),
+            roster_event: 0,
+            ambient_last_event: std::time::Instant::now(),
+            ambient_next_id: 1,
+            ambient_present: Vec::new(),
+            ambient_should_leave: false,
+            pending_scroll_target: None,
+        })
+    }
+
+    fn set_roster_mode(&mut self, mode: TutorialRosterMode) {
+        if self.roster_mode == Some(mode) {
+            return;
+        }
+        self.roster_mode = Some(mode);
+        self.roster_started = std::time::Instant::now();
+        self.roster_event = 0;
+        self.ambient_last_event = std::time::Instant::now();
+        self.ambient_next_id = 1;
+        self.ambient_present.clear();
+        self.ambient_should_leave = false;
+        self.pending_scroll_target = None;
+        self.state.clear_instance();
+
+        let now = chrono::Local::now().naive_local();
+        self.state
+            .set_instance(Some(celeste_core::ui::InstanceState {
+                location: match mode {
+                    TutorialRosterMode::Lightweight => {
+                        "wrld_tutorial:42420~group(grp_tutorial)~region(us)"
+                    }
+                    TutorialRosterMode::Busy => {
+                        "wrld_tutorial:42421~group(grp_tutorial)~region(us)"
+                    }
+                }
+                .to_string(),
+                world_name: Some(format!("{} — DEMO DATA", mode.title())),
+                joined: now - chrono::Duration::minutes(18),
+                is_group_instance: true,
+            }));
+
+        // Only the host exists when the scene opens. Generic visitors fill
+        // the room one at a time while narration continues, instead of a
+        // whole synthetic roster appearing in a single frame.
+        let host_id = "usr_tutorial_ambient_host";
+        self.join_ordinary(
+            host_id,
+            "Example Instance Host",
+            12,
+            celeste_core::trust_rank::TrustRank::Known,
+        );
+        self.ambient_present.push(host_id.to_string());
+        self.pending_scroll_target = Some(host_id.to_string());
+    }
+
+    fn ambient_target(mode: TutorialRosterMode) -> usize {
+        match mode {
+            TutorialRosterMode::Lightweight => 9,
+            TutorialRosterMode::Busy => 35,
+        }
+    }
+
+    /// Keep the fake instance moving independently of narrated warnings.
+    /// These are deliberately ordinary users: they change the roster but do
+    /// not enqueue speech or sounds, just like uneventful real joins/leaves.
+    fn tick_ambient_activity(&mut self, mode: TutorialRosterMode, scene: usize) {
+        if self.roster_scene != Some(scene) {
+            self.roster_scene = Some(scene);
+            self.roster_mode = None;
+        }
+        self.set_roster_mode(mode);
+
+        let target = Self::ambient_target(mode);
+        let filling = self.ambient_present.len() < target;
+        let interval = if filling {
+            match mode {
+                TutorialRosterMode::Lightweight => 1.35,
+                TutorialRosterMode::Busy => 0.72,
+            }
+        } else {
+            3.25
+        };
+        if self.ambient_last_event.elapsed().as_secs_f32() < interval {
+            return;
+        }
+        self.ambient_last_event = std::time::Instant::now();
+
+        if !filling && self.ambient_should_leave {
+            self.depart_one_ambient();
+            self.ambient_should_leave = false;
+            return;
+        }
+
+        let number = self.ambient_next_id;
+        self.ambient_next_id += 1;
+        let id = format!("usr_tutorial_ambient_{number}");
+        self.join_ordinary(
+            &id,
+            &format!("Example Visitor {number}"),
+            0,
+            celeste_core::trust_rank::TrustRank::User,
+        );
+        self.ambient_present.push(id.clone());
+        self.pending_scroll_target = Some(id);
+        if self.ambient_present.len() >= target {
+            self.ambient_should_leave = true;
+        }
+    }
+
+    fn depart_one_ambient(&mut self) {
+        let Some(index) = self
+            .ambient_present
+            .iter()
+            .position(|id| id != "usr_tutorial_ambient_host")
+        else {
+            return;
+        };
+        let id = self.ambient_present.remove(index);
+        let number = id
+            .rsplit('_')
+            .next()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or_default();
+        self.state.player_leave(
+            false,
+            &id,
+            &format!("Example Visitor {number}"),
+            chrono::Local::now().naive_local(),
+        );
+        self.pending_scroll_target = Some(id);
+    }
+
+    fn join_ordinary(
+        &self,
+        id: &str,
+        name: &str,
+        minutes_ago: i64,
+        rank: celeste_core::trust_rank::TrustRank,
+    ) {
+        let mut player = celeste_core::ui::PlayerJoin::new(
+            id,
+            name,
+            chrono::Local::now().naive_local() - chrono::Duration::minutes(minutes_ago),
+        );
+        let seed = id.bytes().fold(0_usize, |value, byte| {
+            value.wrapping_mul(31).wrapping_add(byte as usize)
+        });
+        let pronouns = [
+            Some("he/him"),
+            Some("she/her"),
+            Some("they/them"),
+            Some("he/they"),
+            Some("she/they"),
+            Some("any/all"),
+            None,
+        ];
+        let ages = [
+            (0, 2, 11),
+            (0, 8, 4),
+            (1, 1, 19),
+            (2, 7, 3),
+            (4, 0, 22),
+            (6, 5, 14),
+            (9, 2, 1),
+        ];
+        let avatars = [
+            ("Neon Fox", "Good"),
+            ("Cozy Robot", "Excellent"),
+            ("Moonlit Cat", "Medium"),
+            ("Retro Dragon", "Poor"),
+            ("Tiny Astronaut", "Good"),
+            ("Garden Moth", "Medium"),
+            ("Fallback Tutorial Avatar", "VeryPoor"),
+        ];
+        let ranks = [
+            celeste_core::trust_rank::TrustRank::Visitor,
+            celeste_core::trust_rank::TrustRank::NewUser,
+            celeste_core::trust_rank::TrustRank::User,
+            celeste_core::trust_rank::TrustRank::Known,
+            celeste_core::trust_rank::TrustRank::Trusted,
+        ];
+        player.pronouns = pronouns[seed % pronouns.len()].map(str::to_string);
+        player.account_age = Some(ages[seed % ages.len()]);
+        player.trust_rank = if id.ends_with("host") {
+            rank
+        } else {
+            ranks[seed % ranks.len()]
+        };
+        player.age_verification_status = match seed % 4 {
+            0 | 1 => Some("18+".to_string()),
+            2 => Some("hidden".to_string()),
+            _ => None,
+        };
+        let (avatar, performance) = avatars[seed % avatars.len()];
+        player.avatar_name = Some(avatar.to_string());
+        player.avatar_info = Some(celeste_core::ui::AvatarBundleInfo {
+            performance_rating: Some(performance.to_string()),
+            ..Default::default()
+        });
+        self.state.player_join(false, player);
+    }
+
+    fn join_nuisance_rank(&mut self) {
+        let id = "usr_tutorial_nuisance_rank";
+        let mut player = celeste_core::ui::PlayerJoin::new(
+            id,
+            "Example Nuisance-Rank User",
+            chrono::Local::now().naive_local(),
+        );
+        player.pronouns = Some("they/she".to_string());
+        player.account_age = Some((3, 9, 17));
+        player.trust_rank = celeste_core::trust_rank::TrustRank::Nuisance;
+        player.avatar_name = Some("Glitched Tutorial Avatar".to_string());
+        player.avatar_info = Some(celeste_core::ui::AvatarBundleInfo {
+            performance_rating: Some("Poor".to_string()),
+            ..Default::default()
+        });
+        player.advisory = Some("DEMO: VRChat Nuisance trust rank".to_string());
+        player.text_color = celeste_core::trust_rank::TrustRank::Nuisance.color_rgb();
+        player.priority = 1000;
+        self.state.player_join(false, player);
+        self.pending_scroll_target = Some(id.to_string());
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn join_watched_group(
+        &self,
+        id: &str,
+        name: &str,
+        group_id: &str,
+        group_name: &str,
+        kind: &str,
+        advisory: &str,
+        critical: bool,
+        priority: i32,
+        color: (u8, u8, u8),
+    ) {
+        let mut player =
+            celeste_core::ui::PlayerJoin::new(id, name, chrono::Local::now().naive_local());
+        let (pronouns, age, rank, avatar, performance) = if critical {
+            (
+                "they/them",
+                (7, 2, 18),
+                celeste_core::trust_rank::TrustRank::Trusted,
+                "Critical Demo Avatar",
+                "VeryPoor",
+            )
+        } else if kind == "COMMUNITY" {
+            (
+                "she/her",
+                (5, 6, 2),
+                celeste_core::trust_rank::TrustRank::Known,
+                "Community Helper Avatar",
+                "Excellent",
+            )
+        } else {
+            (
+                "he/they",
+                (2, 0, 27),
+                celeste_core::trust_rank::TrustRank::User,
+                "General Watchlist Avatar",
+                "Medium",
+            )
+        };
+        player.pronouns = Some(pronouns.to_string());
+        player.account_age = Some(age);
+        player.trust_rank = rank;
+        player.avatar_name = Some(avatar.to_string());
+        player.avatar_info = Some(celeste_core::ui::AvatarBundleInfo {
+            performance_rating: Some(performance.to_string()),
+            ..Default::default()
+        });
+        player.advisory = Some(advisory.to_string());
+        player.text_color = Some(color);
+        player.priority = priority;
+        player.watched_memberships = vec![celeste_core::watched_membership::WatchedMembership {
+            group_id: group_id.to_string(),
+            kind: kind.to_string(),
+            current_name: Some(group_name.to_string()),
+            message: Some("Temporary guided-tour example".to_string()),
+            hidden: false,
+            critical,
+            silent: false,
+        }];
+        self.state.player_join(false, player);
+    }
+
+    fn join_mixed_character_name(&mut self) {
+        // The second `a` is Cyrillic U+0430. This is intentionally synthetic
+        // and demonstrates the same mixed-script impersonation check as a
+        // real local-log join without naming a real VRChat account.
+        let mut player = celeste_core::ui::PlayerJoin::new(
+            "usr_tutorial_mixed_name",
+            "Exаmple Regular",
+            chrono::Local::now().naive_local(),
+        );
+        player.account_age = Some((3, 1, 9));
+        player.pronouns = Some("she/they".to_string());
+        player.trust_rank = celeste_core::trust_rank::TrustRank::User;
+        player.avatar_name = Some("Lookalike Demo Avatar".to_string());
+        player.avatar_info = Some(celeste_core::ui::AvatarBundleInfo {
+            performance_rating: Some("Good".to_string()),
+            ..Default::default()
+        });
+        player.advisory = Some("DEMO: display name contains mixed character scripts".to_string());
+        player.text_color = Some((255, 208, 96));
+        player.priority = 70;
+        self.state.player_join(false, player);
+        self.pending_scroll_target = Some("usr_tutorial_mixed_name".to_string());
+    }
+
+    /// Advance one beat of the current tutorial scenario. Delays are relative
+    /// to the preceding beat rather than to the start of the page, so a long
+    /// callout cannot make the remaining rows rush in all at once.
+    fn tick_roster(&mut self, mode: TutorialRosterMode, scene: usize) -> Option<TutorialRosterCue> {
+        if self.roster_scene != Some(scene) {
+            self.roster_scene = Some(scene);
+            self.roster_mode = None;
+        }
+        self.set_roster_mode(mode);
+        let elapsed = self.roster_started.elapsed().as_secs_f32();
+        let delays: &[f32] = match mode {
+            TutorialRosterMode::Lightweight => &[2.0, 3.0, 3.0, 3.0],
+            TutorialRosterMode::Busy => &[2.0, 3.0, 3.5, 3.0],
+        };
+        if self.roster_event < delays.len() && elapsed >= delays[self.roster_event] {
+            let event = self.roster_event;
+            self.roster_event += 1;
+            self.roster_started = std::time::Instant::now();
+            match (mode, event) {
+                (TutorialRosterMode::Lightweight, 0) => {
+                    self.join_watched_group(
+                        "usr_tutorial_mod",
+                        "Example Community Moderator",
+                        "grp_tutorial_moderators",
+                        "DEMO Community Moderators",
+                        "COMMUNITY",
+                        "DEMO: recognized community moderator",
+                        false,
+                        35,
+                        (86, 178, 120),
+                    );
+                    self.pending_scroll_target = Some("usr_tutorial_mod".to_string());
+                    return Some(TutorialRosterCue::Speech(
+                        "Community moderator joined from Demo Community Moderators.".to_string(),
+                    ));
+                }
+                (TutorialRosterMode::Lightweight, 1) => {
+                    self.join_watched_group(
+                        "usr_tutorial_watched_group",
+                        "Example Watched-Group Member",
+                        "grp_tutorial_watched",
+                        "DEMO General Watchlist",
+                        "OTHER",
+                        "DEMO: member of an ordinary watched group",
+                        false,
+                        60,
+                        (220, 177, 78),
+                    );
+                    self.pending_scroll_target = Some("usr_tutorial_watched_group".to_string());
+                    return Some(TutorialRosterCue::Speech(
+                        "Watched-group member joined from Demo General Watchlist.".to_string(),
+                    ));
+                }
+                (TutorialRosterMode::Lightweight, 2) => {
+                    self.join_mixed_character_name();
+                    return Some(TutorialRosterCue::MixedCharacterAlert(
+                        "Warning. A user joined with a display name containing mixed character scripts."
+                            .to_string(),
+                    ));
+                }
+                (TutorialRosterMode::Lightweight, 3) => self.depart_one_ambient(),
+                (TutorialRosterMode::Busy, 0) => {
+                    self.join_nuisance_rank();
+                    return Some(TutorialRosterCue::NuisanceAlert(
+                        "Warning. A user with the VRChat Nuisance trust rank joined the busy tutorial instance."
+                            .to_string(),
+                    ));
+                }
+                (TutorialRosterMode::Busy, 1) => {
+                    self.join_watched_group(
+                        "usr_tutorial_critical",
+                        "Example Critical Group Member",
+                        "grp_tutorial_critical",
+                        "DEMO Critical Crasher Watchlist",
+                        "MALICIOUS",
+                        "DEMO: critical crasher-group match",
+                        true,
+                        150,
+                        (214, 73, 80),
+                    );
+                    self.pending_scroll_target = Some("usr_tutorial_critical".to_string());
+                    return Some(TutorialRosterCue::Speech(
+                        "Critical warning. Crasher watchlist member joined the busy tutorial instance."
+                            .to_string(),
+                    ));
+                }
+                (TutorialRosterMode::Busy, 2) => {
+                    let mut player = celeste_core::ui::PlayerJoin::new(
+                        "usr_tutorial_risky_new",
+                        "Example New Risky Account",
+                        chrono::Local::now().naive_local(),
+                    );
+                    player.account_age = Some((0, 0, 1));
+                    player.pronouns = Some("any/all".to_string());
+                    player.trust_rank = celeste_core::trust_rank::TrustRank::Visitor;
+                    player.advisory =
+                        Some("DEMO: one-day-old account and Very Poor avatar".to_string());
+                    player.text_color = Some((255, 208, 96));
+                    player.priority = 65;
+                    player.avatar_name = Some("Very Poor Tutorial Avatar".to_string());
+                    player.avatar_info = Some(celeste_core::ui::AvatarBundleInfo {
+                        performance_rating: Some("VeryPoor".to_string()),
+                        ..Default::default()
+                    });
+                    self.state.player_join(false, player);
+                    self.pending_scroll_target = Some("usr_tutorial_risky_new".to_string());
+                    return Some(TutorialRosterCue::Speech(
+                        "New-account warning in the busy tutorial instance.".to_string(),
+                    ));
+                }
+                (TutorialRosterMode::Busy, 3) => self.depart_one_ambient(),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn roster_complete(&self, mode: TutorialRosterMode) -> bool {
+        self.roster_mode == Some(mode)
+            && self.roster_event
+                >= match mode {
+                    TutorialRosterMode::Lightweight => 4,
+                    TutorialRosterMode::Busy => 4,
+                }
     }
 }
 
@@ -369,8 +866,8 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         settings_category: None,
         demo_data: true,
         title: "Reading the player roster",
-        body: "Rows combine display name, user ID, pronouns, avatar and performance details, account age, join/leave times, age verification, trust rank, and advisories. Present players lead the list; departed players remain dimmed so the session history stays useful.",
-        try_it: "The sample rows demonstrate an ordinary player, a watched user/group warning, a flagged profile, and a departed player. None are real VRChat accounts.",
+        body: "This lightweight community-instance simulation starts with its host, fills naturally, and settles around 10–12 people as ordinary players continue to arrive and leave. Rows combine display name, user ID, pronouns, avatar and performance details, account age, join/leave times, age verification, trust rank, groups, and advisories. Present players lead the list; departed players remain dimmed so the session history stays useful.",
+        try_it: "Watch a community moderator, an ordinary watched-group member, and a synthetic mixed-character name arrive without raid-like pacing. Their normal TTS callouts and the mixed-character warning sound play locally. None are real VRChat accounts or groups.",
     },
     TutorialStep {
         chapter: TutorialChapter::InstanceAndRoster,
@@ -379,8 +876,8 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         settings_category: None,
         demo_data: true,
         title: "Advisories, columns, and actions",
-        body: "Advisories can come from watched users, watched groups or avatars, suspicious names, pronoun validation, account age, avatar performance, and other enabled checks. Click a sortable heading to order rows, drag headings to reorder columns, drag an edge to resize, and right-click a heading to hide or restore columns.",
-        try_it: "Open Profile, Ban, Unban, Invite, and similar actions require VRChat API sign-in and suitable group permissions. External actions are disabled on this tutorial's fake rows.",
+        body: "The tour now changes to a busy instance and gradually introduces a user carrying VRChat's Nuisance trust rank, a critical watched-group member, and a risky new account. Advisories can also come from watched users or avatars, suspicious names, pronoun validation, account age, and avatar performance. Click a sortable heading to order rows, drag headings to reorder columns, drag an edge to resize, and right-click a heading to hide or restore columns.",
+        try_it: "Compare informational community rows with the Nuisance trust-rank warning and the red critical watched-group warning as they arrive. Open Profile, Ban, Unban, Invite, and similar actions require VRChat API sign-in and suitable group permissions, so external actions remain disabled on these fake rows.",
     },
     TutorialStep {
         chapter: TutorialChapter::InstanceAndRoster,
@@ -1205,6 +1702,11 @@ pub struct CelesteApp {
     tutorial_narration: bool,
     tutorial_voice: String,
     tutorial_narrated_step: Option<usize>,
+    tutorial_scenario_phase: Option<(usize, TutorialScenarioPhase)>,
+    /// The live roster example normally collapses the guide so it cannot
+    /// cover the rows it is demonstrating. This opt-out is scoped to one
+    /// step and is only set when the user explicitly asks to see it.
+    tutorial_revealed_example_guide: Option<usize>,
     tutorial_tts_notice: Option<String>,
     resume_tutorial_step: Option<usize>,
     tutorial_setup_had_discord: bool,
@@ -1471,6 +1973,8 @@ impl CelesteApp {
             tutorial_narration: false,
             tutorial_voice,
             tutorial_narrated_step: None,
+            tutorial_scenario_phase: None,
+            tutorial_revealed_example_guide: None,
             tutorial_tts_notice: None,
             resume_tutorial_step: None,
             tutorial_setup_had_discord: false,
@@ -2344,8 +2848,18 @@ impl CelesteApp {
 
         let display_state = self.tutorial_state();
         let tutorial_demo = self.tutorial_uses_demo_data();
+        let tutorial_scroll_target = tutorial_demo
+            .then(|| {
+                self.tutorial_demo
+                    .as_mut()
+                    .and_then(|demo| demo.pending_scroll_target.take())
+            })
+            .flatten();
         let mut players = display_state.ordered_players();
         sort_players(&mut players, self.table_sort);
+        let tutorial_scroll_row = tutorial_scroll_target
+            .as_deref()
+            .and_then(|target| players.iter().position(|player| player.id == target));
         if players.is_empty() {
             return self.instance_empty_state(ui);
         }
@@ -2508,6 +3022,9 @@ impl CelesteApp {
                         .min_scrolled_height(table_view_height)
                         .max_scroll_height(table_view_height)
                         .auto_shrink([false, false]);
+                    if let Some(row) = tutorial_scroll_row {
+                        table = table.scroll_to_row(row, Some(egui::Align::Center));
+                    }
                     for width in &fitted_widths {
                         table = table.column(Column::exact(*width).clip(true));
                     }
@@ -5240,6 +5757,7 @@ impl CelesteApp {
         let step = step.min(TUTORIAL_STEPS.len().saturating_sub(1));
         self.tutorial_step = Some(step);
         self.tutorial_narrated_step = None;
+        self.tutorial_revealed_example_guide = None;
         self.tutorial_tts_notice = None;
         self.record_tutorial_progress(step);
         if self.tutorial_demo.is_none() {
@@ -5276,17 +5794,55 @@ impl CelesteApp {
         text
     }
 
+    fn tutorial_scenario_introduction(step: TutorialStep, mode: TutorialRosterMode) -> String {
+        let opening = match mode {
+            TutorialRosterMode::Lightweight => {
+                "Here is how a normal, moderated, but light instance looks and sounds."
+            }
+            TutorialRosterMode::Busy => {
+                "Now here is how a busy instance looks as its risk level changes."
+            }
+        };
+        format!(
+            "{opening} {} I will pause while the example plays. Watch each row appear and listen for Celeste's normal local callouts and alert sounds.",
+            step.body
+        )
+    }
+
+    fn tutorial_scenario_wrap_up(step: TutorialStep, mode: TutorialRosterMode) -> String {
+        format!(
+            "That completes the {} example. {} The information you just saw was temporary demonstration data, not your Celeste records.",
+            match mode {
+                TutorialRosterMode::Lightweight => "lightly populated instance",
+                TutorialRosterMode::Busy => "busy and higher-risk instance",
+            },
+            step.try_it
+        )
+    }
+
     fn speak_tutorial_step(&mut self, index: usize) {
         let Some(step) = TUTORIAL_STEPS.get(index).copied() else {
             return;
         };
         self.tts.skip();
+        self.tutorial_revealed_example_guide = None;
+        let spoken = if let Some(mode) = Self::tutorial_roster_mode(index) {
+            self.tutorial_scenario_phase =
+                Some((index, TutorialScenarioPhase::WaitingForIntroduction));
+            if let Some(demo) = self.tutorial_demo.as_mut() {
+                // Force the live example to restart only after its spoken
+                // introduction has actually completed.
+                demo.roster_scene = None;
+                demo.roster_mode = None;
+            }
+            Self::tutorial_scenario_introduction(step, mode)
+        } else {
+            self.tutorial_scenario_phase = None;
+            Self::tutorial_spoken_text(step)
+        };
         self.tutorial_tts_notice = self
             .tts
-            .submit_accessibility(
-                Self::tutorial_spoken_text(step),
-                self.tutorial_voice.clone(),
-            )
+            .submit_accessibility(spoken, self.tutorial_voice.clone())
             .err();
         self.tutorial_narrated_step = Some(index);
     }
@@ -5294,6 +5850,8 @@ impl CelesteApp {
     fn stop_tutorial_narration(&mut self) {
         self.tts.skip();
         self.tutorial_narrated_step = None;
+        self.tutorial_scenario_phase = None;
+        self.tutorial_revealed_example_guide = None;
     }
 
     /// Remember the furthest step reached, so leaving the tour does not
@@ -5392,6 +5950,40 @@ impl CelesteApp {
             .and_then(|index| TUTORIAL_STEPS.get(index))
             .is_some_and(|step| step.demo_data)
             && self.tutorial_demo.is_some()
+    }
+
+    fn tutorial_roster_mode(index: usize) -> Option<TutorialRosterMode> {
+        let step = TUTORIAL_STEPS.get(index)?;
+        if step.chapter != TutorialChapter::InstanceAndRoster || !step.demo_data {
+            return None;
+        }
+        let within_chapter = step
+            .chapter
+            .steps()
+            .iter()
+            .position(|step| *step == index)?;
+        match within_chapter {
+            // The instance-detection lesson uses the stable fixture. The two
+            // roster lessons are the narrated, live examples.
+            1 => Some(TutorialRosterMode::Lightweight),
+            2 => Some(TutorialRosterMode::Busy),
+            _ => None,
+        }
+    }
+
+    fn tutorial_example_is_playing(&self, index: usize) -> bool {
+        let Some(mode) = Self::tutorial_roster_mode(index) else {
+            return false;
+        };
+        if self.tutorial_narration {
+            return matches!(
+                self.tutorial_scenario_phase,
+                Some((step, TutorialScenarioPhase::PlayingExample)) if step == index
+            );
+        }
+        self.tutorial_demo
+            .as_ref()
+            .is_some_and(|demo| !demo.roster_complete(mode))
     }
 
     fn tutorial_state(&self) -> UiState {
@@ -5650,6 +6242,50 @@ impl CelesteApp {
             );
         }
 
+        let example_playing = self.tutorial_example_is_playing(index);
+        if example_playing && self.tutorial_revealed_example_guide != Some(index) {
+            let mut reveal = false;
+            let mut exit = false;
+            let panel = crate::theme::PANEL;
+            egui::Window::new("Tutorial example playing")
+                .id(egui::Id::new("celeste-guided-tour-example-strip"))
+                .order(egui::Order::Foreground)
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 164.0])
+                .frame(
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgba_unmultiplied(
+                            panel.r(),
+                            panel.g(),
+                            panel.b(),
+                            218,
+                        ))
+                        .stroke(egui::Stroke::new(1.0_f32, self.accent.gamma_multiply(0.7)))
+                        .inner_margin(egui::Margin::symmetric(12.0, 8.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Live example playing — follow the roster");
+                        reveal = ui.small_button("Show guide").clicked();
+                        exit = ui.small_button("Exit tour").clicked();
+                    });
+                });
+            if reveal {
+                self.tutorial_revealed_example_guide = Some(index);
+            }
+            if exit {
+                self.tutorial_narration = false;
+                self.stop_tutorial_narration();
+                self.tutorial_step = None;
+                self.tutorial_menu = false;
+                self.tutorial_demo = None;
+            }
+            return;
+        }
+
         let mut previous = false;
         let mut next = false;
         let mut close = false;
@@ -5658,6 +6294,7 @@ impl CelesteApp {
         let mut selected_voice = self.tutorial_voice.clone();
         let mut test_voice = false;
         let mut replay_step = false;
+        let mut hide_example_guide = false;
         let tts_available = self.tts.engine_name().is_some();
         let mut voices = celeste_core::tts_voices::installed();
         voices.insert(0, String::new());
@@ -5716,6 +6353,41 @@ impl CelesteApp {
                         crate::theme::WARN,
                         "DEMO DATA — temporary tutorial JSON, not your Celeste records",
                     );
+                    if let Some(mode) = Self::tutorial_roster_mode(index) {
+                        ui.add_space(6.0);
+                        Self::inset_frame().show(ui, |ui| {
+                            ui.label(egui::RichText::new(mode.title()).strong());
+                            ui.label(mode.description());
+                            ui.label(
+                                egui::RichText::new(
+                                    "With narration enabled, Celeste introduces the scene, pauses for the live example, plays the same local callout order plus the nuisance and mixed-character alert clips used during monitoring, then resumes the tour.",
+                                )
+                                .small()
+                                .color(crate::theme::TEXT_MUTED),
+                            );
+                            if let Some((phase_step, phase)) = self.tutorial_scenario_phase {
+                                if phase_step == index && self.tutorial_narration {
+                                    ui.colored_label(
+                                        crate::theme::INFO,
+                                        match phase {
+                                            TutorialScenarioPhase::WaitingForIntroduction => {
+                                                "Narrator is introducing this example…"
+                                            }
+                                            TutorialScenarioPhase::PlayingExample => {
+                                                "Example is playing — watch the roster and listen…"
+                                            }
+                                            TutorialScenarioPhase::WaitingForWrapUp => {
+                                                "Example finished — narrator is continuing…"
+                                            }
+                                            TutorialScenarioPhase::Complete => {
+                                                "Narrated example complete"
+                                            }
+                                        },
+                                    );
+                                }
+                            }
+                        });
+                    }
                 }
                 ui.add_space(12.0);
                 Self::inset_frame().show(ui, |ui| {
@@ -5782,8 +6454,17 @@ impl CelesteApp {
                     if ui.button("Exit tour").clicked() {
                         close = true;
                     }
+                    if example_playing && ui.button("Hide guide").clicked() {
+                        hide_example_guide = true;
+                    }
                 });
             });
+
+        if hide_example_guide {
+            self.tutorial_revealed_example_guide = None;
+            ctx.request_repaint();
+            return;
+        }
 
         let narration_changed = narration_enabled != self.tutorial_narration;
         let voice_changed = selected_voice != self.tutorial_voice;
@@ -7009,6 +7690,84 @@ impl eframe::App for CelesteApp {
                 }
             }
         }
+        if let Some((scene, mode)) = self
+            .tutorial_step
+            .and_then(|index| Self::tutorial_roster_mode(index).map(|mode| (index, mode)))
+        {
+            if let Some(demo) = self.tutorial_demo.as_mut() {
+                demo.tick_ambient_activity(mode, scene);
+            }
+            if !self.tutorial_narration {
+                if let Some(demo) = self.tutorial_demo.as_mut() {
+                    let _ = demo.tick_roster(mode, scene);
+                }
+            } else {
+                match self.tutorial_scenario_phase {
+                    Some((step, TutorialScenarioPhase::WaitingForIntroduction))
+                        if step == scene && self.tts.is_idle() =>
+                    {
+                        self.tutorial_scenario_phase =
+                            Some((scene, TutorialScenarioPhase::PlayingExample));
+                    }
+                    Some((step, TutorialScenarioPhase::PlayingExample))
+                        if step == scene && self.tts.is_idle() =>
+                    {
+                        let (cue, complete) = self
+                            .tutorial_demo
+                            .as_mut()
+                            .map(|demo| {
+                                let cue = demo.tick_roster(mode, scene);
+                                let complete = demo.roster_complete(mode);
+                                (cue, complete)
+                            })
+                            .unwrap_or((None, true));
+                        if let Some(cue) = cue {
+                            let result = match cue {
+                                TutorialRosterCue::Speech(text) => self
+                                    .tts
+                                    .submit_accessibility(text, self.tutorial_voice.clone()),
+                                TutorialRosterCue::NuisanceAlert(text) => {
+                                    self.tts.submit_accessibility_nuisance_alert(
+                                        text,
+                                        self.tutorial_voice.clone(),
+                                    )
+                                }
+                                TutorialRosterCue::MixedCharacterAlert(text) => {
+                                    self.tts.submit_accessibility_mixed_character_alert(
+                                        text,
+                                        self.tutorial_voice.clone(),
+                                    )
+                                }
+                            };
+                            if let Err(error) = result {
+                                self.tutorial_tts_notice = Some(error);
+                            }
+                        }
+                        if complete {
+                            if let Some(step) = TUTORIAL_STEPS.get(scene).copied() {
+                                self.tutorial_scenario_phase =
+                                    Some((scene, TutorialScenarioPhase::WaitingForWrapUp));
+                                self.tutorial_tts_notice = self
+                                    .tts
+                                    .submit_accessibility(
+                                        Self::tutorial_scenario_wrap_up(step, mode),
+                                        self.tutorial_voice.clone(),
+                                    )
+                                    .err();
+                            }
+                        }
+                    }
+                    Some((step, TutorialScenarioPhase::WaitingForWrapUp))
+                        if step == scene && self.tts.is_idle() =>
+                    {
+                        self.tutorial_scenario_phase =
+                            Some((scene, TutorialScenarioPhase::Complete));
+                    }
+                    _ => {}
+                }
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
         self.tutorial_layout = TutorialLayout::default();
 
         egui::TopBottomPanel::top("toolbar")
@@ -8085,6 +8844,135 @@ mod tests {
         assert!(spoken.contains(step.body));
         assert!(spoken.contains(step.try_it));
         assert!(spoken.contains("temporary demonstration data"));
+    }
+
+    #[test]
+    fn only_the_two_roster_lessons_run_live_scenarios() {
+        let chapter = TutorialChapter::InstanceAndRoster.steps();
+        assert_eq!(CelesteApp::tutorial_roster_mode(chapter[0]), None);
+        assert_eq!(
+            CelesteApp::tutorial_roster_mode(chapter[1]),
+            Some(TutorialRosterMode::Lightweight)
+        );
+        assert_eq!(
+            CelesteApp::tutorial_roster_mode(chapter[2]),
+            Some(TutorialRosterMode::Busy)
+        );
+    }
+
+    #[test]
+    fn roster_narration_brackets_the_example_instead_of_describing_it_afterward() {
+        let step = TUTORIAL_STEPS[TutorialChapter::InstanceAndRoster.steps()[1]];
+        let intro =
+            CelesteApp::tutorial_scenario_introduction(step, TutorialRosterMode::Lightweight);
+        let wrap = CelesteApp::tutorial_scenario_wrap_up(step, TutorialRosterMode::Lightweight);
+        assert!(intro.starts_with("Here is how a normal, moderated, but light instance"));
+        assert!(intro.contains("pause while the example plays"));
+        assert!(!intro.contains(step.try_it));
+        assert!(wrap.contains(step.try_it));
+        assert!(wrap.contains("temporary demonstration data"));
+    }
+
+    #[test]
+    fn roster_tour_progresses_from_lightweight_to_busy_risk_examples() {
+        let mut demo = TutorialDemo::create().expect("tutorial fixture");
+
+        demo.tick_ambient_activity(TutorialRosterMode::Lightweight, 1);
+        assert_eq!(demo.state.status_counts(), (1, 0, 1));
+        for _ in 1..TutorialDemo::ambient_target(TutorialRosterMode::Lightweight) {
+            demo.ambient_last_event = std::time::Instant::now() - std::time::Duration::from_secs(2);
+            demo.tick_ambient_activity(TutorialRosterMode::Lightweight, 1);
+        }
+        assert_eq!(demo.state.status_counts(), (9, 0, 9));
+        let light_players = demo.state.ordered_players();
+        assert!(
+            light_players
+                .iter()
+                .filter_map(|player| player.account_age)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 3
+        );
+        assert!(
+            light_players
+                .iter()
+                .filter_map(|player| player.pronouns.as_deref())
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 3
+        );
+        assert!(
+            light_players
+                .iter()
+                .filter_map(|player| player.avatar_name.as_deref())
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 3
+        );
+        demo.roster_started = std::time::Instant::now() - std::time::Duration::from_secs(3);
+        assert!(matches!(
+            demo.tick_roster(TutorialRosterMode::Lightweight, 1),
+            Some(TutorialRosterCue::Speech(_))
+        ));
+        demo.roster_started = std::time::Instant::now() - std::time::Duration::from_secs(4);
+        assert!(matches!(
+            demo.tick_roster(TutorialRosterMode::Lightweight, 1),
+            Some(TutorialRosterCue::Speech(_))
+        ));
+        demo.roster_started = std::time::Instant::now() - std::time::Duration::from_secs(4);
+        assert!(matches!(
+            demo.tick_roster(TutorialRosterMode::Lightweight, 1),
+            Some(TutorialRosterCue::MixedCharacterAlert(_))
+        ));
+        assert_eq!(demo.state.status_counts(), (12, 0, 12));
+        assert!(demo.state.ordered_players().iter().any(|player| player
+            .advisory
+            .as_deref()
+            .is_some_and(|text| text.contains("mixed character"))));
+        demo.roster_started = std::time::Instant::now() - std::time::Duration::from_secs(4);
+        assert_eq!(demo.tick_roster(TutorialRosterMode::Lightweight, 1), None);
+        assert_eq!(demo.state.status_counts(), (11, 1, 12));
+        assert!(demo.roster_complete(TutorialRosterMode::Lightweight));
+
+        demo.tick_ambient_activity(TutorialRosterMode::Busy, 2);
+        assert_eq!(demo.state.status_counts(), (1, 0, 1));
+        for _ in 1..TutorialDemo::ambient_target(TutorialRosterMode::Busy) {
+            demo.ambient_last_event = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            demo.tick_ambient_activity(TutorialRosterMode::Busy, 2);
+        }
+        assert_eq!(demo.state.status_counts(), (35, 0, 35));
+        demo.roster_started = std::time::Instant::now() - std::time::Duration::from_secs(3);
+        assert!(matches!(
+            demo.tick_roster(TutorialRosterMode::Busy, 2),
+            Some(TutorialRosterCue::NuisanceAlert(_))
+        ));
+        let nuisance = demo
+            .state
+            .ordered_players()
+            .into_iter()
+            .find(|player| player.id == "usr_tutorial_nuisance_rank")
+            .expect("nuisance-rank tutorial user");
+        assert_eq!(
+            nuisance.trust_rank,
+            celeste_core::trust_rank::TrustRank::Nuisance
+        );
+        assert!(nuisance.watched_memberships.is_empty());
+        for _ in 0..2 {
+            demo.roster_started = std::time::Instant::now() - std::time::Duration::from_secs(4);
+            assert!(matches!(
+                demo.tick_roster(TutorialRosterMode::Busy, 2),
+                Some(TutorialRosterCue::Speech(_))
+            ));
+        }
+        assert_eq!(demo.state.status_counts(), (38, 0, 38));
+        assert!(demo.state.ordered_players().iter().any(|player| player
+            .advisory
+            .as_deref()
+            .is_some_and(|text| text.contains("critical"))));
+        demo.roster_started = std::time::Instant::now() - std::time::Duration::from_secs(4);
+        assert_eq!(demo.tick_roster(TutorialRosterMode::Busy, 2), None);
+        assert_eq!(demo.state.status_counts(), (37, 1, 38));
+        assert!(demo.roster_complete(TutorialRosterMode::Busy));
     }
 
     /// A chapter's steps must be contiguous. The window numbers steps as

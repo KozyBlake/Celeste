@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -228,14 +228,28 @@ impl Engine {
             }
             Self::PowerShell(path) => {
                 let mut command = Command::new(path);
+                // Passing an empty default-voice argument through
+                // `powershell -Command` is unreliable: Windows PowerShell
+                // can collapse it, shifting the text into `$args[0]` and
+                // leaving nothing to speak. Environment values preserve
+                // both strings verbatim, including quotes and non-ASCII.
+                command
+                    .env("CELESTE_TTS_VOICE", voice)
+                    .env("CELESTE_TTS_TEXT", text);
                 command.args([
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "Add-Type -AssemblyName System.Speech; $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); if ($args[0]) { $s.SelectVoice($args[0]) }; $s.Speak($args[1])",
-                    voice,
-                    text,
+                    "Add-Type -AssemblyName System.Speech; $s=[System.Speech.Synthesis.SpeechSynthesizer]::new(); try { $v=$env:CELESTE_TTS_VOICE; if (![string]::IsNullOrWhiteSpace($v)) { $s.SelectVoice($v) }; $s.Speak($env:CELESTE_TTS_TEXT) } finally { $s.Dispose() }",
                 ]);
+                // A GUI application must not flash a console window for
+                // every announcement or voice preview.
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                    command.creation_flags(CREATE_NO_WINDOW);
+                }
                 command
             }
         };
@@ -277,8 +291,15 @@ fn resolve_player_prefix() -> Option<Vec<String>> {
 }
 
 enum Request {
-    Speak { text: String, voice: String },
-    Audio { path: PathBuf },
+    Speak {
+        text: String,
+        voice: String,
+        generation: u64,
+    },
+    Audio {
+        path: PathBuf,
+        generation: u64,
+    },
     Shutdown,
 }
 
@@ -295,6 +316,11 @@ pub struct TtsService {
     /// and the clip then started anyway — pressing Skip and hearing the
     /// line play is exactly the reported symptom.
     skip_requested: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    /// Number of speech/sound requests either queued or currently playing.
+    /// The guided tour uses this to wait for an introduction or example to
+    /// actually finish before moving to the next part of its demonstration.
+    pending: Arc<AtomicU64>,
     engine_name: Option<&'static str>,
     mixed_character_alert: Option<PathBuf>,
     nuisance_alert: Option<PathBuf>,
@@ -311,10 +337,14 @@ impl TtsService {
         let paused = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let skip_requested = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
+        let pending = Arc::new(AtomicU64::new(0));
         let active: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
         let worker_active = active.clone();
         let worker_shutdown = shutting_down.clone();
         let worker_skip = skip_requested.clone();
+        let worker_generation = generation.clone();
+        let worker_pending = pending.clone();
         std::thread::Builder::new()
             .name("celeste-tts".into())
             .spawn(move || {
@@ -324,6 +354,8 @@ impl TtsService {
                     worker_active,
                     worker_shutdown,
                     worker_skip,
+                    worker_generation,
+                    worker_pending,
                 )
             })
             .expect("spawn TTS worker");
@@ -335,6 +367,8 @@ impl TtsService {
         Self {
             sender,
             skip_requested,
+            generation,
+            pending,
             paused,
             shutting_down,
             active,
@@ -383,21 +417,42 @@ impl TtsService {
         if self.engine_name.is_none() {
             return Err("No supported TTS engine is installed (tried eSpeak NG/eSpeak, Speech Dispatcher, and Flite).".into());
         }
-        self.sender
-            .send(Request::Speak { text, voice })
-            .map_err(|_| "The TTS worker stopped.".to_string())
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        if self
+            .sender
+            .send(Request::Speak {
+                text,
+                voice,
+                generation: self.generation.load(Ordering::SeqCst),
+            })
+            .is_err()
+        {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+            return Err("The TTS worker stopped.".to_string());
+        }
+        Ok(())
     }
 
-    fn submit_audio(&self, path: Option<&PathBuf>) -> Result<(), String> {
-        if self.paused.load(Ordering::SeqCst) {
+    fn submit_audio(&self, path: Option<&PathBuf>, respect_pause: bool) -> Result<(), String> {
+        if respect_pause && self.paused.load(Ordering::SeqCst) {
             return Ok(());
         }
         let path = path
             .cloned()
             .ok_or_else(|| "The bundled alert sound could not be prepared.".to_string())?;
-        self.sender
-            .send(Request::Audio { path })
-            .map_err(|_| "The TTS worker stopped.".to_string())
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        if self
+            .sender
+            .send(Request::Audio {
+                path,
+                generation: self.generation.load(Ordering::SeqCst),
+            })
+            .is_err()
+        {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+            return Err("The TTS worker stopped.".to_string());
+        }
+        Ok(())
     }
 
     /// Java's `submitMixedCharacterNameJoinAlert`: alert first, then the
@@ -407,7 +462,7 @@ impl TtsService {
         text: impl Into<String>,
         voice: impl Into<String>,
     ) -> Result<(), String> {
-        self.submit_audio(self.mixed_character_alert.as_ref())?;
+        self.submit_audio(self.mixed_character_alert.as_ref(), true)?;
         self.submit(text, voice)
     }
 
@@ -418,8 +473,40 @@ impl TtsService {
         text: impl Into<String>,
         voice: impl Into<String>,
     ) -> Result<(), String> {
-        self.submit_audio(self.nuisance_alert.as_ref())?;
+        self.submit_audio(self.nuisance_alert.as_ref(), true)?;
         self.submit(text, voice)
+    }
+
+    /// Tour-only version of the nuisance example. It keeps the exact same
+    /// serialized alert-then-speech order as a real nuisance notification,
+    /// but honours the user's explicit tour-narration choice rather than the
+    /// operational Voice pause button. It is always local and never routes
+    /// demo audio into Discord.
+    pub fn submit_accessibility_nuisance_alert(
+        &self,
+        text: impl Into<String>,
+        voice: impl Into<String>,
+    ) -> Result<(), String> {
+        self.submit_audio(self.nuisance_alert.as_ref(), false)?;
+        self.submit_speech(text.into(), voice.into(), false)
+    }
+
+    /// Tour-only mixed-script demonstration. This plays the same bundled
+    /// warning used by the real local-log check, followed by its explanation,
+    /// without enabling ordinary callouts or routing demo audio to Discord.
+    pub fn submit_accessibility_mixed_character_alert(
+        &self,
+        text: impl Into<String>,
+        voice: impl Into<String>,
+    ) -> Result<(), String> {
+        self.submit_audio(self.mixed_character_alert.as_ref(), false)?;
+        self.submit_speech(text.into(), voice.into(), false)
+    }
+
+    /// True only after every request submitted before this check has either
+    /// finished, failed, or been discarded by Skip.
+    pub fn is_idle(&self) -> bool {
+        self.pending.load(Ordering::SeqCst) == 0 && !self.busy()
     }
 
     /// Skip whatever is speaking or about to speak.
@@ -428,6 +515,7 @@ impl TtsService {
     /// (killed) or a synthesis in flight (flagged, so its audio is
     /// discarded instead of played once rendering finishes).
     pub fn skip(&self) -> bool {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         let killed = {
             let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
             active.as_mut().is_some_and(|child| child.kill().is_ok())
@@ -466,16 +554,36 @@ fn worker(
     active: Arc<Mutex<Option<Child>>>,
     shutting_down: Arc<AtomicBool>,
     skip_requested: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    pending: Arc<AtomicU64>,
 ) {
+    struct PendingRequest<'a>(&'a AtomicU64);
+    impl Drop for PendingRequest<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     while let Ok(request) = receiver.recv() {
         if shutting_down.load(Ordering::SeqCst) {
             break;
         }
+        if matches!(&request, Request::Shutdown) {
+            break;
+        }
+        let _pending_request = PendingRequest(&pending);
         // A skip raised while the previous clip was finishing must not eat
         // this one.
         skip_requested.store(false, Ordering::SeqCst);
         let spawned = match request {
-            Request::Speak { text, voice } => {
+            Request::Speak {
+                text,
+                voice,
+                generation: request_generation,
+            } => {
+                if request_generation != generation.load(Ordering::SeqCst) {
+                    continue;
+                }
                 // Pick the engine the chosen voice belongs to, not the one
                 // detected at startup: with a Flite voice selected and
                 // eSpeak also installed, the startup engine would run
@@ -485,8 +593,16 @@ fn worker(
                 };
                 engine.spawn(&text, &voice)
             }
-            Request::Audio { path } => spawn_audio_file(&path),
-            Request::Shutdown => break,
+            Request::Audio {
+                path,
+                generation: request_generation,
+            } => {
+                if request_generation != generation.load(Ordering::SeqCst) {
+                    continue;
+                }
+                spawn_audio_file(&path)
+            }
+            Request::Shutdown => unreachable!("shutdown handled before pending request guard"),
         };
         match spawned {
             Ok(mut child) => {
@@ -595,15 +711,19 @@ fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "PowerShell is unavailable")
             })?;
-        return Command::new(player)
+        let mut command = Command::new(player);
+        command
             .args([
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
                 "$p=[System.Media.SoundPlayer]::new($args[0]); $p.PlaySync()",
             ])
-            .arg(path)
-            .spawn();
+            .arg(path);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+        return command.spawn();
     }
     #[allow(unreachable_code)]
     Err(std::io::Error::new(
