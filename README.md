@@ -319,6 +319,32 @@ chmod +x celeste        # Linux, first run only
 
 First launch opens a setup wizard for the Discord bot token, the guild, and the VRChat account.
 
+#### Unsigned builds
+
+Celeste's releases are **not code-signed**. A signing certificate is a recurring
+cost that a free noncommercial project does not carry, so Windows will stop you
+the first time you run it:
+
+> Windows protected your PC
+
+Choose **More info**, then **Run anyway**. SmartScreen is reporting that the
+publisher is unverified, which is true and will stay true. It is not telling you
+anything about the file itself.
+
+Check the file instead. Every release lists a SHA-256 for each download on its
+release page:
+
+```powershell
+Get-FileHash .\celeste.exe -Algorithm SHA256
+```
+
+```sh
+sha256sum celeste
+```
+
+If what you get does not match what the release page says, do not run it — open
+an issue.
+
 To build it yourself, see [BUILDING.md](BUILDING.md).
 
 ---
@@ -358,6 +384,28 @@ Package names differ between distributions; the table covers the two most common
 macOS uses the built-in `say`; Windows uses SAPI voices via PowerShell.
 
 If no engine is installed, Celeste opens an explanatory warning instead of a voice list.
+
+---
+
+## Help wanted
+
+Celeste is built largely with AI assistance, as the note at the top of this page
+says. That is what got it this far, and it is also why the two things below
+would help most.
+
+**Rust developers.** The project would benefit from people who write Rust
+properly — reviewing what is here, saying what is idiomatic and what is not, and
+taking work on directly. You do not need to know VRChat or Scarlet to be useful;
+much of what needs doing is ordinary Rust.
+
+**Testers.** Celeste is in beta and the rough edges are still being found. The
+most useful reports name the build, say what you did, and say what you expected
+to happen instead. Group-permission edge cases, unusual instance transitions,
+high-DPI and multi-monitor setups, and running under Proton are all
+under-tested.
+
+Issues and pull requests: https://github.com/KozyBlake/Celeste. Contributions
+are accepted under the project's licence.
 
 ---
 

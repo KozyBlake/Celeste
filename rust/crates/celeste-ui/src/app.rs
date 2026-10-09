@@ -1694,6 +1694,55 @@ fn fitted_column_widths(
 /// others. Applying the pointer delta directly to the stored preference is
 /// incorrect whenever the table is compressed and makes a drag appear to
 /// snap back on the following frame.
+/// The flexible width held back for the columns that are not being
+/// dragged, in points.
+const COLUMN_FLEXIBLE_RESERVE: f32 = 0.5;
+
+/// Advance a column-resize drag by one frame's pointer movement.
+///
+/// egui's `drag_delta` reports how far the pointer moved *this frame*, not
+/// how far it has travelled since the drag began, so it has to be summed.
+/// Adding it to the width captured when the drag started instead left the
+/// column one frame's travel from where it began and collapsing back to
+/// its starting width the moment the pointer paused, which is what made
+/// dragging a divider look like the UI undoing the drag.
+fn advance_column_drag(running_width: f32, frame_delta_x: f32, floor: f32) -> f32 {
+    (running_width + frame_delta_x).max(floor)
+}
+
+/// Move the column at `from` so it sits immediately before the column that
+/// was at `insert_before`, shifting the rest along.
+///
+/// This used to be a `swap`, which flung whichever column happened to be at
+/// the destination back to where the dragged one came from. Dragging a
+/// column somewhere should move that column and leave the others in order.
+///
+/// `insert_before` indexes the list as the user sees it, before anything
+/// moves, and may be one past the end to mean "after the last column".
+/// Returns `None` when the drag would not change the order.
+fn reordered_columns(
+    columns: &[ColumnId],
+    from: usize,
+    insert_before: usize,
+) -> Option<Vec<ColumnId>> {
+    if from >= columns.len() || insert_before > columns.len() {
+        return None;
+    }
+    // Removing the dragged column first shifts every later position down.
+    let target = if from < insert_before {
+        insert_before - 1
+    } else {
+        insert_before
+    };
+    if target == from {
+        return None;
+    }
+    let mut order = columns.to_vec();
+    let column = order.remove(from);
+    order.insert(target, column);
+    Some(order)
+}
+
 fn preference_for_fitted_width(
     columns: &[ColumnId],
     preferred: &std::collections::HashMap<ColumnId, f32>,
@@ -1704,7 +1753,13 @@ fn preference_for_fitted_width(
     let floor_total = columns.iter().map(ColumnId::fitted_min_width).sum::<f32>();
     let extra = (available_width - floor_total).max(0.0);
     let floor = resized.fitted_min_width();
-    if extra <= f32::EPSILON {
+    // The other columns keep at least half a pixel of flexible width, so
+    // the divisor below can never reach zero. This has to be checked
+    // before the clamp rather than inside it: `f32::clamp` panics when its
+    // lower bound exceeds its upper one, and a table squeezed to within
+    // half a pixel of its floors would do exactly that.
+    let headroom = extra - COLUMN_FLEXIBLE_RESERVE;
+    if headroom <= f32::EPSILON {
         return resized.min_width();
     }
 
@@ -1730,7 +1785,7 @@ fn preference_for_fitted_width(
 
     // Keep at least a sliver of flexible width for the other columns. Their
     // hard floors are already protected by `fitted_column_widths`.
-    let target_flexible = (desired_fitted_width - floor).clamp(0.0, extra - 0.5);
+    let target_flexible = (desired_fitted_width - floor).clamp(0.0, headroom);
     let resized_flexible = target_flexible * other_flexible / (extra - target_flexible);
     (floor + resized_flexible).max(resized.min_width())
 }
@@ -1745,6 +1800,22 @@ struct UiPropsInfo {
 /// text fields line up down the page instead of each sitting wherever its
 /// label ended.
 const CONTROL_WIDTH: f32 = 260.0;
+
+/// The range Celeste will apply as a UI scale, from either the slider or
+/// Ctrl+Plus / Ctrl+Minus. egui's own keyboard zoom allows 0.2..=5.0;
+/// below 50% the text stops being legible and above 400% the toolbar
+/// alone is taller than most displays.
+const UI_SCALE_MIN: f32 = 0.5;
+const UI_SCALE_MAX: f32 = 4.0;
+
+/// Scales are compared, not matched: egui rounds keyboard steps to one
+/// decimal place and the value makes a round trip through settings.json.
+const UI_SCALE_EPSILON: f32 = 0.001;
+
+/// How long to wait for the scale to settle before writing it. Holding
+/// Ctrl+Minus repeats at the OS key-repeat rate and each write rewrites
+/// settings.json, so a burst becomes one save.
+const UI_SCALE_SAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(600);
 
 /// What the avatar-stats window shows, snapshotted when it opens so it
 /// doesn't hold a borrow of the player table.
@@ -1906,6 +1977,13 @@ pub struct CelesteApp {
     ui_scale_open: bool,
     ui_scale_percent: f32,
     ui_scale: f32,
+    // False until the stored scale has been pushed into egui once. After
+    // that the context owns the value and `sync_ui_scale` reads it back,
+    // so Ctrl+Plus / Ctrl+Minus / Ctrl+0 are not overwritten every frame.
+    ui_scale_applied: bool,
+    // Set when the keyboard changed the scale, cleared when the change has
+    // been written to settings.json.
+    ui_scale_save_due: Option<std::time::Instant>,
     accent_open: bool,
     accent: egui::Color32,
     accent_edit: [u8; 3],
@@ -1981,7 +2059,7 @@ impl CelesteApp {
             .as_ref()
             .and_then(|settings| settings.store.get_object::<f32>("ui_scale"))
             .unwrap_or(1.0)
-            .clamp(0.5, 4.0);
+            .clamp(UI_SCALE_MIN, UI_SCALE_MAX);
         let accent = settings
             .as_ref()
             .and_then(|settings| settings.store.get_object::<Vec<u8>>("ui_accent_color"))
@@ -2140,6 +2218,8 @@ impl CelesteApp {
             ui_scale_open: false,
             ui_scale_percent: ui_scale * 100.0,
             ui_scale,
+            ui_scale_applied: false,
+            ui_scale_save_due: None,
             accent_open: false,
             accent,
             accent_edit: [accent.r(), accent.g(), accent.b()],
@@ -2702,6 +2782,9 @@ impl CelesteApp {
     /// retain Java's dirty-tracked behavior and require this explicit save.
     fn shutdown(&mut self) {
         self.flush_pending_setting_edits();
+        if self.ui_scale_save_due.take().is_some() {
+            self.persist_ui_scale();
+        }
         if let Some(settings) = self.settings.as_ref() {
             settings.store.save();
         }
@@ -3083,7 +3166,9 @@ impl CelesteApp {
         // column's header swaps the two — matching the original Swing
         // `JTableHeader`'s drag-to-reorder behavior instead of egui_extras'
         // fixed column order.
-        let mut swap: Option<(usize, usize)> = None;
+        let mut move_column: Option<(usize, usize)> = None;
+        // Copied out so the table closures do not borrow `self`.
+        let accent = self.accent;
         let mut clicked_sort = None;
         let mut reset_sort = false;
         let mut toggle_column = None;
@@ -3158,6 +3243,12 @@ impl CelesteApp {
                                             egui::Id::new("instance_column_header").with(index),
                                             index,
                                             |ui| {
+                                                // Fill the cell so the whole
+                                                // heading is the grab handle
+                                                // and the drag preview reads
+                                                // as the column, not as a
+                                                // loose piece of text.
+                                                ui.set_min_width(ui.available_width());
                                                 let marker = match active_sort {
                                                     Some(TableSort {
                                                         column: sorted,
@@ -3224,16 +3315,28 @@ impl CelesteApp {
                                         });
                                     }
                                     if resize.dragged() || resize.drag_stopped() {
-                                        let start = ui.ctx().data(|data| {
-                                            data.get_temp::<f32>(resize_id).unwrap_or_else(|| {
-                                                fitted_widths
-                                                    .get(index)
-                                                    .copied()
-                                                    .unwrap_or_else(|| column.initial_width())
-                                            })
+                                        // Read the pointer before taking the
+                                        // data lock: `drag_delta` reads the
+                                        // context too, and egui guards both
+                                        // with the same lock.
+                                        let frame_delta = resize.drag_delta().x;
+                                        let fallback = fitted_widths
+                                            .get(index)
+                                            .copied()
+                                            .unwrap_or_else(|| column.initial_width());
+                                        let floor = column.fitted_min_width();
+                                        // On the frame the drag ends
+                                        // `drag_delta` is zero, so this keeps
+                                        // the width the pointer last chose.
+                                        let desired_fitted = ui.ctx().data_mut(|data| {
+                                            let running = data
+                                                .get_temp::<f32>(resize_id)
+                                                .unwrap_or(fallback);
+                                            let next =
+                                                advance_column_drag(running, frame_delta, floor);
+                                            data.insert_temp(resize_id, next);
+                                            next
                                         });
-                                        let desired_fitted = (start + resize.drag_delta().x)
-                                            .max(column.fitted_min_width());
                                         width_update = Some((
                                             *column,
                                             preference_for_fitted_width(
@@ -3246,10 +3349,46 @@ impl CelesteApp {
                                             resize.drag_stopped(),
                                         ));
                                     }
-                                    if let Some(dragged_from) =
-                                        response.dnd_release_payload::<usize>()
-                                    {
-                                        swap = Some((*dragged_from, index));
+                                    // The heading label is only as wide as
+                                    // its text, so the cell itself is the
+                                    // drop target. Which side of the centre
+                                    // the pointer is on decides whether the
+                                    // dragged column lands before or after
+                                    // this one, so every position including
+                                    // the far end is reachable.
+                                    let cell = ui.max_rect();
+                                    let dragging = egui::DragAndDrop::payload::<usize>(ui.ctx());
+                                    if let Some(dragged_from) = dragging {
+                                        let drop = ui.interact(
+                                            cell,
+                                            egui::Id::new("instance_column_drop").with(index),
+                                            egui::Sense::hover(),
+                                        );
+                                        if let Some(pointer) = ui.ctx().pointer_interact_pos() {
+                                            if drop.contains_pointer() {
+                                                let after = pointer.x > cell.center().x;
+                                                // Inset by a pixel: the
+                                                // column clips to its cell,
+                                                // so a line drawn exactly on
+                                                // the edge disappears.
+                                                let edge = if after {
+                                                    cell.right() - 1.0
+                                                } else {
+                                                    cell.left() + 1.0
+                                                };
+                                                ui.painter().vline(
+                                                    edge,
+                                                    cell.y_range(),
+                                                    egui::Stroke::new(2.0, accent),
+                                                );
+                                                if ui.input(|i| i.pointer.any_released()) {
+                                                    move_column = Some((
+                                                        *dragged_from,
+                                                        index + usize::from(after),
+                                                    ));
+                                                }
+                                            }
+                                        }
                                     }
                                 });
                             }
@@ -3307,9 +3446,9 @@ impl CelesteApp {
         });
         self.tutorial_layout.player_table = Some(player_table.response.rect);
 
-        if let Some((from, to)) = swap {
-            if from != to && from < self.column_order.len() && to < self.column_order.len() {
-                self.column_order.swap(from, to);
+        if let Some((from, insert_before)) = move_column {
+            if let Some(order) = reordered_columns(&self.column_order, from, insert_before) {
+                self.column_order = order;
                 self.save_column_layout();
             }
         }
@@ -5530,6 +5669,67 @@ impl CelesteApp {
         });
     }
 
+    fn persist_ui_scale(&self) {
+        if let Some(settings) = &self.settings {
+            settings.store.set_object("ui_scale", &self.ui_scale);
+        }
+    }
+
+    /// Reconciles Celeste's stored UI scale with egui's zoom factor.
+    ///
+    /// egui applies Ctrl+Plus / Ctrl+Minus / Ctrl+0 in `end_pass`, which
+    /// runs *after* this. Calling `set_zoom_factor` unconditionally every
+    /// frame — as this used to — queued the stored value back over the one
+    /// the user had just chosen, so the window resized for a single frame
+    /// and then snapped back. The keyboard is the only way out of a scale
+    /// too large to read the UI with, so it has to win.
+    ///
+    /// Instead the stored scale is pushed into egui once, and after that
+    /// the context owns it: whatever the keyboard leaves there is adopted
+    /// and saved.
+    fn sync_ui_scale(&mut self, ctx: &egui::Context) {
+        let applied = ctx.zoom_factor();
+
+        if !self.ui_scale_applied {
+            self.ui_scale_applied = true;
+            if (applied - self.ui_scale).abs() > UI_SCALE_EPSILON {
+                ctx.set_zoom_factor(self.ui_scale);
+            }
+            return;
+        }
+
+        if (applied - self.ui_scale).abs() > UI_SCALE_EPSILON {
+            // egui's own keyboard zoom allows 0.2..=5.0, which is wider
+            // than Celeste stays legible across, so pull it back into
+            // range. The correction lands a frame later because
+            // `set_zoom_factor` only takes effect at the next pass.
+            let clamped = applied.clamp(UI_SCALE_MIN, UI_SCALE_MAX);
+            if (clamped - applied).abs() > UI_SCALE_EPSILON {
+                ctx.set_zoom_factor(clamped);
+            }
+            if (clamped - self.ui_scale).abs() > UI_SCALE_EPSILON {
+                self.ui_scale = clamped;
+                self.ui_scale_percent = clamped * 100.0;
+                // Key repeat fires many times a second and every settings
+                // write rewrites settings.json, so collect the burst.
+                self.ui_scale_save_due =
+                    Some(std::time::Instant::now() + UI_SCALE_SAVE_DELAY);
+            }
+        }
+
+        if let Some(due) = self.ui_scale_save_due {
+            let now = std::time::Instant::now();
+            if now >= due {
+                self.ui_scale_save_due = None;
+                self.persist_ui_scale();
+            } else {
+                // Nothing else is necessarily animating, so make sure a
+                // frame happens when the write is due.
+                ctx.request_repaint_after(due - now);
+            }
+        }
+    }
+
     fn settings_action_windows(&mut self, ctx: &egui::Context) {
         if self.ui_scale_open {
             let mut open = true;
@@ -5540,7 +5740,20 @@ impl CelesteApp {
                 .open(&mut open)
                 .show(ctx, |ui| {
                     ui.label(format!("Scale: {:.0}%", self.ui_scale_percent));
-                    ui.add(egui::Slider::new(&mut self.ui_scale_percent, 50.0..=400.0).suffix("%"));
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.ui_scale_percent,
+                            UI_SCALE_MIN * 100.0..=UI_SCALE_MAX * 100.0,
+                        )
+                        .suffix("%"),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "Ctrl+Plus and Ctrl+Minus also change the scale,                              and Ctrl+0 resets it to 100%. Those work even when                              the scale is too large to read this window.",
+                        )
+                        .small()
+                        .weak(),
+                    );
                     ui.horizontal(|ui| {
                         apply = ui.button("Apply").clicked();
                         if ui.button("Cancel").clicked() {
@@ -5552,10 +5765,9 @@ impl CelesteApp {
                 self.ui_scale_open = false;
             }
             if apply {
-                self.ui_scale = (self.ui_scale_percent / 100.0).clamp(0.5, 4.0);
-                if let Some(settings) = &self.settings {
-                    settings.store.set_object("ui_scale", &self.ui_scale);
-                }
+                self.ui_scale = (self.ui_scale_percent / 100.0).clamp(UI_SCALE_MIN, UI_SCALE_MAX);
+                self.ui_scale_save_due = None;
+                self.persist_ui_scale();
                 ctx.set_zoom_factor(self.ui_scale);
                 self.ui_scale_open = false;
                 self.settings_notice =
@@ -7935,7 +8147,7 @@ impl CelesteApp {
 impl eframe::App for CelesteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
-        ctx.set_zoom_factor(self.ui_scale);
+        self.sync_ui_scale(ctx);
         self.ensure_font_fallbacks(ctx);
         self.install_visual_style(ctx);
         self.persist_window_bounds(ctx);
@@ -9060,6 +9272,141 @@ mod tests {
             after[groups_index]
         );
         assert!((after.iter().sum::<f32>() - available).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_column_drag_accumulates_every_frame_of_pointer_travel() {
+        // The regression this guards: using one frame's `drag_delta` as the
+        // whole drag left the column parked a few pixels from where it
+        // started, however far the pointer actually went.
+        let floor = ColumnId::Name.fitted_min_width();
+        let start = 120.0;
+
+        let mut running = start;
+        for _ in 0..10 {
+            running = advance_column_drag(running, 7.0, floor);
+        }
+        assert!(
+            (running - (start + 70.0)).abs() < 0.01,
+            "ten 7px frames should move the divider 70px, got {}",
+            running - start
+        );
+
+        // The frame the drag ends reports no movement, and must not undo it.
+        let settled = advance_column_drag(running, 0.0, floor);
+        assert!((settled - running).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_column_drag_stops_at_the_floor_rather_than_going_negative() {
+        let floor = ColumnId::Name.fitted_min_width();
+        let mut running = floor + 5.0;
+        for _ in 0..20 {
+            running = advance_column_drag(running, -40.0, floor);
+        }
+        assert!((running - floor).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resizing_a_column_in_a_table_squeezed_to_its_floors_does_not_panic() {
+        // `f32::clamp` panics when its bounds cross. A table within a
+        // pixel of the sum of its floors used to do that mid-drag, taking
+        // Celeste down with it.
+        let columns = [
+            ColumnId::Name,
+            ColumnId::Id,
+            ColumnId::WatchedGroups,
+            ColumnId::Advisory,
+            ColumnId::Ban,
+        ];
+        let preferred = ColumnId::ALL
+            .into_iter()
+            .map(|column| (column, column.initial_width()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let floor_total = columns
+            .iter()
+            .map(|column| column.fitted_min_width())
+            .sum::<f32>();
+
+        for offset in [-1.0, 0.0, 0.001, 0.25, 0.4999, 0.5, 0.75, 1.0, 4.0] {
+            let width = preference_for_fitted_width(
+                &columns,
+                &preferred,
+                floor_total + offset,
+                ColumnId::WatchedGroups,
+                500.0,
+            );
+            assert!(
+                width.is_finite() && width > 0.0,
+                "offset {offset} produced {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn dragging_a_column_moves_it_and_leaves_the_others_in_order() {
+        use ColumnId::{Advisory, Ban, Id, Name, WatchedGroups};
+        let columns = [Name, Id, WatchedGroups, Advisory, Ban];
+
+        // Drag the last column to the front.
+        assert_eq!(
+            reordered_columns(&columns, 4, 0).unwrap(),
+            vec![Ban, Name, Id, WatchedGroups, Advisory]
+        );
+
+        // Drag the first column to the very end. `insert_before` is one
+        // past the last index, which is how "after the last column" is
+        // expressed.
+        assert_eq!(
+            reordered_columns(&columns, 0, 5).unwrap(),
+            vec![Id, WatchedGroups, Advisory, Ban, Name]
+        );
+
+        // Rightwards within the table: removing the dragged column first
+        // shifts the destination down one.
+        assert_eq!(
+            reordered_columns(&columns, 0, 3).unwrap(),
+            vec![Id, WatchedGroups, Name, Advisory, Ban]
+        );
+
+        // Leftwards needs no adjustment.
+        assert_eq!(
+            reordered_columns(&columns, 3, 1).unwrap(),
+            vec![Name, Advisory, Id, WatchedGroups, Ban]
+        );
+    }
+
+    #[test]
+    fn dragging_a_column_does_not_displace_the_one_it_lands_on() {
+        // The regression this guards: this was a `swap`, so dropping a
+        // column onto another flung that one back across the table.
+        use ColumnId::{Advisory, Ban, Id, Name, WatchedGroups};
+        let columns = [Name, Id, WatchedGroups, Advisory, Ban];
+        let moved = reordered_columns(&columns, 0, 4).unwrap();
+
+        let without_dragged = moved
+            .iter()
+            .copied()
+            .filter(|column| *column != Name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            without_dragged,
+            vec![Id, WatchedGroups, Advisory, Ban],
+            "the columns that were not dragged kept their relative order"
+        );
+    }
+
+    #[test]
+    fn a_drag_that_changes_nothing_is_not_a_reorder() {
+        use ColumnId::{Advisory, Id, Name};
+        let columns = [Name, Id, Advisory];
+
+        // Dropped on its own left edge, and on its own right edge.
+        assert!(reordered_columns(&columns, 1, 1).is_none());
+        assert!(reordered_columns(&columns, 1, 2).is_none());
+        // Out of range rather than panicking.
+        assert!(reordered_columns(&columns, 9, 0).is_none());
+        assert!(reordered_columns(&columns, 0, 9).is_none());
     }
 
     #[test]
