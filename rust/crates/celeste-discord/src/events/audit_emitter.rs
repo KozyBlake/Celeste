@@ -39,7 +39,7 @@ use serenity::model::Colour;
 use crate::data::{DiscordConfigStore, SharedHttp};
 
 /// `GroupAuditTypeEx`'s id/colour pairs, verbatim from the Java enum.
-mod audit_type {
+pub mod audit_type {
     pub const STAFF_JOIN: (&str, u32) = ("groupex.instance.staff.join", 0x00FF00);
     pub const STAFF_LEAVE: (&str, u32) = ("groupex.instance.staff.leave", 0xFFFF00);
     pub const USER_JOIN: (&str, u32) = ("groupex.instance.user.join", 0x007F00);

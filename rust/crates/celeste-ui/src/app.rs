@@ -121,9 +121,33 @@ impl TutorialChapter {
     }
 }
 
+/// Something the tour can draw rather than point at.
+///
+/// Most steps highlight a part of Celeste's own window. The Discord
+/// chapter has nothing local to highlight - the thing it describes
+/// happens in a channel - so rather than tell someone that Discord
+/// exists and leave them to imagine it, the tour renders a sample of
+/// what Celeste posts.
+///
+/// This draws Celeste's content in Celeste's own styling. It is not a
+/// mock of Discord: imitating someone else's application would mislead
+/// people about what they are looking at, and the useful question is
+/// "what will my staff channel say", not "what does Discord look like".
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TutorialPreview {
+    None,
+    /// An instance-join post, with the moderation buttons Celeste
+    /// attaches to every user-targeted event.
+    DiscordPost,
+}
+
 #[derive(Clone, Copy)]
 struct TutorialStep {
     chapter: TutorialChapter,
+    /// A sample of real output to draw inside the tour window, for a
+    /// chapter whose subject cannot be spotlighted because it happens
+    /// somewhere else entirely.
+    preview: TutorialPreview,
     tab: Tab,
     target: TutorialTarget,
     settings_category: Option<SettingCategory>,
@@ -820,6 +844,7 @@ impl Drop for TutorialDemo {
 
 const TUTORIAL_STEPS: [TutorialStep; 17] = [
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::Basics,
         tab: Tab::Instance,
         target: TutorialTarget::Header,
@@ -830,6 +855,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "The tour never sends commands, changes Discord, or moderates anyone. You can exit now and replay it later from Help.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::Basics,
         tab: Tab::Instance,
         target: TutorialTarget::TabBar,
@@ -840,6 +866,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "The tour selects each area automatically. You can use these tabs normally after the tour ends.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::Basics,
         tab: Tab::Instance,
         target: TutorialTarget::Header,
@@ -850,6 +877,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "The badge reports VRChat API sign-in—not whether local log monitoring is working. Celeste explains missing requirements when an action cannot run.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::InstanceAndRoster,
         tab: Tab::Instance,
         target: TutorialTarget::InstanceCard,
@@ -860,6 +888,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "This highlighted instance and every player shown during the next lessons are clearly marked tutorial data and are never added to your real history.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::InstanceAndRoster,
         tab: Tab::Instance,
         target: TutorialTarget::PlayerTable,
@@ -870,6 +899,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Watch a community moderator, an ordinary watched-group member, and a synthetic mixed-character name arrive without raid-like pacing. Their normal TTS callouts and the mixed-character warning sound play locally. None are real VRChat accounts or groups.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::InstanceAndRoster,
         tab: Tab::Instance,
         target: TutorialTarget::PlayerTable,
@@ -880,6 +910,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Compare informational community rows with the Nuisance trust-rank warning and the red critical watched-group warning as they arrive. Open Profile, Ban, Unban, Invite, and similar actions require VRChat API sign-in and suitable group permissions, so external actions remain disabled on these fake rows.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::InstanceAndRoster,
         tab: Tab::Instance,
         target: TutorialTarget::ToolbarControls,
@@ -890,6 +921,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Tools opens the data folder, synchronizes Discord commands when a bot is configured, and clears only the current on-screen instance roster after confirmation.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::VoiceAndSettings,
         tab: Tab::Instance,
         target: TutorialTarget::ToolbarControls,
@@ -900,6 +932,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Settings → Notifications can test TTS and open the operating system's sound controls if Celeste uses the wrong device.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::VoiceAndSettings,
         tab: Tab::Settings,
         target: TutorialTarget::SettingsSidebar,
@@ -910,6 +943,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Leaving a category safely commits a value you were editing. Actions such as imports or credential resets remain explicit buttons rather than automatic settings.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::VoiceAndSettings,
         tab: Tab::Settings,
         target: TutorialTarget::SettingsContent,
@@ -920,6 +954,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Choose accent colour and Set UI scale are in the General action card. You can change them again at any time.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::HelpAndTroubleshooting,
         tab: Tab::Instance,
         target: TutorialTarget::StatusBar,
@@ -930,6 +965,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Give a fresh instance a moment to register. If it remains wrong, collect Diagnostics before restarting so the useful evidence is not lost.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::HelpAndTroubleshooting,
         tab: Tab::Instance,
         target: TutorialTarget::Help,
@@ -940,6 +976,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Use Help → Diagnostics and Copy report when something goes wrong. The tour's temporary files are removed when you finish or exit.",
     },
     TutorialStep {
+        preview: TutorialPreview::DiscordPost,
         chapter: TutorialChapter::DiscordModeration,
         tab: Tab::Settings,
         target: TutorialTarget::SettingsContent,
@@ -950,6 +987,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Start conservatively: enable only the notices your staff needs, then expand the notification matrix after confirming where each event is routed.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::VrChatIntegrations,
         tab: Tab::Settings,
         target: TutorialTarget::SettingsContent,
@@ -960,6 +998,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "System can reopen VRChat setup or clear credentials and the cached session if authentication becomes stuck. Clearing credentials means signing in again.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::ManagedClients,
         tab: Tab::Clients,
         target: TutorialTarget::MainContent,
@@ -970,6 +1009,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Ordinary single-client users can leave this empty. Multi-client operators should configure and verify one slot at a time before enabling automatic restart or replacement-instance creation.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::DataAndRecovery,
         tab: Tab::Settings,
         target: TutorialTarget::SettingsContent,
@@ -980,6 +1020,7 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         try_it: "Pronoun good/bad lists are managed from General and reloaded after editing. Cache cleanup protects active files and does not delete durable moderation lists or history. Linux users can rerun the launcher install after downloading a newer build.",
     },
     TutorialStep {
+        preview: TutorialPreview::None,
         chapter: TutorialChapter::DataAndRecovery,
         tab: Tab::Cli,
         target: TutorialTarget::MainContent,
@@ -6261,6 +6302,79 @@ impl CelesteApp {
     /// The chapter chooser: shown after the essential path, and reachable
     /// from Help so a single chapter can be revisited without replaying
     /// the whole tour.
+    /// Draw a sample of what Celeste posts to a Discord channel.
+    ///
+    /// Shape and colour come from the emitter itself - the accent is the
+    /// real `USER_JOIN` colour, the body is the heading-and-field layout
+    /// a join actually produces, and the two buttons are the ones
+    /// attached to every user-targeted event. Drawn in Celeste's styling
+    /// and labelled, so nobody mistakes it for a screenshot or for a
+    /// live post.
+    fn render_discord_preview(ui: &mut egui::Ui) {
+        ui.label(
+            egui::RichText::new("SAMPLE - not a live post, and nothing is sent")
+                .small()
+                .strong()
+                .color(crate::theme::WARN),
+        );
+        ui.add_space(crate::theme::GAP_TIGHT);
+        crate::theme::panel_frame(crate::theme::RAISED).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let accent = celeste_discord::events::audit_emitter::audit_type::USER_JOIN.1;
+            ui.horizontal_top(|ui| {
+                // The coloured edge an embed carries; every event type
+                // has its own, which is how a channel stays scannable.
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(3.0, 64.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    egui::Color32::from_rgb(
+                        ((accent >> 16) & 0xFF) as u8,
+                        ((accent >> 8) & 0xFF) as u8,
+                        (accent & 0xFF) as u8,
+                    ),
+                );
+                ui.add_space(crate::theme::GAP);
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new("ExampleModerator joined a group instance").strong(),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new("User ID")
+                            .small()
+                            .strong()
+                            .color(crate::theme::TEXT_DIM),
+                    );
+                    ui.monospace("usr_00000000-0000-0000-0000-000000000000");
+                    ui.add_space(crate::theme::GAP_TIGHT);
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(false, egui::Button::new("Ban user"));
+                        ui.add_enabled(false, egui::Button::new("Unban user"));
+                    });
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new("Celeste - Extended event")
+                            .small()
+                            .color(crate::theme::TEXT_MUTED),
+                    );
+                });
+            });
+        });
+        ui.add_space(crate::theme::GAP_TIGHT);
+        ui.label(
+            egui::RichText::new(
+                "Your staff press those buttons to ban or unban without leaving Discord. Which \
+                 events post, and to which channel, is yours to choose.",
+            )
+            .small()
+            .color(crate::theme::TEXT_DIM),
+        );
+    }
+
     fn tutorial_menu_window(&mut self, ctx: &egui::Context) {
         if !self.tutorial_menu {
             return;
@@ -6320,7 +6434,22 @@ impl CelesteApp {
                             // offered, not withheld. Hiding it means the
                             // person who most needs to learn the feature
                             // exists is the one who never hears about it.
-                            let label = if applies { "Run chapter" } else { "See what it does" };
+                            // Only promise a demonstration where there
+                            // is one. Most chapters explain; the Discord
+                            // chapter also renders a sample of what it
+                            // posts, because its subject happens
+                            // somewhere Celeste cannot point at.
+                            let shows_something = steps
+                                .iter()
+                                .filter_map(|index| TUTORIAL_STEPS.get(*index))
+                                .any(|step| step.preview != TutorialPreview::None);
+                            let label = if applies {
+                                "Run chapter"
+                            } else if shows_something {
+                                "See what it does"
+                            } else {
+                                "Read about it"
+                            };
                             if ui.button(label).clicked() {
                                 start = steps.first().copied();
                                 // Explicitly choosing a skipped chapter
@@ -6541,6 +6670,10 @@ impl CelesteApp {
                     {
                         complete_full_setup = true;
                     }
+                }
+                if step.preview == TutorialPreview::DiscordPost {
+                    ui.add_space(10.0);
+                    Self::render_discord_preview(ui);
                 }
                 if step.demo_data {
                     ui.add_space(8.0);
@@ -9055,6 +9188,38 @@ mod tests {
         assert_eq!(format_account_age((4, 0, 3)), "4y 3d");
         assert_eq!(format_account_age((0, 7, 0)), "7m");
         assert_eq!(format_account_age((0, 0, 0)), "0D");
+    }
+
+    /// The Discord chapter is the one a local-only user is most likely
+    /// to look at without having set it up, and its subject happens in a
+    /// channel rather than anywhere Celeste can point at. It must
+    /// therefore show something rather than only assert that Discord
+    /// exists, or the chooser's offer to "see what it does" is a lie.
+    #[test]
+    fn the_discord_chapter_shows_a_sample_rather_than_only_describing() {
+        let steps = TutorialChapter::DiscordModeration.steps();
+        assert!(!steps.is_empty(), "the Discord chapter has no steps");
+        assert!(
+            steps
+                .iter()
+                .filter_map(|index| TUTORIAL_STEPS.get(*index))
+                .any(|step| step.preview != TutorialPreview::None),
+            "nothing in the Discord chapter renders a sample"
+        );
+    }
+
+    /// A preview belongs to a chapter that cannot be spotlighted. If one
+    /// appears on an essential chapter, the step should be highlighting
+    /// real UI instead - the sample is a fallback, not a shortcut.
+    #[test]
+    fn previews_are_only_used_where_there_is_nothing_to_point_at() {
+        for step in TUTORIAL_STEPS.iter().filter(|step| step.preview != TutorialPreview::None) {
+            assert!(
+                !step.chapter.essential(),
+                "{:?} previews output but is essential; point at the real thing",
+                step.chapter
+            );
+        }
     }
 
     /// Each step must belong to a chapter that actually runs, or it would
