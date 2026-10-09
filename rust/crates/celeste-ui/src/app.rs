@@ -5390,7 +5390,7 @@ impl CelesteApp {
                             registry_string_encrypted(settings.encrypted.clone(), "discord.token").clear();
                             registry_string_encrypted(settings.encrypted.clone(), "discord.guild_id").clear();
                             if let Err(error) = self.discord_config.set_string("guildSf", None) {
-                                tracing::error!(%error, "Failed to clear the Java-compatible Discord guild setting");
+                                tracing::error!(%error, "Failed to clear the stored Discord server setting");
                             }
                             settings.discord_setup_prompted.set(Some(false), "ui");
                             self.state.append_cli_output("Cleared Discord token and guild ID. Restart Celeste to configure them again.");

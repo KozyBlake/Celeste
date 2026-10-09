@@ -292,7 +292,7 @@ pub async fn dispatch_component(ctx: &Context, interaction: &ComponentInteractio
         || interaction.data.custom_id == "discord-kick-cancel"
     {
         if let Err(err) = handle_legacy_discord_member_action(ctx, interaction).await {
-            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling Java Discord moderation confirmation: {err}");
+            tracing::error!(custom_id = %interaction.data.custom_id, "Error handling the Discord moderation confirmation: {err}");
         }
         return;
     }
