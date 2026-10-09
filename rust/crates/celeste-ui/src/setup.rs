@@ -116,7 +116,9 @@ impl SetupProfile {
 enum SetupWindowLayout {
     Compact,
     Standard,
-    Tall,
+    LegacyImport,
+    Discord,
+    Finish,
 }
 
 impl Default for SetupProfile {
@@ -496,12 +498,16 @@ impl SetupWizard {
                 (SetupWindowLayout::Compact, [600.0, 400.0])
             }
             Stage::LegacyImport { overlaps, .. } if !overlaps.is_empty() => {
-                (SetupWindowLayout::Tall, [720.0, 680.0])
+                (SetupWindowLayout::LegacyImport, [720.0, 680.0])
             }
             // The Discord stage carries the whole setup guide - both
             // permission systems, six steps and five - so it needs the
             // room the other prompts do not.
-            Stage::Discord { .. } => (SetupWindowLayout::Tall, [760.0, 760.0]),
+            // At its natural height the complete guide, token field, audio
+            // choice and navigation all remain visible, matching the layout
+            // a person gets after manually stretching this page. The monitor
+            // clamp in `render` reduces it only when the display is shorter.
+            Stage::Discord { .. } => (SetupWindowLayout::Discord, [780.0, 930.0]),
             Stage::SetupProfile { .. }
             | Stage::VrChatTwoFactor { .. }
             | Stage::VrChatGroupId { .. } => (SetupWindowLayout::Standard, [680.0, 560.0]),
@@ -509,7 +515,7 @@ impl SetupWizard {
             // audio checks and (on Linux) application-menu installation.
             // Unlike the old sparse finish page, this height is occupied by
             // structured content rather than empty space.
-            Stage::Finish => (SetupWindowLayout::Tall, [720.0, 720.0]),
+            Stage::Finish => (SetupWindowLayout::Finish, [720.0, 720.0]),
             Stage::LegacyImport { .. } => (SetupWindowLayout::Standard, [680.0, 560.0]),
             Stage::Done => (SetupWindowLayout::Compact, [600.0, 400.0]),
         }
@@ -1257,9 +1263,30 @@ impl SetupWizard {
 
         // Resize for the content on this particular page. Short prompts stay
         // compact; only pages with choices or long validation text grow.
-        let (layout, size) = self.desired_window_layout();
-        if self.setup_window_layout != Some(layout) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size.into()));
+        let (layout, desired_size) = self.desired_window_layout();
+        // A resize command can be ignored during the first native frame or
+        // while a compositor is still applying the previous page's size.
+        // Check the actual viewport instead of remembering only that a
+        // request was sent. Cap the target to the monitor so the window's
+        // title bar and bottom edge remain reachable on 768p displays.
+        let (size, actual_size, maximized) = ctx.input(|input| {
+            let viewport = input.viewport();
+            let mut size = egui::vec2(desired_size[0], desired_size[1]);
+            if let Some(monitor) = viewport.monitor_size {
+                size.x = size.x.min((monitor.x - 40.0).max(560.0));
+                size.y = size.y.min((monitor.y - 48.0).max(360.0));
+            }
+            (
+                size,
+                viewport.inner_rect.map(|rect| rect.size()),
+                viewport.maximized == Some(true),
+            )
+        });
+        let resize_was_not_applied = actual_size.is_some_and(|actual| {
+            (actual.x - size.x).abs() > 8.0 || (actual.y - size.y).abs() > 8.0
+        });
+        if self.setup_window_layout != Some(layout) || (!maximized && resize_was_not_applied) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             self.setup_window_layout = Some(layout);
         }
 
@@ -1272,106 +1299,108 @@ impl SetupWizard {
             // A stage can outgrow its window on a smaller screen or at a
             // larger UI scale, and clipping the bottom of setup is worse
             // than a scrollbar nobody uses.
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                // The completion page is deliberately denser than the other
-                // wizard pages: on a 768px-tall desktop its 720px window must
-                // leave room for the title bar while still showing every
-                // final action without scrolling or clipping the last frame.
-                ui.add_space(if finish_stage { 20.0 } else { 40.0 });
-                // The Discord stage carries the setup guide, whose
-                // sentences are full prose rather than short prompts; 480
-                // wraps them into a thin ribbon.
-                ui.set_max_width(if discord_stage { 640.0 } else { 480.0 });
-                match &mut self.stage {
-                    Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
-                    Stage::LegacyImport {
-                        detected,
-                        archive,
-                        overlaps,
-                        mode,
-                        error,
-                    } => render_legacy_import_stage(
-                        ui,
-                        &self.settings.data_dir,
-                        detected,
-                        archive,
-                        overlaps,
-                        mode,
-                        error,
-                        &mut action,
-                    ),
-                    Stage::SetupProfile { selected } => {
-                        render_setup_profile_stage(ui, selected, &mut action)
-                    }
-                    Stage::Discord {
-                        token,
-                        guild_id,
-                        use_default_audio_device,
-                    } => render_discord_stage(
-                        ui,
-                        token,
-                        guild_id,
-                        use_default_audio_device,
-                        self.audio_settings_notice.as_deref(),
-                        &mut action,
-                    ),
-                    Stage::VrChatCredentials {
-                        username,
-                        password,
-                        error,
-                        in_flight,
-                    } => render_vrchat_credentials_stage(
-                        ui,
-                        username,
-                        password,
-                        error,
-                        *in_flight,
-                        &mut action,
-                    ),
-                    Stage::VrChatTwoFactor {
-                        method,
-                        code,
-                        authenticator_secret,
-                        error,
-                        in_flight,
-                    } => render_vrchat_two_factor_stage(
-                        ui,
-                        *method,
-                        code,
-                        authenticator_secret,
-                        error,
-                        *in_flight,
-                        &mut action,
-                    ),
-                    Stage::VrChatGroupId {
-                        group_id,
-                        error,
-                        warning,
-                        in_flight,
-                        can_continue_anyway,
-                    } => render_vrchat_group_id_stage(
-                        ui,
-                        group_id,
-                        error,
-                        warning,
-                        *in_flight,
-                        *can_continue_anyway,
-                        &mut action,
-                    ),
-                    Stage::Finish => render_finish_stage(
-                        ui,
-                        self.skipped_integrations(),
-                        self.settings.tts_use_default_audio_device.get(),
-                        self.audio_settings_notice.as_deref(),
-                        #[cfg(target_os = "linux")]
-                        self.desktop_launcher_notice.as_deref(),
-                        &mut action,
-                    ),
-                    Stage::Done => {}
-                }
-            });
-            });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        // The completion page is deliberately denser than the other
+                        // wizard pages: on a 768px-tall desktop its 720px window must
+                        // leave room for the title bar while still showing every
+                        // final action without scrolling or clipping the last frame.
+                        ui.add_space(if finish_stage { 20.0 } else { 40.0 });
+                        // The Discord stage carries the setup guide, whose
+                        // sentences are full prose rather than short prompts; 480
+                        // wraps them into a thin ribbon.
+                        ui.set_max_width(if discord_stage { 640.0 } else { 480.0 });
+                        match &mut self.stage {
+                            Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
+                            Stage::LegacyImport {
+                                detected,
+                                archive,
+                                overlaps,
+                                mode,
+                                error,
+                            } => render_legacy_import_stage(
+                                ui,
+                                &self.settings.data_dir,
+                                detected,
+                                archive,
+                                overlaps,
+                                mode,
+                                error,
+                                &mut action,
+                            ),
+                            Stage::SetupProfile { selected } => {
+                                render_setup_profile_stage(ui, selected, &mut action)
+                            }
+                            Stage::Discord {
+                                token,
+                                guild_id,
+                                use_default_audio_device,
+                            } => render_discord_stage(
+                                ui,
+                                token,
+                                guild_id,
+                                use_default_audio_device,
+                                self.audio_settings_notice.as_deref(),
+                                &mut action,
+                            ),
+                            Stage::VrChatCredentials {
+                                username,
+                                password,
+                                error,
+                                in_flight,
+                            } => render_vrchat_credentials_stage(
+                                ui,
+                                username,
+                                password,
+                                error,
+                                *in_flight,
+                                &mut action,
+                            ),
+                            Stage::VrChatTwoFactor {
+                                method,
+                                code,
+                                authenticator_secret,
+                                error,
+                                in_flight,
+                            } => render_vrchat_two_factor_stage(
+                                ui,
+                                *method,
+                                code,
+                                authenticator_secret,
+                                error,
+                                *in_flight,
+                                &mut action,
+                            ),
+                            Stage::VrChatGroupId {
+                                group_id,
+                                error,
+                                warning,
+                                in_flight,
+                                can_continue_anyway,
+                            } => render_vrchat_group_id_stage(
+                                ui,
+                                group_id,
+                                error,
+                                warning,
+                                *in_flight,
+                                *can_continue_anyway,
+                                &mut action,
+                            ),
+                            Stage::Finish => render_finish_stage(
+                                ui,
+                                self.skipped_integrations(),
+                                self.settings.tts_use_default_audio_device.get(),
+                                self.audio_settings_notice.as_deref(),
+                                #[cfg(target_os = "linux")]
+                                self.desktop_launcher_notice.as_deref(),
+                                &mut action,
+                            ),
+                            Stage::Done => {}
+                        }
+                    });
+                });
         });
 
         self.apply_action(action);
@@ -2320,6 +2349,10 @@ mod tests {
         assert_eq!(wizard.stage_name(), "setup_profile");
         wizard.apply_action(Action::SetupProfileContinue(SetupProfile::Full));
         assert_eq!(wizard.stage_name(), "discord");
+        assert_eq!(
+            wizard.desired_window_layout(),
+            (SetupWindowLayout::Discord, [780.0, 930.0])
+        );
         assert!(settings.setup_profile_prompted.get());
         assert_eq!(
             settings
@@ -2369,7 +2402,7 @@ mod tests {
         assert!(settings.tts_use_default_audio_device.get());
         assert_eq!(
             wizard.desired_window_layout(),
-            (SetupWindowLayout::Tall, [720.0, 720.0])
+            (SetupWindowLayout::Finish, [720.0, 720.0])
         );
     }
 
