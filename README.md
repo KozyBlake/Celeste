@@ -8,7 +8,7 @@ A self-hostable VRChat group management utility with Discord integration.
 
 > **About this project.** Celeste is maintained by **KozyBlake** and developed largely with AI assistance — a "vibe-coded" project. Features and fixes come from KozyBlake and community ideas, implemented and reasoned through with an AI pair, then reviewed and built by KozyBlake. On first launch Celeste shows this notice and lets you close it if running AI-assisted software isn't for you. (KozyBlake maintains and is accountable for the project; the AI is a tool, not the maintainer.)
 
-> **Celeste is the Rust rewrite of [Scarlet](https://github.com/KozyBlake/Scarlet).** Scarlet was a Java/Swing application; it is archived and will not be updated. Celeste is a native binary with the same feature set, the same data files, and the same Discord command surface (minus the parts listed under [Deliberately absent](#deliberately-absent)). Versioning restarts at **0.10.0**. An existing Scarlet data folder is found and adopted automatically — see [Data folder](#data-folder).
+> **Upgrading from an earlier install?** Your existing data folder is found and adopted automatically, and the data files are compatible in both directions. See [Data folder](#data-folder) for what carries over and what you will re-enter.
 
 - [Settings reference](SETTINGS.md)
 - [Building from source](BUILDING.md)
@@ -31,7 +31,7 @@ Celeste talks to VRChat and Discord because that is the job. Beyond those, the o
 
 ## Highlights
 
-- **Native, no runtime to install.** A single binary. No JVM, no `.jar`, no `run.bat`. Built for Linux and Windows; developed and tested on Arch Linux.
+- **A single binary, no runtime to install.** Built for Linux and Windows; developed and tested on Arch Linux.
 - **Near-instant moderation posts.** Moderation actions (Discord command, UI, or bulk-ban queue) and in-game warns/kicks/bans post to Discord within seconds via burst polling, then settle back to the idle interval.
 - **The full group audit log, rendered.** All 34 VRChat group audit event types get their own title, colour and structured fields rather than a raw JSON dump.
 - **Live instance monitoring.** When VRChat runs on the same machine, Celeste reads the client log and keeps a live player list — joins, leaves, avatar changes, staff and watched-entity badges — in its own Discord thread.
@@ -157,27 +157,27 @@ remove-menu    set-message    set-silent       remove-tag
 ```
 </details>
 
-#### Renamed from Scarlet
+#### Renamed commands
 
-Two commands changed name with the project. Nothing else did.
+Two commands were renamed when the project was. Nothing else changed.
 
-| Scarlet | Celeste |
+| Previously | Now |
 |---|---|
 | `/scarlet-discord-permissions` | `/celeste-discord-permissions` |
 | `/scarlet-version` | `/celeste-version` |
 
-If you had per-role permission overrides configured against the old names, set them again against the new ones.
+If you had per-role permission overrides set against the old names, set them again against the new ones.
 
 #### Deliberately absent
 
-31 of Scarlet's commands are not in Celeste, by decision rather than oversight:
+Some command families are deliberately not included:
 
 - **The whole `/schedule` family** (25 commands) — VRChat calendar events.
 - **Report templates** (5 `/config-set report-template` commands).
 - **`/submit-evidence`.**
 - **`/server-restart update-now`** — Celeste ships as a native binary with no self-updater. `/server-restart restart-now` still works.
 
-A test (`command_surface_matches_java`) compares the registered surface against the Scarlet inventory on every build and fails with a list if anything else goes missing.
+A test compares the registered commands against a committed inventory on every build, so nothing else can go missing unnoticed.
 
 ---
 
@@ -266,7 +266,7 @@ For some events the target is not a user at all — group instance creation, for
 - A VRChat group you (or a dedicated bot account) have permissions for.
 - A Discord server (guild) in which you have permissions.
 - A Discord bot account (application).
-- A Windows or Linux PC. **No Java, and no other runtime, is needed.**
+- A Windows or Linux PC. Nothing else to install.
 
 The Discord and VRChat-API features work anywhere. The VRChat-log features — instance monitoring, extended events, avatar statuses, the live player list — require the VRChat client to be running on the same machine, natively on Windows or under Proton/Wine on Linux.
 
