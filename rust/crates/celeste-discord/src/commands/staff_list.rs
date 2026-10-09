@@ -4,7 +4,7 @@
 //! `discord-user` option calls `CelesteData.linkIdToSnowflake`) — the same
 //! flow every other moderation command's "you must have linked ids" error
 //! message points users at (see `super::linkedIdsReply`/
-//! `super::moderation_context`'s docs).
+//! `super::moderation_context_for_snowflake_with_override`'s docs).
 //!
 //! The shared `list`/`add`/`delete` logic lives in this module as
 //! [`run_generic`] (and [`register_generic`] for command registration) and

@@ -600,17 +600,6 @@ pub(crate) async fn vrchat_context(ctx: &Context) -> Result<ModerationContext, S
     Ok(ModerationContext { client, group_id, actor_id: None })
 }
 
-/// [`vrchat_context`] plus the linked-account and VRChat-group-permission
-/// checks that ban/unban's Java originals actually perform
-/// (`globalMetadata_getSnowflakeId` then `checkMemberHasVRChatPermission`).
-pub(crate) async fn moderation_context(
-    ctx: &Context,
-    command: &CommandInteraction,
-    permission: &str,
-) -> Result<ModerationContext, String> {
-    moderation_context_for_snowflake(ctx, &command.user.id.to_string(), permission).await
-}
-
 /// Java's `closeInstance` is the one `vrchat-group` subcommand that does
 /// *not* go through `checkMemberAndSelfPerms`: it checks only the invoking
 /// member's `group_instance_manage`, with its own flat denial and no
@@ -636,7 +625,8 @@ pub(crate) async fn member_only_moderation_context(
     Ok(ModerationContext { actor_id, ..context })
 }
 
-/// [`moderation_context`] with Java's per-subcommand denial wording, which
+/// [`moderation_context_for_snowflake_with_override`] with Java's
+/// per-subcommand denial wording, which
 /// names both the permission and what it would have allowed
 /// ("You need the VRChat group permission `group-bans-manage` to list group
 /// bans."). `action` is the exact phrase Java passes
@@ -656,15 +646,6 @@ pub(crate) async fn group_moderation_context(
         Some(action),
     )
     .await
-}
-
-/// Modal/component counterpart to [`moderation_context`].
-pub(crate) async fn moderation_context_for_snowflake(
-    ctx: &Context,
-    snowflake: &str,
-    permission: &str,
-) -> Result<ModerationContext, String> {
-    moderation_context_for_snowflake_with_override(ctx, snowflake, None, permission, None, None).await
 }
 
 /// Java spells the ban/unban denial out in full, naming the exact override
@@ -690,6 +671,10 @@ fn permission_denial(
     }
 }
 
+/// [`vrchat_context`] plus the linked-account and VRChat-group-permission
+/// checks that ban/unban's Java originals actually perform
+/// (`globalMetadata_getSnowflakeId` then `checkMemberHasVRChatPermission`).
+///
 /// Ban/unban's Java implementation permits the Discord-side
 /// `groupex-bans-manage` override when the linked VRChat account does not
 /// hold `group-bans-manage`. Other group commands intentionally do not use

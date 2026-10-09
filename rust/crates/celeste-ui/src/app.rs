@@ -3379,7 +3379,7 @@ impl CelesteApp {
                                                 ui.painter().vline(
                                                     edge,
                                                     cell.y_range(),
-                                                    egui::Stroke::new(2.0, accent),
+                                                    egui::Stroke::new(2.0_f32, accent),
                                                 );
                                                 if ui.input(|i| i.pointer.any_released()) {
                                                     move_column = Some((
@@ -8782,6 +8782,9 @@ fn system_font_paths_for(characters: &std::collections::BTreeSet<char>) -> Vec<P
 
     #[cfg(target_os = "windows")]
     {
+        // Windows picks a fixed set of CJK faces rather than asking the
+        // system which font covers each glyph.
+        let _ = characters;
         let fonts = std::env::var_os("WINDIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))

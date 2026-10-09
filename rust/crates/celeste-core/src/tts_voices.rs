@@ -218,6 +218,11 @@ fn add(out: &mut Vec<String>, engine: &str, names: &[String]) {
 
 /// Java's `isSimpleVoiceToken`: a bare identifier, which filters out the
 /// prose and punctuation that `--voices` and `-lv` print around the names.
+///
+/// Both callers parse the output of `espeak` and `flite`, which Celeste
+/// only looks for on Linux, so this follows them rather than sitting
+/// dead in the Windows build.
+#[cfg(target_os = "linux")]
 fn is_simple_voice_token(token: &str) -> bool {
     !token.is_empty()
         && token
@@ -366,6 +371,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn prose_and_punctuation_are_not_voice_names() {
         assert!(is_simple_voice_token("en-us"));
         assert!(is_simple_voice_token("cmu_us_slt"));

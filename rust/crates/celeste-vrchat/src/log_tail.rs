@@ -1357,7 +1357,6 @@ mod avatar_unpack_tests {
 
 #[cfg(test)]
 mod stall_gate_tests {
-    use super::*;
 
     /// A stall is only meaningful once the file has grown while live.
     ///

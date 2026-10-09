@@ -98,7 +98,8 @@ pub struct GroupAuditLogEntry {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PaginatedGroupAuditLogEntryList {
-    /// Parsed entry-by-entry: see [`lenient_audit_entries`].
+    /// Parsed entry-by-entry by `lenient_audit_entries`, so one
+    /// unparseable entry does not discard the whole page.
     #[serde(deserialize_with = "lenient_audit_entries")]
     pub results: Vec<GroupAuditLogEntry>,
     #[serde(rename = "totalCount")]

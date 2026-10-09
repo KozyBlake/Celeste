@@ -369,7 +369,7 @@ mod summary_tests {
 
     #[test]
     fn each_outcome_explains_itself() {
-        let mut fresh = CrashWatch::new();
+        let fresh = CrashWatch::new();
         assert!(fresh.summary().contains("never watched this session live"));
 
         let mut clean = CrashWatch::new();

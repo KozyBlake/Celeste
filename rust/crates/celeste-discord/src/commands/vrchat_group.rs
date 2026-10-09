@@ -26,7 +26,7 @@
 //! Java's `Location.of` does, without porting the rest of `Location`'s
 //! tilde-delimited field parsing (owner/type/region/nonce) since
 //! `closeInstance` itself never uses those fields either. Permission
-//! checking uses [`super::moderation_context`] for every subcommand here
+//! checking uses `super::group_moderation_context` for every subcommand here
 //! except `add-role`/`remove-role`, which intentionally have no permission
 //! gate, matching Java's own ungated originals; `transfer-start`/
 //! `transfer-cancel` check the group-id confirmation with the ungated

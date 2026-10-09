@@ -119,6 +119,18 @@ mod tests {
 
     #[test]
     fn linked_vrchat_user_uses_javas_one_day_cache_window() {
-        assert_eq!(linked_user_cache_age(), celeste_vrchat::entity_cache::within_1_day());
+        // Both sides of the old assertion read the wall clock, so the test
+        // failed outright whenever the millisecond ticked between the two
+        // calls. Bracket the call with its own clock reads instead: this
+        // still fails if the window is ever not one day, without racing.
+        const ONE_DAY_MILLIS: i64 = 86_400_000;
+        let before = celeste_vrchat::entity_cache::now_millis();
+        let cutoff = linked_user_cache_age();
+        let after = celeste_vrchat::entity_cache::now_millis();
+
+        assert!(
+            cutoff >= before - ONE_DAY_MILLIS && cutoff <= after - ONE_DAY_MILLIS,
+            "cutoff {cutoff} is not one day behind a now between {before} and {after}"
+        );
     }
 }

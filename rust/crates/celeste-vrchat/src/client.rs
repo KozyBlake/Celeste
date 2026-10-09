@@ -24,7 +24,7 @@
 //! This client does the same, through the same key and the same line
 //! format, so a session established by either build works in the other:
 //! see [`VrChatClient::with_cookies`], [`VrChatClient::export_cookies`] and
-//! [`load_session`]/[`save_session`]. Alt-account jars
+//! [`client_from_saved_session`]/[`save_session`]. Alt-account jars
 //! (`<domain>.cookieStoreAlt`) are not ported, matching the rest of the
 //! alt-account support.
 
