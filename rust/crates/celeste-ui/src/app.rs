@@ -139,7 +139,58 @@ enum TutorialPreview {
     /// An instance-join post, with the moderation buttons Celeste
     /// attaches to every user-targeted event.
     DiscordPost,
+    /// What the slash commands are for, grouped by the job rather than
+    /// listed alphabetically.
+    DiscordCommands,
 }
+
+/// The slash commands worth knowing before deciding whether to set
+/// Discord up, grouped by what a moderator is trying to do.
+///
+/// Curated rather than generated: thirty command descriptions in
+/// alphabetical order answer "what exists", and the useful question is
+/// "what can I do from Discord without being at my desk". A test checks
+/// every name here is really registered, so the grouping can be
+/// readable without drifting out of date.
+const TOUR_COMMAND_GROUPS: [(&str, &str, &[&str]); 5] = [
+    (
+        "Act on someone",
+        "Ban or unban in the group, one person or several, and look up what Celeste knows about them.",
+        &[
+            "vrchat-user-ban",
+            "vrchat-user-unban",
+            "vrchat-user-ban-multi",
+            "vrchat-user-info",
+            "vrchat-search",
+        ],
+    ),
+    (
+        "Keep a record",
+        "Tag an event with what it actually was, then pull the history back out when you need it.",
+        &["tag", "moderation-tags", "moderation-log", "export-log", "query-target-history"],
+    ),
+    (
+        "Watch for trouble",
+        "Maintain the lists that drive the advisories on your player table.",
+        &["watched-user", "watched-group", "watched-avatar", "outstanding-moderation"],
+    ),
+    (
+        "Manage the group",
+        "Bans, invites, join requests, audit events, and instances, without opening VRChat.",
+        &["vrchat-group"],
+    ),
+    (
+        "Run Celeste itself",
+        "Who may use it, which accounts are linked, where events are posted, and settings.",
+        &[
+            "celeste-discord-permissions",
+            "link-vrchat-account",
+            "staff-list",
+            "set-audit-channel",
+            "settings",
+        ],
+    ),
+];
 
 #[derive(Clone, Copy)]
 struct TutorialStep {
@@ -842,7 +893,7 @@ impl Drop for TutorialDemo {
     }
 }
 
-const TUTORIAL_STEPS: [TutorialStep; 17] = [
+const TUTORIAL_STEPS: [TutorialStep; 18] = [
     TutorialStep {
         preview: TutorialPreview::None,
         chapter: TutorialChapter::Basics,
@@ -985,6 +1036,17 @@ const TUTORIAL_STEPS: [TutorialStep; 17] = [
         title: "Moderation, advisories, and Discord",
         body: "Moderation and Notifications control evidence, warnings, watched-list behavior, and which events become alerts. Discord controls bot behavior, event routing, voice channels, moderation tags, staff lists, and outstanding actions. Permissions are explained in one place rather than here: Help, \"Setup and permissions\" covers what the bot needs from your server and what people need from Celeste, which are two different things and the usual source of confusion.",
         try_it: "Start conservatively: enable only the notices your staff needs, then expand the notification matrix after confirming where each event is routed.",
+    },
+    TutorialStep {
+        preview: TutorialPreview::DiscordCommands,
+        chapter: TutorialChapter::DiscordModeration,
+        tab: Tab::Settings,
+        target: TutorialTarget::SettingsContent,
+        settings_category: Some(SettingCategory::Discord),
+        demo_data: false,
+        title: "What your staff can do from Discord",
+        body: "Celeste registers around thirty slash commands. Grouped below by the job rather than listed alphabetically, because the question worth answering is what your team can do without being at this machine. Commands only exist inside Discord, so these cannot be tried from here.",
+        try_it: "Permissions are per command and per person, so you can hand out bans without handing out settings. Help, \"Setup and permissions\" covers how.",
     },
     TutorialStep {
         preview: TutorialPreview::None,
@@ -6375,6 +6437,48 @@ impl CelesteApp {
         );
     }
 
+    /// What the slash commands do, for someone deciding whether Discord
+    /// is worth setting up.
+    ///
+    /// These cannot be demonstrated: a slash command only exists inside
+    /// Discord, and no amount of local drawing shows what running one
+    /// feels like. Explaining what they are for is the honest
+    /// alternative, and is what the person is actually weighing.
+    fn render_discord_commands(ui: &mut egui::Ui) {
+        ui.label(
+            egui::RichText::new("Commands run inside Discord, not here")
+                .small()
+                .strong()
+                .color(crate::theme::WARN),
+        );
+        ui.add_space(crate::theme::GAP_TIGHT);
+        for (heading, blurb, commands) in TOUR_COMMAND_GROUPS {
+            crate::theme::panel_frame(crate::theme::RAISED).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(egui::RichText::new(heading).strong());
+                ui.label(
+                    egui::RichText::new(blurb)
+                        .small()
+                        .color(crate::theme::TEXT_DIM),
+                );
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(
+                        commands
+                            .iter()
+                            .map(|name| format!("/{name}"))
+                            .collect::<Vec<_>>()
+                            .join("   "),
+                    )
+                    .monospace()
+                    .small()
+                    .color(crate::theme::TEXT_MUTED),
+                );
+            });
+            ui.add_space(4.0);
+        }
+    }
+
     fn tutorial_menu_window(&mut self, ctx: &egui::Context) {
         if !self.tutorial_menu {
             return;
@@ -6671,9 +6775,16 @@ impl CelesteApp {
                         complete_full_setup = true;
                     }
                 }
-                if step.preview == TutorialPreview::DiscordPost {
-                    ui.add_space(10.0);
-                    Self::render_discord_preview(ui);
+                match step.preview {
+                    TutorialPreview::DiscordPost => {
+                        ui.add_space(10.0);
+                        Self::render_discord_preview(ui);
+                    }
+                    TutorialPreview::DiscordCommands => {
+                        ui.add_space(10.0);
+                        Self::render_discord_commands(ui);
+                    }
+                    TutorialPreview::None => {}
                 }
                 if step.demo_data {
                     ui.add_space(8.0);
@@ -9188,6 +9299,30 @@ mod tests {
         assert_eq!(format_account_age((4, 0, 3)), "4y 3d");
         assert_eq!(format_account_age((0, 7, 0)), "7m");
         assert_eq!(format_account_age((0, 0, 0)), "0D");
+    }
+
+    /// Every command the tour names must really be registered.
+    ///
+    /// The grouping is written by hand so it reads as "what can my team
+    /// do" rather than an alphabetical dump, and hand-written lists rot.
+    /// Teaching someone a command that no longer exists is worse than
+    /// not mentioning it, so the registry decides.
+    #[test]
+    fn the_tour_only_names_commands_that_exist() {
+        let registered = celeste_discord::commands::slash_command_paths();
+        let known: std::collections::HashSet<&str> = registered
+            .iter()
+            .map(|path| path.split_whitespace().next().unwrap_or(path))
+            .collect();
+        assert!(!known.is_empty(), "no commands were registered to check against");
+        for (heading, _, commands) in TOUR_COMMAND_GROUPS {
+            for command in commands {
+                assert!(
+                    known.contains(command),
+                    "the tour's \"{heading}\" group names /{command}, which is not registered"
+                );
+            }
+        }
     }
 
     /// The Discord chapter is the one a local-only user is most likely
