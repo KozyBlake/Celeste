@@ -44,16 +44,14 @@ pub fn render(ui: &mut egui::Ui, show_setup_button: bool) -> GuideAction {
         numbered(ui, number + 1, step);
     }
     ui.add_space(crate::theme::GAP_TIGHT);
-    ui.horizontal(|ui| {
-        if ui.button("Copy invite link").clicked() {
-            action = GuideAction::CopyInvite;
-        }
-        ui.label(
-            egui::RichText::new("Grants only what Celeste uses - not Administrator.")
-                .small()
-                .color(crate::theme::TEXT_MUTED),
-        );
-    });
+    if ui.button("Copy invite link").clicked() {
+        action = GuideAction::CopyInvite;
+    }
+    ui.label(
+        egui::RichText::new("Grants only what Celeste uses - not Administrator.")
+            .small()
+            .color(crate::theme::TEXT_MUTED),
+    );
 
     ui.add_space(crate::theme::GAP_WIDE);
     section(ui, "2. Celeste: who may use it");
@@ -74,16 +72,14 @@ pub fn render(ui: &mut egui::Ui, show_setup_button: bool) -> GuideAction {
         ui.add_space(crate::theme::GAP_WIDE);
         ui.separator();
         ui.add_space(crate::theme::GAP_TIGHT);
-        ui.horizontal(|ui| {
-            if ui.button("Set up Discord and VRChat").clicked() {
-                action = GuideAction::OpenFullSetup;
-            }
-            ui.label(
-                egui::RichText::new("Adds an integration you skipped. Existing settings are left alone.")
-                    .small()
-                    .color(crate::theme::TEXT_MUTED),
-            );
-        });
+        if ui.button("Set up Discord and VRChat").clicked() {
+            action = GuideAction::OpenFullSetup;
+        }
+        ui.label(
+            egui::RichText::new("Adds an integration you skipped. Existing settings are left alone.")
+                .small()
+                .color(crate::theme::TEXT_MUTED),
+        );
     }
 
     action
@@ -95,12 +91,9 @@ fn section(ui: &mut egui::Ui, title: &str) {
 }
 
 fn numbered(ui: &mut egui::Ui, number: usize, text: &str) {
-    ui.horizontal_top(|ui| {
-        ui.label(
-            egui::RichText::new(format!("{number}."))
-                .color(crate::theme::TEXT_MUTED)
-                .monospace(),
-        );
-        ui.label(text);
-    });
+    // One wrapping label rather than a number beside a label. Inside a
+    // horizontal layout egui gives a label unbounded width, so the text
+    // ran off the panel and was clipped instead of reflowing. The
+    // hanging indent is not worth losing half of every sentence.
+    ui.label(format!("{number}.  {text}"));
 }

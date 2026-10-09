@@ -498,8 +498,11 @@ impl SetupWizard {
             Stage::LegacyImport { overlaps, .. } if !overlaps.is_empty() => {
                 (SetupWindowLayout::Tall, [720.0, 680.0])
             }
+            // The Discord stage carries the whole setup guide - both
+            // permission systems, six steps and five - so it needs the
+            // room the other prompts do not.
+            Stage::Discord { .. } => (SetupWindowLayout::Tall, [760.0, 760.0]),
             Stage::SetupProfile { .. }
-            | Stage::Discord { .. }
             | Stage::VrChatTwoFactor { .. }
             | Stage::VrChatGroupId { .. } => (SetupWindowLayout::Standard, [680.0, 560.0]),
             // The completion page includes the guided-tour choice, data and
@@ -1264,14 +1267,22 @@ impl SetupWizard {
 
         let mut action = Action::None;
         let finish_stage = matches!(&self.stage, Stage::Finish);
+        let discord_stage = matches!(self.stage, Stage::Discord { .. });
         egui::CentralPanel::default().show(ctx, |ui| {
+            // A stage can outgrow its window on a smaller screen or at a
+            // larger UI scale, and clipping the bottom of setup is worse
+            // than a scrollbar nobody uses.
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 // The completion page is deliberately denser than the other
                 // wizard pages: on a 768px-tall desktop its 720px window must
                 // leave room for the title bar while still showing every
                 // final action without scrolling or clipping the last frame.
                 ui.add_space(if finish_stage { 20.0 } else { 40.0 });
-                ui.set_max_width(480.0);
+                // The Discord stage carries the setup guide, whose
+                // sentences are full prose rather than short prompts; 480
+                // wraps them into a thin ribbon.
+                ui.set_max_width(if discord_stage { 640.0 } else { 480.0 });
                 match &mut self.stage {
                     Stage::VibecodedNotice => render_vibecoded_notice(ui, &mut action),
                     Stage::LegacyImport {
@@ -1359,6 +1370,7 @@ impl SetupWizard {
                     ),
                     Stage::Done => {}
                 }
+            });
             });
         });
 
