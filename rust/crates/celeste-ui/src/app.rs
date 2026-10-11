@@ -1980,6 +1980,10 @@ pub struct CelesteApp {
     // False until the stored scale has been pushed into egui once. After
     // that the context owns the value and `sync_ui_scale` reads it back,
     // so Ctrl+Plus / Ctrl+Minus / Ctrl+0 are not overwritten every frame.
+    // The title last handed to the window manager. Sending one costs a
+    // repaint whether or not the text changed, so it is only sent when it
+    // actually differs.
+    window_title_sent: Option<String>,
     ui_scale_applied: bool,
     // Set when the keyboard changed the scale, cleared when the change has
     // been written to settings.json.
@@ -2218,6 +2222,7 @@ impl CelesteApp {
             ui_scale_open: false,
             ui_scale_percent: ui_scale * 100.0,
             ui_scale,
+            window_title_sent: None,
             ui_scale_applied: false,
             ui_scale_save_due: None,
             accent_open: false,
@@ -8146,7 +8151,17 @@ impl CelesteApp {
 
 impl eframe::App for CelesteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+        // `send_viewport_cmd` requests a repaint of the viewport before it
+        // even looks at the command, so sending the title unconditionally
+        // here asked for a new frame on every frame. Celeste never reached
+        // the idle heartbeat below and rendered flat out - around 150
+        // frames a second doing nothing, which is what filled the log and
+        // kept the GPU busy on a tool that is meant to sit open for weeks.
+        let title = self.window_title();
+        if self.window_title_sent.as_deref() != Some(title.as_str()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title_sent = Some(title);
+        }
         self.sync_ui_scale(ctx);
         self.ensure_font_fallbacks(ctx);
         self.install_visual_style(ctx);

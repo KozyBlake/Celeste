@@ -52,6 +52,36 @@ use celeste_vrchat::client::{
     LoginOutcome, VrChatClient, VrChatError, GROUP_ID_KEY as VRCHAT_GROUP_ID_KEY,
 };
 
+/// How many frames in a row setup will re-ask for a window size before
+/// accepting whatever the window manager gave it. A resize is genuinely
+/// ignored for a frame or two while a compositor applies the previous
+/// one; beyond that it is being refused, and asking again forever costs a
+/// surface reconfiguration every frame.
+const MAX_SETUP_RESIZE_ATTEMPTS: u8 = 8;
+
+/// Height reserved for a task bar or dock, in points. The monitor size
+/// includes it, the window cannot use it, and there is no cross-platform
+/// way to ask for the work area through egui.
+const TASK_BAR_ALLOWANCE: f32 = 56.0;
+
+/// Whether setup should ask the window manager for its page size again on
+/// this frame.
+///
+/// Asking again is right when the page just changed, and when a request
+/// was plausibly dropped by a compositor mid-apply. It is wrong once the
+/// window manager has simply refused: the size never arrives, so an
+/// unbounded version of this sends a resize every frame for as long as
+/// setup is open.
+fn should_request_setup_resize(
+    layout_changed: bool,
+    maximized: bool,
+    resize_was_not_applied: bool,
+    attempts: u8,
+) -> bool {
+    (layout_changed || (!maximized && resize_was_not_applied))
+        && attempts < MAX_SETUP_RESIZE_ATTEMPTS
+}
+
 enum Stage {
     VibecodedNotice,
     LegacyImport {
@@ -207,7 +237,16 @@ impl TwoFactorMethod {
     fn instructions(self) -> &'static str {
         match self {
             Self::Totp => "Enter the 6-digit code from your authenticator app.",
-            Self::EmailOtp => "Enter the 6-digit code VRChat sent to your email address.",
+            Self::EmailOtp => {
+                "Enter the 6-digit one-time code VRChat sent to your email address. This is email verification, not an authenticator TOTP."
+            }
+        }
+    }
+
+    fn heading(self) -> &'static str {
+        match self {
+            Self::Totp => "VRChat authenticator code",
+            Self::EmailOtp => "VRChat email verification",
         }
     }
 }
@@ -271,6 +310,10 @@ pub struct SetupWizard {
     test_tts_requested: bool,
     start_tutorial_after_finish: bool,
     setup_window_layout: Option<SetupWindowLayout>,
+    /// How many times the current layout's size has been asked for. A
+    /// window manager that will not grant the size never reports it back,
+    /// so the retry below has to be bounded.
+    setup_resize_attempts: u8,
     audio_settings_notice: Option<String>,
     #[cfg(target_os = "linux")]
     desktop_launcher_notice: Option<String>,
@@ -316,6 +359,7 @@ impl SetupWizard {
             test_tts_requested: false,
             start_tutorial_after_finish: false,
             setup_window_layout: None,
+            setup_resize_attempts: 0,
             audio_settings_notice: None,
             #[cfg(target_os = "linux")]
             desktop_launcher_notice: None,
@@ -490,6 +534,7 @@ impl SetupWizard {
     /// the finish page to restore its own size when the user comes back.
     pub fn resize_for_current_stage_next_frame(&mut self) {
         self.setup_window_layout = None;
+        self.setup_resize_attempts = 0;
     }
 
     fn desired_window_layout(&self) -> (SetupWindowLayout, [f32; 2]) {
@@ -1273,8 +1318,21 @@ impl SetupWizard {
             let viewport = input.viewport();
             let mut size = egui::vec2(desired_size[0], desired_size[1]);
             if let Some(monitor) = viewport.monitor_size {
+                // The monitor is not all usable: the window's own title bar
+                // and borders sit outside the inner size being requested,
+                // and a task bar or dock takes more. Measure the decoration
+                // rather than assuming it — a flat 48 was too small once a
+                // Windows task bar and title bar were both counted, so the
+                // tallest page asked for a height the window manager would
+                // never grant.
+                let decoration = match (viewport.outer_rect, viewport.inner_rect) {
+                    (Some(outer), Some(inner)) => (outer.height() - inner.height()).max(0.0),
+                    _ => 32.0,
+                };
                 size.x = size.x.min((monitor.x - 40.0).max(560.0));
-                size.y = size.y.min((monitor.y - 48.0).max(360.0));
+                size.y = size
+                    .y
+                    .min((monitor.y - decoration - TASK_BAR_ALLOWANCE).max(360.0));
             }
             (
                 size,
@@ -1285,9 +1343,27 @@ impl SetupWizard {
         let resize_was_not_applied = actual_size.is_some_and(|actual| {
             (actual.x - size.x).abs() > 8.0 || (actual.y - size.y).abs() > 8.0
         });
-        if self.setup_window_layout != Some(layout) || (!maximized && resize_was_not_applied) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        let layout_changed = self.setup_window_layout != Some(layout);
+        if layout_changed {
             self.setup_window_layout = Some(layout);
+            self.setup_resize_attempts = 0;
+        }
+        // Retrying an ignored resize is deliberate, but it has to stop. If
+        // the window manager will not grant the size — the window is
+        // snapped, or the screen is too short once decorations are counted
+        // — the requested size never comes back and the unbounded version
+        // of this sent a resize on every frame for as long as setup stayed
+        // open. On the wgpu backend every resize reconfigures the surface,
+        // which is how this quietly accumulated gigabytes of video memory
+        // over a few hours and left the window unresponsive.
+        if should_request_setup_resize(
+            layout_changed,
+            maximized,
+            resize_was_not_applied,
+            self.setup_resize_attempts,
+        ) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            self.setup_resize_attempts = self.setup_resize_attempts.saturating_add(1);
         }
 
         self.poll_async_results();
@@ -2142,12 +2218,15 @@ fn render_vrchat_two_factor_stage(
     in_flight: bool,
     action: &mut Action,
 ) {
-    ui.heading("VRChat two-factor code");
+    ui.heading(method.heading());
     ui.add_space(8.0);
-    ui.label(format!(
-        "VRChat requires a two-factor code for this account. {}",
-        method.instructions()
-    ));
+    let reason = match method {
+        TwoFactorMethod::Totp => "VRChat requires authenticator verification for this account.",
+        TwoFactorMethod::EmailOtp => {
+            "VRChat requires email verification for this sign-in, even if authenticator 2FA is not enabled."
+        }
+    };
+    ui.label(format!("{reason} {}", method.instructions()));
     ui.add_space(8.0);
     ui.add_enabled_ui(!in_flight, |ui| {
         ui.horizontal(|ui| {
@@ -2285,6 +2364,52 @@ fn render_vrchat_group_id_stage(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_refused_window_resize_stops_being_requested() {
+        // The regression this guards: when a window manager will not grant
+        // the size, the requested size never comes back, so an unbounded
+        // retry sent a resize on every frame. Each one reconfigures the
+        // wgpu surface, and after a few hours on the setup page that had
+        // taken gigabytes of video memory and stopped the window
+        // responding.
+        let mut attempts = 0u8;
+        let mut sent = 0;
+        for frame in 0..5_000 {
+            let layout_changed = frame == 0;
+            if super::should_request_setup_resize(layout_changed, false, true, attempts) {
+                sent += 1;
+                attempts = attempts.saturating_add(1);
+            }
+        }
+        assert_eq!(
+            sent,
+            super::MAX_SETUP_RESIZE_ATTEMPTS as usize,
+            "a refused resize must stop, not repeat for every frame setup is open"
+        );
+    }
+
+    #[test]
+    fn a_new_page_may_ask_for_its_own_size_again() {
+        // Giving up on one page must not leave a later page stuck at the
+        // previous page's size.
+        let exhausted = super::MAX_SETUP_RESIZE_ATTEMPTS;
+        assert!(!super::should_request_setup_resize(
+            false, false, true, exhausted
+        ));
+        // A page change resets the counter, so the request goes out.
+        assert!(super::should_request_setup_resize(true, false, true, 0));
+    }
+
+    #[test]
+    fn a_resize_that_landed_or_a_maximized_window_is_left_alone() {
+        // Applied: nothing to retry, however many attempts remain.
+        assert!(!super::should_request_setup_resize(false, false, false, 0));
+        // Maximized: the size is the user's choice, so do not fight it.
+        assert!(!super::should_request_setup_resize(false, true, true, 0));
+        // But a page change still sizes a maximized window's next page.
+        assert!(super::should_request_setup_resize(true, true, true, 0));
+    }
     use super::*;
 
     fn wizard(settings: &Arc<Settings>) -> SetupWizard {
@@ -2799,6 +2924,13 @@ mod tests {
             TwoFactorMethod::preferred(&["emailOtp".to_string()]),
             Some(TwoFactorMethod::EmailOtp)
         );
+        assert_eq!(
+            TwoFactorMethod::EmailOtp.heading(),
+            "VRChat email verification"
+        );
+        assert!(TwoFactorMethod::EmailOtp
+            .instructions()
+            .contains("not an authenticator TOTP"));
         assert_eq!(TwoFactorMethod::preferred(&["unknown".to_string()]), None);
     }
 }

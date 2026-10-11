@@ -33,9 +33,9 @@ use reqwest::{Client, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::rate_limit::SendLimited;
 use crate::basic_auth::basic_auth_header;
 use crate::models::{CurrentUser, PaginatedGroupAuditLogEntryList};
+use crate::rate_limit::SendLimited;
 
 /// Encrypted-registry keys for the primary VRChat account, matching
 /// `ScarletVRChat`'s own domain (`new ScarletVRChat(this, "global", ...)`
@@ -197,7 +197,9 @@ impl VrChatClient {
     /// Without this the client always fetches, so the application calls it
     /// once the data directory is resolved.
     pub fn with_entity_caches(mut self, caches_root: &std::path::Path) -> Self {
-        self.caches = Some(Arc::new(crate::entity_cache::EntityCaches::new(caches_root)));
+        self.caches = Some(Arc::new(crate::entity_cache::EntityCaches::new(
+            caches_root,
+        )));
         self
     }
 
@@ -258,7 +260,11 @@ impl VrChatClient {
     /// Re-checks the current (cookie-based) session, matching
     /// `AuthenticationApi.getCurrentUser` used after `verifyAuthToken`.
     pub async fn get_current_user(&self) -> Result<CurrentUser, VrChatError> {
-        let response = self.http.get(self.url("/auth/user")).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url("/auth/user"))
+            .send_limited(&self.limiter)
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -270,7 +276,11 @@ impl VrChatClient {
     /// Port of `AuthenticationApi.logout()` used by Java's CLI `logout`
     /// command. VRChat invalidates the current cookie-backed session.
     pub async fn logout(&self) -> Result<(), VrChatError> {
-        let response = self.http.put(self.url("/logout")).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .put(self.url("/logout"))
+            .send_limited(&self.limiter)
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -283,7 +293,11 @@ impl VrChatClient {
     /// slightly incorrect local clock can still sign in (matching Java's
     /// `MiscellaneousApi.getSystemTime()`).
     pub async fn get_server_time(&self) -> Result<DateTime<Utc>, VrChatError> {
-        let response = self.http.get(self.url("/time")).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url("/time"))
+            .send_limited(&self.limiter)
+            .await?;
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
@@ -311,11 +325,17 @@ impl VrChatClient {
             .get("requiresTwoFactorAuth")
             .and_then(|v| v.as_array())
         {
-            let methods = methods
+            let methods: Vec<String> = methods
                 .iter()
                 .filter_map(|m| m.as_str().map(str::to_string))
                 .collect();
-            return Ok(LoginOutcome::RequiresTwoFactor(methods));
+            // A successful CurrentUser response carries this field too,
+            // normally as an empty array. Presence alone is therefore not
+            // a challenge: only one or more named verification methods mean
+            // login has stopped for a code.
+            if !methods.is_empty() {
+                return Ok(LoginOutcome::RequiresTwoFactor(methods));
+            }
         }
         let user: CurrentUser = serde_json::from_value(value)
             .map_err(|e| VrChatError::UnexpectedShape(e.to_string()))?;
@@ -496,7 +516,8 @@ impl VrChatClient {
     /// fetches — but it still short-circuits on a known 404 and still
     /// records the result, exactly as Java does.
     pub async fn get_user(&self, user_id: &str) -> Result<crate::models::User, VrChatError> {
-        self.get_user_cached(user_id, crate::entity_cache::ALWAYS_FETCH).await
+        self.get_user_cached(user_id, crate::entity_cache::ALWAYS_FETCH)
+            .await
     }
 
     /// Port of `getUser(String userId, long minEpoch)`. Call sites that
@@ -511,11 +532,17 @@ impl VrChatClient {
         let cache = self.caches.as_ref().map(|caches| &caches.users);
         match crate::entity_cache::decide(cache, user_id, min_epoch) {
             crate::entity_cache::CacheDecision::Hit(user) => return Ok(user),
-            crate::entity_cache::CacheDecision::Known404 => return Err(Self::known_404("user", user_id)),
+            crate::entity_cache::CacheDecision::Known404 => {
+                return Err(Self::known_404("user", user_id))
+            }
             crate::entity_cache::CacheDecision::Miss => {}
         }
         let result = async {
-            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send_limited(&self.limiter).await?;
+            let response = self
+                .http
+                .get(self.url(&format!("/users/{user_id}")))
+                .send_limited(&self.limiter)
+                .await?;
             Self::parse_response(response).await
         }
         .await;
@@ -528,7 +555,11 @@ impl VrChatClient {
     pub async fn get_user_fresh(&self, user_id: &str) -> Result<crate::models::User, VrChatError> {
         let cache = self.caches.as_ref().map(|caches| &caches.users);
         let result = async {
-            let response = self.http.get(self.url(&format!("/users/{user_id}"))).send_limited(&self.limiter).await?;
+            let response = self
+                .http
+                .get(self.url(&format!("/users/{user_id}")))
+                .send_limited(&self.limiter)
+                .await?;
             Self::parse_response(response).await
         }
         .await;
@@ -553,7 +584,8 @@ impl VrChatClient {
         &self,
         user_id: &str,
     ) -> Result<crate::models::PublicProfile, VrChatError> {
-        self.get_public_profile_cached(user_id, crate::entity_cache::ALWAYS_FETCH).await
+        self.get_public_profile_cached(user_id, crate::entity_cache::ALWAYS_FETCH)
+            .await
     }
 
     /// Port of `getPublicProfile(String userId, long minEpoch)`
@@ -596,7 +628,8 @@ impl VrChatClient {
         &self,
         user_id: &str,
     ) -> Result<Vec<crate::models::LimitedUserGroup>, VrChatError> {
-        self.get_user_groups_cached(user_id, crate::entity_cache::ALWAYS_FETCH).await
+        self.get_user_groups_cached(user_id, crate::entity_cache::ALWAYS_FETCH)
+            .await
     }
 
     /// Port of `getUserGroups(String userId, long minEpoch)` (`cachedUserGroups`,
@@ -615,8 +648,11 @@ impl VrChatClient {
             crate::entity_cache::CacheDecision::Miss => {}
         }
         let result = async {
-            let response =
-                self.http.get(self.url(&format!("/users/{user_id}/groups"))).send_limited(&self.limiter).await?;
+            let response = self
+                .http
+                .get(self.url(&format!("/users/{user_id}/groups")))
+                .send_limited(&self.limiter)
+                .await?;
             Self::parse_response(response).await
         }
         .await;
@@ -629,27 +665,46 @@ impl VrChatClient {
     /// the port's reduced `User` model: snapshots are historical records and
     /// must retain fields that Celeste does not otherwise inspect.
     pub async fn get_user_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/users/{user_id}"))).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/users/{user_id}")))
+            .send_limited(&self.limiter)
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Captures the unabridged group-membership array for an audit target.
     pub async fn get_user_groups_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/users/{user_id}/groups"))).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/users/{user_id}/groups")))
+            .send_limited(&self.limiter)
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Captures the group represented by an audit target, if any. The API
     /// returns JSON `null` when the user is not representing a group; keeping
     /// that value distinguishes a successful snapshot from a failed request.
-    pub async fn get_user_represented_group_snapshot(&self, user_id: &str) -> Result<Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/users/{user_id}/groups/represented"))).send_limited(&self.limiter).await?;
+    pub async fn get_user_represented_group_snapshot(
+        &self,
+        user_id: &str,
+    ) -> Result<Value, VrChatError> {
+        let response = self
+            .http
+            .get(self.url(&format!("/users/{user_id}/groups/represented")))
+            .send_limited(&self.limiter)
+            .await?;
         Self::parse_response(response).await
     }
 
     /// Port of `getModelFile(String fileId)`: `GET /file/{fileId}`.
     pub async fn get_file(&self, file_id: &str) -> Result<crate::models::ModelFile, VrChatError> {
-        let response = self.http.get(self.url(&format!("/file/{file_id}"))).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/file/{file_id}")))
+            .send_limited(&self.limiter)
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -669,7 +724,11 @@ impl VrChatClient {
             "standard" => format!("/analysis/{}/{}/standard", file.id, file.version),
             _ => format!("/analysis/{}/{}", file.id, file.version),
         };
-        let response = self.http.get(self.url(&path)).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url(&path))
+            .send_limited(&self.limiter)
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -690,7 +749,8 @@ impl VrChatClient {
         group_id: &str,
         include_roles: bool,
     ) -> Result<crate::models::Group, VrChatError> {
-        self.get_group_cached(group_id, include_roles, crate::entity_cache::ALWAYS_FETCH).await
+        self.get_group_cached(group_id, include_roles, crate::entity_cache::ALWAYS_FETCH)
+            .await
     }
 
     /// Java keeps the configured group's owner in `ScarletVRChat.groupOwnerId`,
@@ -846,7 +906,8 @@ impl VrChatClient {
         if let Some(block) = block {
             body["block"] = serde_json::json!(block);
         }
-        let response = self.http
+        let response = self
+            .http
             .put(self.url(&format!("/groups/{group_id}/requests/{user_id}")))
             .json(&body)
             .send()
@@ -928,7 +989,8 @@ impl VrChatClient {
         user_id: &str,
         manager_notes: &str,
     ) -> Result<crate::models::GroupMember, VrChatError> {
-        let response = self.http
+        let response = self
+            .http
             .put(self.url(&format!("/groups/{group_id}/members/{user_id}")))
             .json(&serde_json::json!({ "managerNotes": manager_notes }))
             .send()
@@ -1217,7 +1279,10 @@ impl VrChatClient {
     /// Kept as JSON because the lifecycle worker only needs the location,
     /// instance id, and nested world identity from VRChat's much larger
     /// `GroupInstance` response.
-    pub async fn get_group_instances(&self, group_id: &str) -> Result<Vec<serde_json::Value>, VrChatError> {
+    pub async fn get_group_instances(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<serde_json::Value>, VrChatError> {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/instances")))
@@ -1229,14 +1294,22 @@ impl VrChatClient {
     /// `GET /prints/{printId}`. Kept as JSON because Celeste only needs the
     /// owner and nested file/image fields for Discord audit decoration.
     pub async fn get_print(&self, print_id: &str) -> Result<serde_json::Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/prints/{print_id}"))).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/prints/{print_id}")))
+            .send_limited(&self.limiter)
+            .await?;
         Self::parse_response(response).await
     }
 
     /// `GET /props/{propId}`. The endpoint is documented by the community
     /// OpenAPI specification and mirrors Java's generated `PropsApi` call.
     pub async fn get_prop(&self, prop_id: &str) -> Result<serde_json::Value, VrChatError> {
-        let response = self.http.get(self.url(&format!("/props/{prop_id}"))).send_limited(&self.limiter).await?;
+        let response = self
+            .http
+            .get(self.url(&format!("/props/{prop_id}")))
+            .send_limited(&self.limiter)
+            .await?;
         Self::parse_response(response).await
     }
 
@@ -1257,7 +1330,8 @@ impl VrChatClient {
 
     /// Port of `getWorld(String worldId)`: `GET /worlds/{worldId}`.
     pub async fn get_world(&self, world_id: &str) -> Result<crate::models::World, VrChatError> {
-        self.get_world_cached(world_id, crate::entity_cache::ALWAYS_FETCH).await
+        self.get_world_cached(world_id, crate::entity_cache::ALWAYS_FETCH)
+            .await
     }
 
     /// Port of `getWorld(String worldId, long minEpoch)`.
@@ -1275,7 +1349,11 @@ impl VrChatClient {
             crate::entity_cache::CacheDecision::Miss => {}
         }
         let result = async {
-            let response = self.http.get(self.url(&format!("/worlds/{world_id}"))).send_limited(&self.limiter).await?;
+            let response = self
+                .http
+                .get(self.url(&format!("/worlds/{world_id}")))
+                .send_limited(&self.limiter)
+                .await?;
             Self::parse_response(response).await
         }
         .await;
@@ -1285,7 +1363,8 @@ impl VrChatClient {
 
     /// Port of `getAvatar(String avatarId)`: `GET /avatars/{avatarId}`.
     pub async fn get_avatar(&self, avatar_id: &str) -> Result<crate::models::Avatar, VrChatError> {
-        self.get_avatar_cached(avatar_id, crate::entity_cache::ALWAYS_FETCH).await
+        self.get_avatar_cached(avatar_id, crate::entity_cache::ALWAYS_FETCH)
+            .await
     }
 
     /// Port of `getAvatar(String avatarId, long minEpoch)`.
@@ -1303,7 +1382,11 @@ impl VrChatClient {
             crate::entity_cache::CacheDecision::Miss => {}
         }
         let result = async {
-            let response = self.http.get(self.url(&format!("/avatars/{avatar_id}"))).send_limited(&self.limiter).await?;
+            let response = self
+                .http
+                .get(self.url(&format!("/avatars/{avatar_id}")))
+                .send_limited(&self.limiter)
+                .await?;
             Self::parse_response(response).await
         }
         .await;
@@ -1411,7 +1494,8 @@ impl VrChatClient {
             .get(self.url(&format!("/instances/{world_id}:{instance_id}/shortName")))
             .send()
             .await?;
-        let value: crate::models::InstanceShortNameResponse = Self::parse_response(response).await?;
+        let value: crate::models::InstanceShortNameResponse =
+            Self::parse_response(response).await?;
         Ok(value
             .secure_name
             .filter(|name| !name.trim().is_empty())
@@ -1480,7 +1564,8 @@ impl VrChatClient {
         user_id: &str,
         permission: &str,
     ) -> Result<bool, VrChatError> {
-        self.has_group_permission(group_id, user_id, permission, false).await
+        self.has_group_permission(group_id, user_id, permission, false)
+            .await
     }
 
     /// Port of `checkSelfUserHasVRChatPermission`: as above, plus Java's
@@ -1492,7 +1577,8 @@ impl VrChatClient {
         user_id: &str,
         permission: &str,
     ) -> Result<bool, VrChatError> {
-        self.has_group_permission(group_id, user_id, permission, true).await
+        self.has_group_permission(group_id, user_id, permission, true)
+            .await
     }
 
     async fn has_group_permission(
@@ -1504,7 +1590,9 @@ impl VrChatClient {
     ) -> Result<bool, VrChatError> {
         let group = self.get_group(group_id, true).await?;
         if owner_is_a_grant && group.owner_id.as_deref() == Some(user_id) {
-            tracing::debug!("VRChat permission `{permission}` granted by group owner fallback for `{user_id}`");
+            tracing::debug!(
+                "VRChat permission `{permission}` granted by group owner fallback for `{user_id}`"
+            );
             return Ok(true);
         }
         let Some(member) = self.get_group_member(group_id, user_id).await? else {
@@ -1768,10 +1856,7 @@ pub async fn login_with_stored_credentials(
     match login_with_stored_credentials_detailed(settings).await {
         StoredLogin::LoggedIn(client) => Some(client),
         StoredLogin::RequiresTwoFactor { methods, .. } => {
-            tracing::warn!(
-                "VRChat unattended login requires two-factor ({:?}); run Celeste with its UI to log in",
-                methods
-            );
+            tracing::warn!("VRChat unattended login requires two-factor ({:?}); run Celeste with its UI to log in", methods);
             None
         }
         StoredLogin::Unavailable => None,
@@ -2066,9 +2151,21 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&format!("{}/", server.uri())).unwrap();
-        assert_eq!(client.get_user_snapshot("usr_1").await.unwrap()["futureApiField"]["mustRemain"], true);
-        assert_eq!(client.get_user_groups_snapshot("usr_1").await.unwrap()[0]["bannerUrl"], "https://example.invalid/banner.png");
-        assert_eq!(client.get_user_represented_group_snapshot("usr_1").await.unwrap()["unmodeled"], 42);
+        assert_eq!(
+            client.get_user_snapshot("usr_1").await.unwrap()["futureApiField"]["mustRemain"],
+            true
+        );
+        assert_eq!(
+            client.get_user_groups_snapshot("usr_1").await.unwrap()[0]["bannerUrl"],
+            "https://example.invalid/banner.png"
+        );
+        assert_eq!(
+            client
+                .get_user_represented_group_snapshot("usr_1")
+                .await
+                .unwrap()["unmodeled"],
+            42
+        );
     }
 
     #[test]
@@ -2197,6 +2294,31 @@ mod tests {
         match outcome {
             LoginOutcome::LoggedIn(user) => assert_eq!(user.id, "usr_123"),
             other => panic!("expected LoggedIn, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_empty_two_factor_array_is_a_logged_in_user() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/auth/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_no_2fa",
+                "username": "new-account",
+                "displayName": "New Account",
+                "requiresTwoFactorAuth": []
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        match client
+            .login_with_credentials("new-account", "password")
+            .await
+            .unwrap()
+        {
+            LoginOutcome::LoggedIn(user) => assert_eq!(user.id, "usr_no_2fa"),
+            other => panic!("an empty 2FA list must not prompt for a code: {other:?}"),
         }
     }
 
@@ -2471,11 +2593,18 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/logout"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": {"message": "ok"}})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"success": {"message": "ok"}})),
+            )
             .expect(1)
             .mount(&server)
             .await;
-        VrChatClient::with_base_url(&server.uri()).unwrap().logout().await.unwrap();
+        VrChatClient::with_base_url(&server.uri())
+            .unwrap()
+            .logout()
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -2512,7 +2641,10 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let member = client.update_group_member_notes("grp_1", "usr_2", "Known alt").await.unwrap();
+        let member = client
+            .update_group_member_notes("grp_1", "usr_2", "Known alt")
+            .await
+            .unwrap();
         assert_eq!(member.manager_notes.as_deref(), Some("Known alt"));
     }
 
@@ -2604,9 +2736,18 @@ mod tests {
     async fn print_prop_and_inventory_item_use_the_documented_paths() {
         let server = MockServer::start().await;
         for (request_path, body) in [
-            ("/prints/prnt_1", serde_json::json!({"id": "prnt_1", "ownerId": "usr_1"})),
-            ("/props/prop_1", serde_json::json!({"id": "prop_1", "authorId": "usr_2"})),
-            ("/user/usr_1/inventory/inv_1", serde_json::json!({"id": "inv_1", "itemType": "emoji"})),
+            (
+                "/prints/prnt_1",
+                serde_json::json!({"id": "prnt_1", "ownerId": "usr_1"}),
+            ),
+            (
+                "/props/prop_1",
+                serde_json::json!({"id": "prop_1", "authorId": "usr_2"}),
+            ),
+            (
+                "/user/usr_1/inventory/inv_1",
+                serde_json::json!({"id": "inv_1", "itemType": "emoji"}),
+            ),
         ] {
             Mock::given(method("GET"))
                 .and(path(request_path))
@@ -2615,10 +2756,19 @@ mod tests {
                 .await;
         }
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        assert_eq!(client.get_print("prnt_1").await.unwrap()["ownerId"], "usr_1");
-        assert_eq!(client.get_prop("prop_1").await.unwrap()["authorId"], "usr_2");
         assert_eq!(
-            client.get_user_inventory_item("usr_1", "inv_1").await.unwrap()["itemType"],
+            client.get_print("prnt_1").await.unwrap()["ownerId"],
+            "usr_1"
+        );
+        assert_eq!(
+            client.get_prop("prop_1").await.unwrap()["authorId"],
+            "usr_2"
+        );
+        assert_eq!(
+            client
+                .get_user_inventory_item("usr_1", "inv_1")
+                .await
+                .unwrap()["itemType"],
             "emoji"
         );
     }
@@ -2628,11 +2778,13 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/groups/grp_1/instances"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
-                "instanceId": "123~group(grp_1)",
-                "location": "wrld_1:123~group(grp_1)",
-                "world": {"id": "wrld_1", "name": "Test World"}
-            }])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "instanceId": "123~group(grp_1)",
+                    "location": "wrld_1:123~group(grp_1)",
+                    "world": {"id": "wrld_1", "name": "Test World"}
+                }])),
+            )
             .mount(&server)
             .await;
 
@@ -2760,11 +2912,17 @@ mod tests {
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         assert!(
-            client.self_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE).await.unwrap(),
+            client
+                .self_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE)
+                .await
+                .unwrap(),
             "the bot's own check keeps Java's owner fallback"
         );
         assert!(
-            !client.user_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE).await.unwrap(),
+            !client
+                .user_has_group_permission("grp_1", "usr_owner", PERMISSION_GROUP_BANS_MANAGE)
+                .await
+                .unwrap(),
             "a member check must not be satisfied by ownership alone"
         );
     }
@@ -2943,13 +3101,18 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/groups/grp_1/requests/usr_1"))
-            .and(body_json(serde_json::json!({"action": "reject", "block": true})))
+            .and(body_json(
+                serde_json::json!({"action": "reject", "block": true}),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .mount(&server)
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        client.respond_group_join_request("grp_1", "usr_1", "reject", Some(true)).await.unwrap();
+        client
+            .respond_group_join_request("grp_1", "usr_1", "reject", Some(true))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -2990,8 +3153,13 @@ mod tests {
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let post = client
             .create_group_post(
-                "grp_1", "Hello", "World", "group", false,
-                Some("file_1"), Some("grol_1")
+                "grp_1",
+                "Hello",
+                "World",
+                "group",
+                false,
+                Some("file_1"),
+                Some("grol_1"),
             )
             .await
             .unwrap();
@@ -3056,8 +3224,12 @@ mod tests {
             .await;
 
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
-        let req = client.get_group_transferability("grp_1", "usr_1").await
-            .unwrap().requirements.unwrap();
+        let req = client
+            .get_group_transferability("grp_1", "usr_1")
+            .await
+            .unwrap()
+            .requirements
+            .unwrap();
         assert_eq!(req.group_not_monetized, Some(true));
         assert_eq!(req.has_vrc_plus, None);
         assert_eq!(req.has_verified_email, None);
