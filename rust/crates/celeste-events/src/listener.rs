@@ -1372,6 +1372,24 @@ impl CelesteEventListener {
             _ => tracing::info!("Vote-to-Kick initiated: {target_display_name} ({user_id:?})"),
         }
 
+        // A vote-kick is a local safety event, not a configured-group-only
+        // event. Speak it in every instance when its dedicated TTS setting is
+        // enabled; the visual advisory setting must not silently disable the
+        // spoken warning.
+        if self.deps.settings.announce_votes_to_kick.get() {
+            let target = celeste_core::names::sanitize_name_for_speech(&target_display_name);
+            let line = match &actor_display_name {
+                Some(actor) if actor_id.is_some() => celeste_core::i18n::tr(
+                    "adv.vtkAgainstBy",
+                    &[&target, &celeste_core::names::sanitize_name_for_speech(actor)],
+                ),
+                _ => celeste_core::i18n::tr("adv.vtkAgainst", &[&target]),
+            };
+            self.deps.tts.speak(&marker("vtk"), &line);
+        }
+
+        // Discord/group audit output and Celeste's stored group-moderation
+        // history remain scoped to the configured group's instances.
         if !self.is_in_group_instance {
             return;
         }
@@ -1387,17 +1405,6 @@ impl CelesteEventListener {
                 actor_display_name.as_deref(),
             )
             .await;
-        if self.deps.settings.advisory_show_votes_to_kick.get() && self.deps.settings.announce_votes_to_kick.get() {
-            let target = celeste_core::names::sanitize_name_for_speech(&target_display_name);
-            let line = match &actor_display_name {
-                Some(actor) if actor_id.is_some() => celeste_core::i18n::tr(
-                    "adv.vtkAgainstBy",
-                    &[&target, &celeste_core::names::sanitize_name_for_speech(actor)],
-                ),
-                _ => celeste_core::i18n::tr("adv.vtkAgainst", &[&target]),
-            };
-            self.deps.tts.speak(&marker("vtk"), &line);
-        }
         self.deps.data.custom_event_new(
             audit_type::VTK_START,
             Utc.from_utc_datetime(&timestamp),
@@ -2424,6 +2431,71 @@ mod tests {
         // Reaching here without a panic is the assertion; the emitter having
         // seen the group-instance events confirms it did real work.
         assert!(h.emitter.events().iter().any(|event| event.starts_with("user_join:")));
+    }
+
+    #[tokio::test]
+    async fn vote_kick_tts_works_outside_the_configured_group_and_ignores_advisory_setting() {
+        let mut h = harness(true);
+        h.listener.deps.settings.advisory_show_votes_to_kick.set(Some(false), "test");
+        h.listener.handle(entry(false, 100, joined(PRIVATE_LOCATION))).await;
+        h.listener
+            .handle(entry(
+                false,
+                101,
+                LogEventKind::VtkInit {
+                    target_display_name: "Target".into(),
+                    actor_display_name: Some("Caller".into()),
+                },
+            ))
+            .await;
+
+        assert_eq!(h.tts.spoken().len(), 1);
+        assert!(h.tts.spoken()[0].contains("Target"));
+        assert!(
+            !h.emitter.events().iter().any(|event| event.starts_with("vtk:")),
+            "group audit output stays scoped to the configured group"
+        );
+
+        h.listener.deps.settings.announce_votes_to_kick.set(Some(false), "test");
+        h.listener
+            .handle(entry(
+                false,
+                102,
+                LogEventKind::VtkInit {
+                    target_display_name: "Another Target".into(),
+                    actor_display_name: None,
+                },
+            ))
+            .await;
+        assert_eq!(h.tts.spoken().len(), 1, "the dedicated TTS toggle still disables the callout");
+    }
+
+    #[tokio::test]
+    async fn vote_kick_is_still_spoken_inside_the_configured_group() {
+        // The companion to the test above. Speaking a vote-kick now happens
+        // before the group-instance check returns, so a refactor that moved
+        // it back below would leave the out-of-group case passing while
+        // silently muting the warning where it matters most. Both halves
+        // have to be held down.
+        let mut h = harness(true);
+        h.listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        h.listener
+            .handle(entry(
+                false,
+                101,
+                LogEventKind::VtkInit {
+                    target_display_name: "Target".into(),
+                    actor_display_name: Some("Caller".into()),
+                },
+            ))
+            .await;
+
+        assert_eq!(h.tts.spoken().len(), 1, "a vote-kick in the group must still be spoken");
+        assert!(h.tts.spoken()[0].contains("Target"));
+        assert!(
+            h.emitter.events().iter().any(|event| event.starts_with("vtk:")),
+            "and inside the group it is still recorded for Discord and the audit history"
+        );
     }
 
     #[tokio::test]
