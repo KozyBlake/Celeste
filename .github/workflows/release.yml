@@ -1,0 +1,161 @@
+name: Release
+
+# Pushing a tag like v0.10.0 builds both downloads and opens a draft
+# release with them attached. The tag has to match the version in
+# rust/Cargo.toml, so a release can never carry binaries that report a
+# different version than the tag promises.
+#
+# Running this by hand (workflow_dispatch) builds and uploads the same two
+# files as workflow artifacts without publishing anything, which is the way
+# to check a release build before tagging.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Check the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Read the version and compare it with the tag
+        id: read
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' rust/Cargo.toml | head -1)"
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the version from rust/Cargo.toml"
+            exit 1
+          fi
+          echo "rust/Cargo.toml says $version"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match rust/Cargo.toml version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows x64
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release --locked
+
+      - name: Name it for release
+        shell: pwsh
+        run: |
+          Copy-Item rust/target/release/celeste.exe `
+            "Celeste-${{ needs.version.outputs.version }}-Windows-x64.exe"
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: Celeste-*-Windows-x64.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux x86_64 AppImage
+    needs: version
+    # Deliberately not ubuntu-latest. The binary records the glibc it was
+    # linked against and refuses to start on anything older, so this builds
+    # on the oldest runner GitHub offers. 22.04 gives a glibc 2.35 floor;
+    # building on 24.04 raises it to 2.39 and locks out Debian 12, Ubuntu
+    # 22.04, Linux Mint 21 and RHEL 9.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libssl-dev
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release --locked
+
+      - name: Fetch appimagetool
+        run: |
+          curl -sSLf -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+
+      - name: Package the AppImage
+        run: ./packaging/linux/build-appimage.sh
+
+      - name: Report what the AppImage needs to run
+        run: |
+          echo "Oldest glibc that can run this build:"
+          objdump -T rust/target/release/celeste \
+            | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-x86_64
+          path: rust/target/appimage/Celeste-*-x86_64.AppImage
+          if-no-files-found: error
+
+  publish:
+    name: Draft the release
+    needs: [version, windows, linux]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect the downloads
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write the checksums
+        working-directory: dist
+        run: |
+          sha256sum Celeste-* | tee SHA256SUMS.txt
+
+      - name: Open a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          {
+            echo "Celeste $VERSION."
+            echo
+            echo "The Windows build is not code-signed, so SmartScreen will warn"
+            echo "the first time you run it. The AppImage needs glibc 2.35 or"
+            echo "newer (Ubuntu 22.04, Debian 12, Fedora 36, and anything later);"
+            echo "mark it executable with \`chmod +x\` before running it."
+            echo
+            echo '## Checksums (SHA-256)'
+            echo
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Celeste $VERSION" \
+            --notes-file notes.md \
+            --draft \
+            --prerelease \
+            dist/Celeste-* dist/SHA256SUMS.txt
