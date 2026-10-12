@@ -324,7 +324,7 @@ First launch opens a setup wizard for the Discord bot token, the guild, and the 
 #### Unsigned builds
 
 Celeste's releases are **not code-signed**. A signing certificate is a recurring
-cost that a free noncommercial project does not carry, so Windows will stop you
+cost that an unfunded project does not carry, so Windows will stop you
 the first time you run it:
 
 > Windows protected your PC
@@ -414,9 +414,15 @@ pull request needs to pass, and the terms contributions are offered under.
 
 ## Credits and licence
 
-Celeste is licensed under the **[PolyForm Noncommercial License 1.0.0](https://github.com/KozyBlake/Celeste?tab=License-1-ov-file)**.
-It is source-available for permitted noncommercial use under the terms of that
-license.
+Celeste is licensed under the **[PolyForm Shield License 1.0.0](https://github.com/KozyBlake/Celeste?tab=License-1-ov-file)**.
+It is source-available, not open source. You may use it for any purpose,
+including inside a business, and you may change it, build on it and pass it on
+— the one exception is providing a product that competes with Celeste. Read
+[the licence](LICENSE) for what counts as competing; it is broader than
+selling.
+
+Releases before this change, including 0.10.0, were published under the
+PolyForm Noncommercial License 1.0.0 and remain available under those terms.
 
 Celeste is a rewrite of Scarlet. Scarlet was written by **Vinyarion** of the
 **Sybyline Network** and released under the MIT License. The applicable Scarlet
