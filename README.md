@@ -12,6 +12,8 @@ A self-hostable VRChat group management utility with Discord integration.
 
 - [Settings reference](SETTINGS.md)
 - [Building from source](BUILDING.md)
+- [Contributing](CONTRIBUTING.md)
+- [Credits](CREDITS.md)
 - [Installation](#installation)
 - [License](https://github.com/KozyBlake/Celeste?tab=License-1-ov-file)
 
@@ -404,8 +406,9 @@ to happen instead. Group-permission edge cases, unusual instance transitions,
 high-DPI and multi-monitor setups, and running under Proton are all
 under-tested.
 
-Issues and pull requests: https://github.com/KozyBlake/Celeste. Contributions
-are accepted under the project's licence.
+Issues and pull requests: https://github.com/KozyBlake/Celeste.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers what makes a report useful, what a
+pull request needs to pass, and the terms contributions are offered under.
 
 ---
 
