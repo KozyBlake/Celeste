@@ -17,6 +17,7 @@ const BUNDLED_ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.pn
 pub const STATUS_ENV: &str = "CELESTE_SPLASH_STATUS_FILE";
 
 pub fn run(status_file: PathBuf) -> eframe::Result<()> {
+    let renderer = crate::platform::renderer_preference("auto").unwrap_or_else(|_| "auto".to_string());
     let icon = decode_icon(BUNDLED_ICON);
     let mut viewport = egui::ViewportBuilder::default()
         // Match the installed desktop file and the main window. On Wayland,
@@ -35,7 +36,8 @@ pub fn run(status_file: PathBuf) -> eframe::Result<()> {
         "Celeste — Starting",
         eframe::NativeOptions {
             viewport,
-            renderer: crate::platform::native_renderer(),
+            renderer: crate::platform::native_renderer(&renderer),
+            wgpu_options: crate::platform::native_wgpu_options(&renderer),
             ..Default::default()
         },
         Box::new(move |_cc| Ok(Box::new(StartupSplash::new(status_file)))),

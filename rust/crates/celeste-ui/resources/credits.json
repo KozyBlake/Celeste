@@ -33,5 +33,10 @@
     "name": "VRC Kmart",
     "url": "https://vrchat.com/home/group/grp_8c7c423b-cfab-40f5-a53a-a8431655826b",
     "role": "Community support and testing"
+  },
+  {
+    "name": "Fran560",
+    "url": "https://vrchat.com/home/user/usr_60257903-b52a-463a-a48e-e188eb5b6947",
+    "role": "Tester who reported the Intel Arc/Vulkan VRAM issue"
   }
 ]

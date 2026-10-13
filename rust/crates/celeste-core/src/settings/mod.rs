@@ -109,6 +109,7 @@ pub struct Settings {
     pub show_cli_tab: Arc<FileValued<bool>>,
     pub ui_accent_headers: Arc<FileValued<bool>>,
     pub ui_language: Arc<FileValued<String>>,
+    pub graphics_renderer: Arc<FileValued<String>>,
     pub ui_left_player_dim_percent: Arc<FileValued<i32>>,
 
     // --- Scarlet.java: Moderation ---
@@ -315,6 +316,19 @@ impl Settings {
                 "system",
                 || {
                     ["system", "en", "de", "es", "id", "ja", "ru"].into_iter().map(str::to_string).collect()
+                },
+            ),
+            graphics_renderer: registry.string_choice(
+                "graphics_renderer",
+                "Graphics renderer (restart to apply)",
+                SettingCategory::General,
+                "auto",
+                || {
+                    #[cfg(target_os = "windows")]
+                    let choices = ["auto", "directx12", "vulkan", "opengl"];
+                    #[cfg(not(target_os = "windows"))]
+                    let choices = ["auto", "vulkan", "opengl"];
+                    choices.into_iter().map(str::to_string).collect()
                 },
             ),
             ui_left_player_dim_percent: registry.int_range(

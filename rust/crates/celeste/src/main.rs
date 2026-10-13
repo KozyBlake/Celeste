@@ -122,6 +122,9 @@ fn run() -> anyhow::Result<()> {
 
     startup_splash.status("Loading settings and caches...");
     let settings = Arc::new(Settings::open(&data_dir));
+    let renderer_preference =
+        celeste_ui::platform::renderer_preference(&settings.graphics_renderer.get())
+            .map_err(anyhow::Error::msg)?;
     let managed_clients = Arc::new(celeste_vrchat::managed_clients::ManagedClientStore::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(celeste_core::identity::VERSION) {
         tracing::info!("Version changed since last run (or first run)");
@@ -233,6 +236,7 @@ fn run() -> anyhow::Result<()> {
     // handles a Discord-requested restart directly. The graphical path is
     // handled after `eframe::run_native` returns below; this avoids exiting
     // from a Tokio worker while EGL/WGL is in the middle of a frame.
+    let mut renderer_recovery = None;
     if headless {
         runtime.spawn({
             let data = shared.celeste_data.clone();
@@ -433,7 +437,17 @@ fn run() -> anyhow::Result<()> {
         // `eframe::run_native` call; Discord connects once the wizard
         // resolves a token, or immediately if setup already ran.
         startup_splash.finish();
-        celeste_ui::run(
+        if let Some(reason) = celeste_ui::platform::renderer_recovery_reason() {
+            let message = format!(
+                "Celeste could not initialize its automatic graphics renderer (normally DirectX 12 on Windows) on the previous launch.\n\n\
+                 Windows reported:\n{reason}\n\n\
+                 Celeste is trying again with the OpenGL compatibility renderer. No settings or data were removed. \
+                 This is temporary; if Celeste opens normally, select OpenGL under Settings → General → Appearance \
+                 to keep using it. You can return to Automatic after updating or changing the graphics driver."
+            );
+            let _ = celeste_ui::dialogs::info_message("Celeste graphics recovery", message);
+        }
+        let window_result = celeste_ui::run(
             ui_state,
             shared,
             data_dir,
@@ -444,8 +458,26 @@ fn run() -> anyhow::Result<()> {
             two_factor_tx,
             two_factor_rx,
             managed_clients,
-        )
-        .map_err(|error| anyhow::anyhow!("the main Celeste window could not open: {error}"))?;
+            &renderer_preference,
+        );
+        match window_result {
+            Ok(()) => {}
+            Err(error)
+                if cfg!(windows)
+                    && renderer_preference == "auto"
+                    && !celeste_ui::platform::is_renderer_recovery() =>
+            {
+                let reason = error.to_string();
+                tracing::error!(%reason, "Automatic graphics initialization failed; relaunching once with OpenGL");
+                renderer_recovery = Some(reason);
+            }
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "the main Celeste window could not open using {}: {error}",
+                    celeste_ui::platform::native_renderer_label(&renderer_preference)
+                ));
+            }
+        }
     }
 
     // Headless mode has no eframe close callback, and this also provides a
@@ -465,7 +497,9 @@ fn run() -> anyhow::Result<()> {
     // remaining process-local workers with Celeste itself.
     runtime.shutdown_timeout(std::time::Duration::from_secs(3));
 
-    if restart_requested {
+    if let Some(reason) = renderer_recovery {
+        relaunch_with_renderer_recovery(&reason)?;
+    } else if restart_requested {
         relaunch_current_process()?;
     }
 
@@ -476,6 +510,23 @@ fn relaunch_current_process() -> anyhow::Result<()> {
     let executable = std::env::current_exe()?;
     let mut command = std::process::Command::new(executable);
     command.args(std::env::args_os().skip(1));
+    command
+        .env_remove(celeste_ui::platform::RENDERER_RECOVERY_ENV)
+        .env_remove(celeste_ui::platform::RENDERER_RECOVERY_REASON_ENV);
+    command.spawn()?;
+    Ok(())
+}
+
+fn relaunch_with_renderer_recovery(reason: &str) -> anyhow::Result<()> {
+    let executable = std::env::current_exe()?;
+    let mut command = std::process::Command::new(executable);
+    command
+        .args(std::env::args_os().skip(1))
+        .env(celeste_ui::platform::RENDERER_RECOVERY_ENV, "opengl")
+        .env(
+            celeste_ui::platform::RENDERER_RECOVERY_REASON_ENV,
+            reason.chars().take(2_000).collect::<String>(),
+        );
     command.spawn()?;
     Ok(())
 }
@@ -486,7 +537,11 @@ fn relaunch_current_process() -> anyhow::Result<()> {
 fn show_startup_failure(message: &str) {
     eprintln!("Celeste could not start: {message}");
     let report = format!(
-        "Celeste could not start.\n\n{message}\n\nA copy of this error was written to startup-error.txt in Celeste's default data folder."
+        "Celeste could not start.\n\n{message}\n\n\
+         If this is a graphics error, try launching Celeste with `--safe-mode`, or try \
+         `--renderer vulkan`. Launchers can set CELESTE_RENDERER=opengl instead. A copy \
+         of this error was written to startup-error.txt \
+         in Celeste's default data folder."
     );
     let path = celeste_core::paths::default_data_dir().join("startup-error.txt");
     if let Some(parent) = path.parent() {
@@ -532,6 +587,7 @@ impl StartupSplashController {
 
         let child = std::env::current_exe().ok().and_then(|executable| {
             std::process::Command::new(executable)
+                .args(std::env::args_os().skip(1))
                 .env(celeste_ui::splash::STATUS_ENV, &status_file)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())

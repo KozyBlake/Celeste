@@ -5,12 +5,13 @@ name: Release
 # rust/Cargo.toml, so a release can never carry binaries that report a
 # different version than the tag promises.
 #
-# Running this by hand (workflow_dispatch) builds and uploads the same two
-# files as workflow artifacts without publishing anything, which is the way
-# to check a release build before tagging.
+# Every main-branch push and manual run builds and uploads the same two files
+# as workflow artifacts without publishing anything. That keeps both release
+# formats continuously tested before a tag is created.
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -53,6 +54,22 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-cargo-release-v2-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-v2-
+
+      - name: Run Windows test suite
+        working-directory: rust
+        run: cargo test --workspace --locked
+
       - name: Build
         working-directory: rust
         run: cargo build --release --locked
@@ -82,6 +99,18 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-cargo-release-v2-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-v2-
 
       - name: Install build dependencies
         run: |

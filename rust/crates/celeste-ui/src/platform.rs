@@ -10,6 +10,62 @@
 //! `Platform.forceHeadlessUi()` explicit override. `SCARLET_HEADLESS` is
 //! still accepted for launch-script compatibility.
 
+pub const RENDERER_ENV: &str = "CELESTE_RENDERER";
+pub const RENDERER_RECOVERY_ENV: &str = "CELESTE_RENDERER_RECOVERY";
+pub const RENDERER_RECOVERY_REASON_ENV: &str = "CELESTE_RENDERER_RECOVERY_REASON";
+
+/// Resolve the renderer requested for this process. A recovery relaunch has
+/// highest priority so an existing `--renderer auto` argument cannot send it
+/// straight back into the backend that just failed. Ordinary command-line
+/// overrides win over the environment, which wins over the saved setting.
+pub fn renderer_preference(saved: &str) -> Result<String, String> {
+    if let Some(value) = std::env::var_os(RENDERER_RECOVERY_ENV) {
+        return validate_renderer(&value.to_string_lossy());
+    }
+
+    let mut arguments = std::env::args_os().skip(1);
+    while let Some(argument) = arguments.next() {
+        let argument = argument.to_string_lossy();
+        if argument == "--safe-mode" {
+            return Ok("opengl".to_string());
+        }
+        if argument == "--renderer" {
+            let value = arguments
+                .next()
+                .ok_or_else(|| "--renderer needs one of: auto, directx12, vulkan, opengl".to_string())?;
+            return validate_renderer(&value.to_string_lossy());
+        }
+        if let Some(value) = argument.strip_prefix("--renderer=") {
+            return validate_renderer(value);
+        }
+    }
+
+    if let Some(value) = std::env::var_os(RENDERER_ENV) {
+        return validate_renderer(&value.to_string_lossy());
+    }
+    validate_renderer(saved)
+}
+
+fn validate_renderer(value: &str) -> Result<String, String> {
+    let value = value.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "auto" | "vulkan" | "opengl" => Ok(value),
+        "directx12" if cfg!(windows) => Ok(value),
+        "directx12" => Err("DirectX 12 is only available on Windows".to_string()),
+        _ => Err(format!(
+            "Unknown graphics renderer `{value}`; use auto, directx12, vulkan, or opengl"
+        )),
+    }
+}
+
+pub fn renderer_recovery_reason() -> Option<String> {
+    std::env::var(RENDERER_RECOVERY_REASON_ENV).ok()
+}
+
+pub fn is_renderer_recovery() -> bool {
+    std::env::var_os(RENDERER_RECOVERY_ENV).is_some()
+}
+
 pub fn is_headless() -> bool {
     if let Ok(value) = std::env::var("CELESTE_HEADLESS")
         .or_else(|_| std::env::var("SCARLET_HEADLESS"))
@@ -31,12 +87,59 @@ pub fn is_headless() -> bool {
 /// Windows' built-in fallback OpenGL implementation is only version 1.1,
 /// which cannot run egui_glow. Prefer wgpu there so normal installations
 /// and GPU-passthrough VMs use DirectX 12. Linux keeps the proven Glow path.
-pub fn native_renderer() -> eframe::Renderer {
-    if cfg!(windows) {
-        eframe::Renderer::Wgpu
-    } else {
-        eframe::Renderer::Glow
+pub fn native_renderer(preference: &str) -> eframe::Renderer {
+    match preference {
+        "directx12" | "vulkan" => eframe::Renderer::Wgpu,
+        "opengl" => eframe::Renderer::Glow,
+        _ if cfg!(windows) => eframe::Renderer::Wgpu,
+        _ => eframe::Renderer::Glow,
     }
+}
+
+pub fn native_renderer_label(preference: &str) -> &'static str {
+    match preference {
+        "directx12" => "DirectX 12 (wgpu)",
+        "vulkan" => "Vulkan (wgpu)",
+        "opengl" => "OpenGL (Glow)",
+        _ if cfg!(windows) => "Automatic: DirectX 12 (wgpu)",
+        _ => "Automatic: OpenGL (Glow)",
+    }
+}
+
+/// Keep Celeste's tiny 2D interface from being treated like a game by
+/// wgpu. Its defaults prefer a high-performance adapter and performance-
+/// biased allocation; on hybrid Windows systems that needlessly wakes the
+/// discrete GPU, while the unrestricted backend list can choose Vulkan
+/// even though DirectX 12 is the renderer this Windows path was designed
+/// and tested for.
+///
+/// The standard wgpu environment variables remain escape hatches for
+/// unusual machines and diagnostics.
+pub fn native_wgpu_options(preference: &str) -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut options = eframe::egui_wgpu::WgpuConfiguration::default();
+
+    if std::env::var_os("WGPU_POWER_PREF").is_none() {
+        options.power_preference = eframe::wgpu::PowerPreference::LowPower;
+    }
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        options.supported_backends = match preference {
+            "directx12" => eframe::wgpu::Backends::DX12,
+            "vulkan" => eframe::wgpu::Backends::VULKAN,
+            _ if cfg!(windows) => eframe::wgpu::Backends::DX12,
+            _ => options.supported_backends,
+        };
+    }
+
+    // Celeste renders a handful of panels, text and one small icon. It has
+    // no reason to trade a larger GPU heap for game-style throughput.
+    let default_descriptor = options.device_descriptor.clone();
+    options.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut descriptor = default_descriptor(adapter);
+        descriptor.memory_hints = eframe::wgpu::MemoryHints::MemoryUsage;
+        descriptor
+    });
+    options.desired_maximum_frame_latency = Some(1);
+    options
 }
 
 /// Install the currently running Linux build as a normal per-user desktop
@@ -282,6 +385,24 @@ pub fn open_audio_settings(_panel: AudioSettingsPanel) -> Result<&'static str, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renderer_names_are_normalized_and_unknown_values_are_rejected() {
+        assert_eq!(validate_renderer(" OpenGL ").unwrap(), "opengl");
+        assert_eq!(validate_renderer("VULKAN").unwrap(), "vulkan");
+        assert!(validate_renderer("potato").is_err());
+        #[cfg(target_os = "windows")]
+        assert_eq!(validate_renderer("directx12").unwrap(), "directx12");
+        #[cfg(not(target_os = "windows"))]
+        assert!(validate_renderer("directx12").is_err());
+    }
+
+    #[test]
+    fn explicit_renderer_choices_select_the_expected_eframe_backend() {
+        assert!(matches!(native_renderer("opengl"), eframe::Renderer::Glow));
+        assert!(matches!(native_renderer("vulkan"), eframe::Renderer::Wgpu));
+        assert!(matches!(native_renderer("directx12"), eframe::Renderer::Wgpu));
+    }
 
     #[test]
     fn explicit_env_var_forces_headless() {

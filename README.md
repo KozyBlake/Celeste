@@ -321,6 +321,25 @@ chmod +x celeste        # Linux, first run only
 
 First launch opens a setup wizard for the Discord bot token, the guild, and the VRChat account.
 
+#### Graphics compatibility and safe mode
+
+Celeste normally uses DirectX 12 on Windows and OpenGL on Linux. The renderer
+can be changed under **Settings → General → Appearance**; the change takes
+effect after a restart. Windows also offers Vulkan for driver diagnostics.
+
+If the automatic Windows renderer cannot initialize, Celeste relaunches once
+with OpenGL compatibility mode and shows the graphics error that caused the
+recovery. The fallback is temporary and does not overwrite the saved setting.
+To start in compatibility mode yourself:
+
+```powershell
+.\celeste.exe --safe-mode
+```
+
+Every platform also accepts `--renderer auto`, `--renderer directx12` (Windows
+only), `--renderer vulkan`, or `--renderer opengl`. For launchers and desktop
+shortcuts, the same override can be supplied through `CELESTE_RENDERER`.
+
 #### Unsigned builds
 
 Celeste's releases are **not code-signed**. A signing certificate is a recurring

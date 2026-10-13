@@ -57,7 +57,10 @@ cp "$appdir/$app_id.png" "$appdir/.DirIcon"
 # libcrypto on everything through LD_LIBRARY_PATH can break the graphics
 # and audio libraries the app loads at runtime.
 for lib in libssl.so.3 libcrypto.so.3; do
-    path="$(ldconfig -p 2>/dev/null | awk -v l="$lib" '$1 == l && /x86-64/ {print $NF; exit}')"
+    # Do not exit awk after the first match. With `pipefail`, that closes the
+    # pipe while ldconfig is still writing and turns a successful lookup into
+    # SIGPIPE (exit 141), aborting the entire AppImage build.
+    path="$(ldconfig -p 2>/dev/null | awk -v l="$lib" '$1 == l && /x86-64/ && !found {print $NF; found=1}')"
     if [ -n "$path" ] && [ -f "$path" ]; then
         install -m 644 "$path" "$appdir/usr/lib/$lib"
     else

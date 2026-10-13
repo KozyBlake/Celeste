@@ -4472,7 +4472,10 @@ impl CelesteApp {
     fn setting_group(id: &str) -> &'static str {
         if matches!(
             id,
-            "ui_language" | "ui_left_player_dim_percent" | "ui_accent_headers"
+            "ui_language"
+                | "graphics_renderer"
+                | "ui_left_player_dim_percent"
+                | "ui_accent_headers"
         ) {
             "Appearance"
         } else if id.starts_with("ui_")
@@ -7820,24 +7823,30 @@ impl CelesteApp {
                 let selected = if current.is_empty() {
                     "System default".to_string()
                 } else {
-                    current.clone()
+                    string_choice_label(descriptor.id(), &current).to_string()
                 };
                 egui::ComboBox::from_id_salt(descriptor.id())
                     .selected_text(selected)
                     .width(CONTROL_WIDTH - 24.0)
                     .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_value(&mut current, String::new(), "System default")
-                            .changed()
-                        {
-                            descriptor.set_from_string("", "ui");
+                        if descriptor.id() != "graphics_renderer" {
+                            if ui
+                                .selectable_value(&mut current, String::new(), "System default")
+                                .changed()
+                            {
+                                descriptor.set_from_string("", "ui");
+                            }
                         }
                         if values.is_empty() {
                             ui.weak("(nothing installed)");
                         }
                         for value in values {
                             if ui
-                                .selectable_value(&mut current, value.clone(), &value)
+                                .selectable_value(
+                                    &mut current,
+                                    value.clone(),
+                                    string_choice_label(descriptor.id(), &value),
+                                )
                                 .changed()
                             {
                                 descriptor.set_from_string(&value, "ui");
@@ -8721,6 +8730,19 @@ fn known_choices_for(id: &str) -> Option<Vec<(String, String)>> {
     }
 }
 
+fn string_choice_label<'a>(id: &str, value: &'a str) -> &'a str {
+    if id != "graphics_renderer" {
+        return value;
+    }
+    match value {
+        "auto" => "Automatic (recommended)",
+        "directx12" => "DirectX 12 (wgpu)",
+        "vulkan" => "Vulkan (wgpu)",
+        "opengl" => "OpenGL (Glow)",
+        _ => value,
+    }
+}
+
 const BUNDLED_WINDOW_ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
 
 fn base_system_font_paths() -> Vec<PathBuf> {
@@ -8936,6 +8958,7 @@ pub fn run(
         Vec<String>,
     )>,
     managed_clients: Arc<celeste_vrchat::managed_clients::ManagedClientStore>,
+    renderer_preference: &str,
 ) -> eframe::Result<()> {
     let bounds = shared
         .settings
@@ -8959,9 +8982,15 @@ pub fn run(
             .with_inner_size([600.0, 400.0]);
     }
     viewport = viewport.with_min_inner_size([560.0, 360.0]);
+    tracing::info!(
+        preference = %renderer_preference,
+        renderer = crate::platform::native_renderer_label(&renderer_preference),
+        "Celeste graphics renderer selected"
+    );
     let options = eframe::NativeOptions {
         viewport,
-        renderer: crate::platform::native_renderer(),
+        renderer: crate::platform::native_renderer(renderer_preference),
+        wgpu_options: crate::platform::native_wgpu_options(renderer_preference),
         ..Default::default()
     };
     eframe::run_native(
@@ -10029,6 +10058,7 @@ mod tests {
                 "OpenAI Codex",
                 "The Synapse",
                 "VRC Kmart",
+                "Fran560",
             ]
         );
     }

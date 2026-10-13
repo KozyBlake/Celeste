@@ -61,6 +61,16 @@ pub fn error_message(title: &str, description: impl Into<String>) -> Result<(), 
     .map(|_| ())
 }
 
+pub fn info_message(title: &str, description: impl Into<String>) -> Result<(), String> {
+    message(
+        title,
+        description,
+        rfd::MessageButtons::Ok,
+        rfd::MessageLevel::Info,
+    )
+    .map(|_| ())
+}
+
 fn run<F, T>(future: F) -> Result<T, String>
 where
     F: Future<Output = T>,
