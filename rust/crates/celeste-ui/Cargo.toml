@@ -26,6 +26,13 @@ open = "5"
 # file picker.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
+# eframe intentionally depends on wgpu with its default features disabled.
+# Enable DX12 explicitly for Windows so selecting `Backends::DX12` does not
+# produce an empty backend set at runtime. This only unifies features into
+# eframe's existing wgpu dependency; Celeste uses wgpu through eframe.
+[target.'cfg(windows)'.dependencies]
+wgpu = { version = "22.1", features = ["dx12"], default-features = false }
+
 [dev-dependencies]
 tempfile = "3"
 reqwest.workspace = true
