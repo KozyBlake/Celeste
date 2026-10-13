@@ -29,6 +29,7 @@ or from Discord with `/settings edit`.
 
 | Setting | Id | Type | What it does |
 |---|---|---|---|
+| Graphics processor preference (restart to apply) | `graphics_power_preference` | one of a list discovered at runtime | Lets the operating system choose a GPU, prefers an energy-saving integrated GPU, or prefers a high-performance discrete GPU. On systems with multiple discrete GPUs, use the operating system or graphics-driver control panel to choose between them. Takes effect after a restart. |
 | Graphics renderer (restart to apply) | `graphics_renderer` | one of a list discovered at runtime | Chooses the graphics API used to draw Celeste. Automatic is recommended; change this only to work around a graphics-driver problem, then restart Celeste. |
 | Colour section headers with accent | `ui_accent_headers` | boolean (default `false`) | Tints section headings with your accent colour. |
 | Confirmation dialog for group invites | `ui_confirm_group_invite` | boolean (default `false`) | Asks before sending a group invite. |
@@ -161,4 +162,4 @@ or from Discord with `/settings edit`.
 
 ---
 
-104 settings in 6 categories.
+105 settings in 6 categories.

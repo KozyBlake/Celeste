@@ -110,6 +110,7 @@ pub struct Settings {
     pub ui_accent_headers: Arc<FileValued<bool>>,
     pub ui_language: Arc<FileValued<String>>,
     pub graphics_renderer: Arc<FileValued<String>>,
+    pub graphics_power_preference: Arc<FileValued<String>>,
     pub ui_left_player_dim_percent: Arc<FileValued<i32>>,
 
     // --- Scarlet.java: Moderation ---
@@ -329,6 +330,18 @@ impl Settings {
                     #[cfg(not(target_os = "windows"))]
                     let choices = ["auto", "vulkan", "opengl"];
                     choices.into_iter().map(str::to_string).collect()
+                },
+            ),
+            graphics_power_preference: registry.string_choice(
+                "graphics_power_preference",
+                "Graphics processor preference (restart to apply)",
+                SettingCategory::General,
+                "system",
+                || {
+                    ["system", "low_power", "high_performance"]
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect()
                 },
             ),
             ui_left_player_dim_percent: registry.int_range(
