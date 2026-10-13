@@ -125,7 +125,6 @@ fn run() -> anyhow::Result<()> {
     let renderer_preference =
         celeste_ui::platform::renderer_preference(&settings.graphics_renderer.get())
             .map_err(anyhow::Error::msg)?;
-    let graphics_power_preference = settings.graphics_power_preference.get();
     let managed_clients = Arc::new(celeste_vrchat::managed_clients::ManagedClientStore::open(&data_dir));
     if settings.check_has_version_changed_since_last_run(celeste_core::identity::VERSION) {
         tracing::info!("Version changed since last run (or first run)");
@@ -460,7 +459,6 @@ fn run() -> anyhow::Result<()> {
             two_factor_rx,
             managed_clients,
             &renderer_preference,
-            &graphics_power_preference,
         );
         match window_result {
             Ok(()) => {}

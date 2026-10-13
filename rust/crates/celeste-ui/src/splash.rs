@@ -37,7 +37,7 @@ pub fn run(status_file: PathBuf) -> eframe::Result<()> {
         eframe::NativeOptions {
             viewport,
             renderer: crate::platform::native_renderer(&renderer),
-            wgpu_options: crate::platform::native_wgpu_options(&renderer, "system"),
+            wgpu_options: crate::platform::native_wgpu_options(&renderer),
             ..Default::default()
         },
         Box::new(move |_cc| Ok(Box::new(StartupSplash::new(status_file)))),

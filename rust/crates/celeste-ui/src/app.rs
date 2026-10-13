@@ -4474,7 +4474,6 @@ impl CelesteApp {
             id,
             "ui_language"
                 | "graphics_renderer"
-                | "graphics_power_preference"
                 | "ui_left_player_dim_percent"
                 | "ui_accent_headers"
         ) {
@@ -7830,10 +7829,7 @@ impl CelesteApp {
                     .selected_text(selected)
                     .width(CONTROL_WIDTH - 24.0)
                     .show_ui(ui, |ui| {
-                        if !matches!(
-                            descriptor.id(),
-                            "graphics_renderer" | "graphics_power_preference"
-                        ) {
+                        if descriptor.id() != "graphics_renderer" {
                             if ui
                                 .selectable_value(&mut current, String::new(), "System default")
                                 .changed()
@@ -8735,14 +8731,14 @@ fn known_choices_for(id: &str) -> Option<Vec<(String, String)>> {
 }
 
 fn string_choice_label<'a>(id: &str, value: &'a str) -> &'a str {
-    match (id, value) {
-        ("graphics_renderer", "auto") => "Automatic (recommended)",
-        ("graphics_renderer", "directx12") => "DirectX 12 (wgpu)",
-        ("graphics_renderer", "vulkan") => "Vulkan (wgpu)",
-        ("graphics_renderer", "opengl") => "OpenGL (Glow)",
-        ("graphics_power_preference", "system") => "System choice (recommended)",
-        ("graphics_power_preference", "low_power") => "Power saving (usually integrated GPU)",
-        ("graphics_power_preference", "high_performance") => "High performance (usually discrete GPU)",
+    if id != "graphics_renderer" {
+        return value;
+    }
+    match value {
+        "auto" => "Automatic (recommended)",
+        "directx12" => "DirectX 12 (wgpu)",
+        "vulkan" => "Vulkan (wgpu)",
+        "opengl" => "OpenGL (Glow)",
         _ => value,
     }
 }
@@ -8963,7 +8959,6 @@ pub fn run(
     )>,
     managed_clients: Arc<celeste_vrchat::managed_clients::ManagedClientStore>,
     renderer_preference: &str,
-    graphics_power_preference: &str,
 ) -> eframe::Result<()> {
     let bounds = shared
         .settings
@@ -8990,13 +8985,12 @@ pub fn run(
     tracing::info!(
         preference = %renderer_preference,
         renderer = crate::platform::native_renderer_label(&renderer_preference),
-        gpu_preference = %graphics_power_preference,
         "Celeste graphics renderer selected"
     );
     let options = eframe::NativeOptions {
         viewport,
         renderer: crate::platform::native_renderer(renderer_preference),
-        wgpu_options: crate::platform::native_wgpu_options(renderer_preference, graphics_power_preference),
+        wgpu_options: crate::platform::native_wgpu_options(renderer_preference),
         ..Default::default()
     };
     eframe::run_native(

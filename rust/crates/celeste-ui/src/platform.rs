@@ -106,21 +106,17 @@ pub fn native_renderer_label(preference: &str) -> &'static str {
     }
 }
 
-/// Keep Celeste's tiny 2D interface from using game-style allocation while
-/// respecting the user's GPU preference. `system` deliberately maps to
-/// `PowerPreference::None`: hard-coding `LowPower` made Windows graphics
-/// preferences ineffective and forced every hybrid machine onto its iGPU.
+/// Keep Celeste's tiny 2D interface from using game-style allocation without
+/// overriding the operating system's GPU selection. Adapter policy belongs to
+/// Windows and the graphics driver, not to a moderation logger.
 ///
 /// The standard wgpu environment variables remain escape hatches for
 /// unusual machines and diagnostics.
-pub fn native_wgpu_options(
-    preference: &str,
-    graphics_power_preference: &str,
-) -> eframe::egui_wgpu::WgpuConfiguration {
+pub fn native_wgpu_options(preference: &str) -> eframe::egui_wgpu::WgpuConfiguration {
     let mut options = eframe::egui_wgpu::WgpuConfiguration::default();
 
     if std::env::var_os("WGPU_POWER_PREF").is_none() {
-        options.power_preference = wgpu_power_preference(graphics_power_preference);
+        options.power_preference = eframe::wgpu::PowerPreference::None;
     }
     if std::env::var_os("WGPU_BACKEND").is_none() {
         options.supported_backends = match preference {
@@ -141,14 +137,6 @@ pub fn native_wgpu_options(
     });
     options.desired_maximum_frame_latency = Some(1);
     options
-}
-
-fn wgpu_power_preference(value: &str) -> eframe::wgpu::PowerPreference {
-    match value {
-        "low_power" => eframe::wgpu::PowerPreference::LowPower,
-        "high_performance" => eframe::wgpu::PowerPreference::HighPerformance,
-        _ => eframe::wgpu::PowerPreference::None,
-    }
 }
 
 /// Install the currently running Linux build as a normal per-user desktop
@@ -411,16 +399,6 @@ mod tests {
         assert!(matches!(native_renderer("opengl"), eframe::Renderer::Glow));
         assert!(matches!(native_renderer("vulkan"), eframe::Renderer::Wgpu));
         assert!(matches!(native_renderer("directx12"), eframe::Renderer::Wgpu));
-    }
-
-    #[test]
-    fn gpu_preferences_do_not_force_the_integrated_gpu_by_default() {
-        assert_eq!(wgpu_power_preference("system"), eframe::wgpu::PowerPreference::None);
-        assert_eq!(wgpu_power_preference("low_power"), eframe::wgpu::PowerPreference::LowPower);
-        assert_eq!(
-            wgpu_power_preference("high_performance"),
-            eframe::wgpu::PowerPreference::HighPerformance
-        );
     }
 
     #[test]
