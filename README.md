@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="rust/assets/celeste.png" alt="Celeste logo" width="240">
+
 # Celeste
 
 A self-hostable VRChat group management utility with Discord integration.
@@ -451,8 +453,10 @@ their authorship.
 
 Scarlet's logo is **not** included here and is not Celeste's. It belonged to
 that project and was never mine to carry over. Celeste uses its own crescent
-logo, including dedicated sizes for application windows, taskbars and small
-system icons.
+logo, created by
+[CeleryDinoSauR](https://vrchat.com/home/user/usr_12af8628-8dbe-4396-89de-0c92cea53782),
+including dedicated sizes for application windows, taskbars and small system
+icons.
 
 The Discord setup screenshots in `images/` are crops of Discord's own
 developer dashboard.

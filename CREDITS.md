@@ -35,6 +35,14 @@ here — see [CONTRIBUTING.md](CONTRIBUTING.md).
 The people who ran the first beta and said what was wrong with it. If
 you tested and would like to be named here, say so.
 
+- [Fran560](https://vrchat.com/home/user/usr_60257903-b52a-463a-a48e-e188eb5b6947)
+  reported the Intel Arc/Vulkan VRAM issue.
+
+## Artwork
+
+- [CeleryDinoSauR](https://vrchat.com/home/user/usr_12af8628-8dbe-4396-89de-0c92cea53782)
+  created the Celeste logo.
+
 ## Other
 
 The Discord setup screenshots in `images/` are crops of Discord's own

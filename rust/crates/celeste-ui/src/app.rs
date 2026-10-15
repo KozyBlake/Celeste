@@ -10059,7 +10059,19 @@ mod tests {
                 "The Synapse",
                 "VRC Kmart",
                 "Fran560",
+                "CeleryDinoSauR",
             ]
+        );
+        let artist = credits
+            .iter()
+            .find(|credit| {
+                credit.get("name").and_then(serde_json::Value::as_str)
+                    == Some("CeleryDinoSauR")
+            })
+            .expect("the logo artist is credited");
+        assert_eq!(
+            artist.get("url").and_then(serde_json::Value::as_str),
+            Some("https://vrchat.com/home/user/usr_12af8628-8dbe-4396-89de-0c92cea53782")
         );
     }
 

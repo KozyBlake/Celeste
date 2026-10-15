@@ -163,20 +163,12 @@ pub fn install_desktop_launcher() -> Result<String, String> {
         "{}.desktop",
         celeste_core::identity::DESKTOP_APP_ID
     ));
-    let icon_dir = data_home.join(format!(
-        "icons/hicolor/256x256/apps"
-    ));
-    let icon_file = icon_dir.join(format!(
-        "{}.png",
-        celeste_core::identity::DESKTOP_APP_ID
-    ));
+    let icon_theme_dir = data_home.join("icons/hicolor");
 
     std::fs::create_dir_all(&install_dir)
         .map_err(|error| format!("Could not create {}: {error}", install_dir.display()))?;
     std::fs::create_dir_all(&applications_dir)
         .map_err(|error| format!("Could not create {}: {error}", applications_dir.display()))?;
-    std::fs::create_dir_all(&icon_dir)
-        .map_err(|error| format!("Could not create {}: {error}", icon_dir.display()))?;
 
     let running_executable = std::env::current_exe()
         .map_err(|error| format!("Could not locate the running Celeste executable: {error}"))?;
@@ -205,9 +197,27 @@ pub fn install_desktop_launcher() -> Result<String, String> {
         })?;
     }
 
-    const ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
-    std::fs::write(&icon_file, ICON)
-        .map_err(|error| format!("Could not install {}: {error}", icon_file.display()))?;
+    const ICONS: &[(&str, &[u8])] = &[
+        ("16x16", include_bytes!("../../../assets/icons/celeste-16.png")),
+        ("24x24", include_bytes!("../../../assets/icons/celeste-24.png")),
+        ("32x32", include_bytes!("../../../assets/icons/celeste-32.png")),
+        ("48x48", include_bytes!("../../../assets/icons/celeste-48.png")),
+        ("64x64", include_bytes!("../../../assets/icons/celeste-64.png")),
+        ("128x128", include_bytes!("../../../assets/icons/celeste-128.png")),
+        ("256x256", include_bytes!("../../../assets/icons/celeste-256.png")),
+        ("512x512", include_bytes!("../../../assets/icons/celeste-512.png")),
+    ];
+    for (size, icon) in ICONS {
+        let icon_dir = icon_theme_dir.join(size).join("apps");
+        let icon_file = icon_dir.join(format!(
+            "{}.png",
+            celeste_core::identity::DESKTOP_APP_ID
+        ));
+        std::fs::create_dir_all(&icon_dir)
+            .map_err(|error| format!("Could not create {}: {error}", icon_dir.display()))?;
+        std::fs::write(&icon_file, icon)
+            .map_err(|error| format!("Could not install {}: {error}", icon_file.display()))?;
+    }
 
     let executable = desktop_exec_path(&installed_executable);
     let desktop = format!(
@@ -230,12 +240,28 @@ pub fn install_desktop_launcher() -> Result<String, String> {
     std::fs::write(&desktop_file, desktop)
         .map_err(|error| format!("Could not install {}: {error}", desktop_file.display()))?;
 
-    // Most desktops notice the file immediately. When the Freedesktop cache
-    // utility is present, refresh it now so KDE/GNOME search can find Celeste
-    // without waiting for the next login.
+    // Most desktops notice these files eventually, but launchers and pinned
+    // taskbar entries can retain an old icon until their caches are rebuilt.
+    // Every command is optional and best-effort so minimal distributions can
+    // still install the launcher without pulling in desktop-specific tools.
+    if let Some(update_icons) =
+        celeste_core::tts_voices::find_executable("gtk-update-icon-cache")
+    {
+        let _ = std::process::Command::new(update_icons)
+            .args(["--force", "--ignore-theme-index"])
+            .arg(&icon_theme_dir)
+            .status();
+    }
     if let Some(update_database) = celeste_core::tts_voices::find_executable("update-desktop-database") {
         let _ = std::process::Command::new(update_database)
             .arg(&applications_dir)
+            .status();
+    }
+    if let Some(kbuildsycoca) = celeste_core::tts_voices::find_executable("kbuildsycoca6")
+        .or_else(|| celeste_core::tts_voices::find_executable("kbuildsycoca5"))
+    {
+        let _ = std::process::Command::new(kbuildsycoca)
+            .arg("--noincremental")
             .status();
     }
 
