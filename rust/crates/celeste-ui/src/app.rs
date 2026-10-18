@@ -957,7 +957,7 @@ const TUTORIAL_STEPS: [TutorialStep; 18] = [
         settings_category: None,
         demo_data: true,
         title: "Advisories, columns, and actions",
-        body: "The tour now changes to a busy instance and gradually introduces a user carrying VRChat's Nuisance trust rank, a critical watched-group member, and a risky new account. Advisories can also come from watched users or avatars, suspicious names, pronoun validation, account age, and avatar performance. Click a sortable heading to order rows, drag headings to reorder columns, drag an edge to resize, and right-click a heading to hide or restore columns.",
+        body: "The tour now changes to a busy instance and gradually introduces a user carrying VRChat's Nuisance trust rank, a critical watched-group member, and a risky new account. Advisories can also come from watched users or avatars, suspicious names, pronoun validation, account age, and avatar performance. Click a sortable heading to order rows, drag headings to reorder columns, drag an edge to resize, and right-click a heading to hide or restore columns. The search box above the table, or Ctrl+F, narrows the roster to one person while joins and leaves continue arriving: it matches display name, user ID and worn avatar, and reads decorative fonts, other writing systems and look-alike letters, so the letters visible on a nameplate are the letters to type.",
         try_it: "Compare informational community rows with the Nuisance trust-rank warning and the red critical watched-group warning as they arrive. Open Profile, Ban, Unban, Invite, and similar actions require VRChat API sign-in and suitable group permissions, so external actions remain disabled on these fake rows.",
     },
     TutorialStep {
@@ -1942,6 +1942,16 @@ pub struct CelesteApp {
     /// Active JTable-style header sort. `None` uses Java's default player
     /// order (present, advisory priority, join time).
     table_sort: Option<TableSort>,
+    /// The Instance tab's roster filter: whatever is typed in the search
+    /// box above the player table. Empty means every row is shown, which is
+    /// why this is a filter applied at render time rather than anything
+    /// stored on the roster — joins and leaves keep arriving while it is
+    /// set, and they are matched against it as they land.
+    player_search: String,
+    /// Which instance `player_search` was typed against, so a filter cannot
+    /// outlive the instance it was meant for and silently hide the people
+    /// who just joined the next one.
+    player_search_instance: Option<String>,
     /// Last native window rectangle written to Java's `uiBounds` registry
     /// key. Keeping the previous value avoids rewriting registry.json on
     /// every immediate-mode frame when the window has not moved.
@@ -2199,6 +2209,8 @@ impl CelesteApp {
             column_order,
             column_widths,
             table_sort: None,
+            player_search: String::new(),
+            player_search_instance: None,
             last_window_bounds,
             settings_category: SettingCategory::General,
             settings_search: String::new(),
@@ -3059,14 +3071,27 @@ impl CelesteApp {
                     .and_then(|demo| demo.pending_scroll_target.take())
             })
             .flatten();
+        // A filter typed for the instance you were in must not carry over
+        // into the one you just moved to, where it would hide an entire
+        // roster that simply has nobody of that name in it.
+        let current_location = display_state.instance().map(|instance| instance.location);
+        if self.player_search_instance != current_location {
+            self.player_search_instance = current_location;
+            self.player_search.clear();
+        }
+
         let mut players = display_state.ordered_players();
+        if players.is_empty() {
+            return self.instance_empty_state(ui);
+        }
+        // Counted before filtering: the search box reports what it is
+        // hiding, so a short table is never mistaken for a quiet instance.
+        let roster_total = players.len();
+        let searching = filter_roster(&mut players, &self.player_search);
         sort_players(&mut players, self.table_sort);
         let tutorial_scroll_row = tutorial_scroll_target
             .as_deref()
             .and_then(|target| players.iter().position(|player| player.id == target));
-        if players.is_empty() {
-            return self.instance_empty_state(ui);
-        }
         let (present, left, total) = display_state.status_counts();
         let compact_height = ui.available_height() < 300.0;
         let instance = display_state.instance();
@@ -3142,7 +3167,7 @@ impl CelesteApp {
                             ui.separator();
                             ui.label(
                                 egui::RichText::new(
-                                    "Drag headers to reorder  |  Right-click for columns",
+                                    "Drag headers to reorder  |  Right-click for columns  |  Ctrl+F to find a player",
                                 )
                                 .small()
                                 .weak(),
@@ -3184,19 +3209,107 @@ impl CelesteApp {
         let player_table = Self::card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height((player_panel_height - 24.0).max(0.0));
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("Player details")
                         .strong()
                         .size(crate::theme::TEXT_HEADING),
                 );
                 ui.separator();
-                ui.label(
-                    egui::RichText::new(format!("{} visible columns", column_order.len()))
-                        .small()
-                        .weak(),
-                );
+                if searching {
+                    ui.label(
+                        egui::RichText::new(format!("{} of {roster_total} shown", players.len()))
+                            .small()
+                            .color(crate::theme::INFO),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(format!("{} visible columns", column_order.len()))
+                            .small()
+                            .weak(),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Room for the Clear button, without the field pushing
+                    // the headings off the edge of a narrow window.
+                    let field_width = (ui.available_width() - 64.0).clamp(96.0, 240.0);
+                    // The field needs a stable id for the same reason the
+                    // settings search does: Clear appears with the first
+                    // keystroke, which moves the field, which would change
+                    // an id derived from its position — and egui would hand
+                    // the keyboard focus back after exactly one character.
+                    let response = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.player_search)
+                                .id(player_search_id())
+                                .desired_width(field_width)
+                                .hint_text("Find a player  (Ctrl+F)"),
+                        )
+                        .on_hover_text(
+                            "Matches display name, user id and worn avatar.\nDecorative fonts, other writing systems and look-alike letters are all searched, so typing the letters you can see finds the row.",
+                        );
+                    // Escape is the way out of a search everywhere else;
+                    // only while the caret is actually in the field, so it
+                    // still closes windows the rest of the time.
+                    if response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape))
+                    {
+                        self.player_search.clear();
+                    }
+                    if !self.player_search.is_empty()
+                        && ui.button("Clear").on_hover_text("Clear search").clicked()
+                    {
+                        self.player_search.clear();
+                        // Hand the caret back rather than leaving it
+                        // nowhere once the button disappears.
+                        ui.memory_mut(|memory| memory.request_focus(player_search_id()));
+                    }
+                });
             });
+
+            if players.is_empty() {
+                // A search that matches nobody must not look like an empty
+                // instance: the box above stays exactly where it is, says
+                // what it was looking for, and offers the way back.
+                let query = self.player_search.trim().to_string();
+                let mut clear_search = false;
+                ui.add_space(8.0);
+                let empty_panel_height = ui.available_height();
+                Self::inset_frame()
+                    .inner_margin(egui::Margin::same(crate::theme::GAP))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.set_min_height((empty_panel_height - 12.0).max(0.0));
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(28.0);
+                            ui.label(
+                                egui::RichText::new("No match in this instance")
+                                    .strong()
+                                    .size(crate::theme::TEXT_HEADING),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Nothing matches \"{query}\" — {roster_total} {} listed.",
+                                    if roster_total == 1 {
+                                        "player is"
+                                    } else {
+                                        "players are"
+                                    }
+                                ))
+                                .weak(),
+                            );
+                            ui.add_space(10.0);
+                            if ui.button("Clear search").clicked() {
+                                clear_search = true;
+                            }
+                        });
+                    });
+                if clear_search {
+                    self.player_search.clear();
+                }
+                return;
+            }
+
             ui.add_space(8.0);
             let table_panel_height = ui.available_height();
             Self::inset_frame()
@@ -8587,6 +8700,17 @@ impl eframe::App for CelesteApp {
         self.settings_action_windows(ctx);
         self.utility_windows(ctx);
 
+        // Ctrl+F is where a moderator's hands already go to find someone.
+        // Consumed rather than merely read so it cannot also reach a field
+        // that happens to hold focus, and ignored while the guided tour is
+        // running, because the tour chooses the tab itself.
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+            && self.tutorial_step.is_none()
+        {
+            self.tab = Tab::Instance;
+            ctx.memory_mut(|memory| memory.request_focus(player_search_id()));
+        }
+
         let main_content = egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -8920,6 +9044,29 @@ fn settings_search_id() -> egui::Id {
     egui::Id::new("settings-search")
 }
 
+/// A stable id for the roster search field, and the target Ctrl+F focuses.
+fn player_search_id() -> egui::Id {
+    egui::Id::new("player-search")
+}
+
+/// Narrows `players` to the rows matching the roster search box, and
+/// reports whether a search was in force at all.
+///
+/// Separated from the table so the filtering can be tested without a
+/// window, and kept as a filter over a fresh snapshot each frame rather
+/// than state on the roster itself: the live join and leave events go on
+/// landing in `UiState` untouched, and are matched against the query as
+/// they arrive, so a search over a moving instance cannot fall behind it.
+fn filter_roster(players: &mut Vec<celeste_core::ui::ConnectedPlayer>, query: &str) -> bool {
+    match celeste_core::player_search::PlayerQuery::new(query) {
+        Some(query) => {
+            players.retain(|player| query.matches(player));
+            true
+        }
+        None => false,
+    }
+}
+
 fn commit_text_setting(lost_focus: bool, enter_pressed: bool) -> bool {
     lost_focus || enter_pressed
 }
@@ -9175,6 +9322,93 @@ mod tests {
             row_foreground(&player),
             Some(egui::Color32::from_rgb(200, 30, 30))
         );
+    }
+
+    fn roster_player(id: &str, name: &str) -> celeste_core::ui::ConnectedPlayer {
+        celeste_core::ui::ConnectedPlayer::new(id, name, chrono::Utc::now().naive_utc())
+    }
+
+    fn roster() -> Vec<celeste_core::ui::ConnectedPlayer> {
+        let mut wearing = roster_player("usr_3", "Third");
+        wearing.avatar_name = Some("Crimson Protogen".to_string());
+        let mut departed = roster_player("usr_4", "Blake Elsewhere");
+        departed.left = Some(chrono::Utc::now().naive_utc());
+        vec![
+            roster_player("usr_1", "Blake Belladonna"),
+            roster_player("usr_2", "ＳＡＫＵＲＡ"),
+            wearing,
+            departed,
+        ]
+    }
+
+    #[test]
+    fn an_empty_search_box_leaves_the_roster_alone() {
+        let mut players = roster();
+        assert!(!filter_roster(&mut players, ""));
+        assert_eq!(players.len(), 4);
+        assert!(!filter_roster(&mut players, "   "));
+        assert_eq!(players.len(), 4, "whitespace is not a search");
+    }
+
+    #[test]
+    fn a_search_narrows_the_roster_to_the_rows_that_match() {
+        let mut players = roster();
+        assert!(filter_roster(&mut players, "belladonna"));
+        assert_eq!(
+            players.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["usr_1"]
+        );
+    }
+
+    /// Someone who has just left is exactly who a moderator is looking
+    /// for, so a departed row is searchable like any other.
+    #[test]
+    fn a_search_still_finds_someone_who_has_left() {
+        let mut players = roster();
+        assert!(filter_roster(&mut players, "blake"));
+        assert_eq!(
+            players.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["usr_1", "usr_4"]
+        );
+    }
+
+    /// The decorative-name case reaches the table through the same helper
+    /// the search box uses, not only through the core matcher.
+    #[test]
+    fn a_search_finds_a_decorative_name_by_its_plain_letters() {
+        let mut players = roster();
+        assert!(filter_roster(&mut players, "sakura"));
+        assert_eq!(
+            players.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["usr_2"]
+        );
+    }
+
+    #[test]
+    fn a_search_matches_the_avatar_someone_is_wearing() {
+        let mut players = roster();
+        assert!(filter_roster(&mut players, "protogen"));
+        assert_eq!(
+            players.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["usr_3"]
+        );
+    }
+
+    /// A search matching nobody empties the table, which is why the
+    /// Instance tab has a distinct "no match" panel: the same empty list
+    /// from an empty instance means something completely different.
+    #[test]
+    fn a_search_matching_nobody_is_a_search_not_an_empty_instance() {
+        let mut players = roster();
+        assert!(filter_roster(&mut players, "nobody-by-that-name"));
+        assert!(players.is_empty());
+    }
+
+    /// The search field and the settings field must not share an id, or
+    /// focusing one would move the caret into the other.
+    #[test]
+    fn the_two_search_fields_have_ids_of_their_own() {
+        assert_ne!(player_search_id(), settings_search_id());
     }
 
     #[test]

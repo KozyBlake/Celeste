@@ -39,6 +39,7 @@ Celeste talks to VRChat and Discord because that is the job. Beyond those, the o
 - **Near-instant moderation posts.** Moderation actions (Discord command, UI, or bulk-ban queue) and in-game warns/kicks/bans post to Discord within seconds via burst polling, then settle back to the idle interval.
 - **The full group audit log, rendered.** All 34 VRChat group audit event types get their own title, colour and structured fields rather than a raw JSON dump.
 - **Live instance monitoring.** When VRChat runs on the same machine, Celeste reads the client log and keeps a live player list — joins, leaves, avatar changes, staff and watched-entity badges — in its own Discord thread.
+- **A searchable roster.** Ctrl+F narrows a packed instance to the person you are looking for, matching display name, user ID or worn avatar. Decorative fonts, other writing systems and look-alike letters are all searched, so the letters on the nameplate are the letters you type.
 - **Watched users, groups and avatars**, each with priority, tags, notes, a custom advisory message, and silent/critical modes.
 - **Text-to-speech callouts**, locally or into a Discord voice channel.
 - **Crash-safe data files** with dated backups beside each one.
