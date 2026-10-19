@@ -356,11 +356,15 @@ mod tests {
     fn profiles_are_unique_and_survive_restart() {
         let dir = tempfile::tempdir().unwrap();
         let store = ManagedClientStore::open(dir.path());
-        let mut first = ManagedClientSlot::default();
-        first.profile = 2;
+        let first = ManagedClientSlot {
+            profile: 2,
+            ..Default::default()
+        };
         store.upsert(first.clone()).unwrap();
-        let mut duplicate = ManagedClientSlot::default();
-        duplicate.profile = 2;
+        let duplicate = ManagedClientSlot {
+            profile: 2,
+            ..Default::default()
+        };
         assert!(store.upsert(duplicate).is_err());
         assert_eq!(ManagedClientStore::open(dir.path()).list(), [first]);
     }

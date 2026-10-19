@@ -64,7 +64,7 @@ pub fn group_by_kind(memberships: &[WatchedMembership]) -> Vec<(String, Vec<Watc
     let mut leftovers: Vec<WatchedMembership> =
         memberships.iter().filter(|m| !ORDER.contains(&m.kind.as_str())).cloned().collect();
     if !leftovers.is_empty() {
-        leftovers.sort_by(|a, b| a.label().to_lowercase().cmp(&b.label().to_lowercase()));
+        leftovers.sort_by_key(|entry| entry.label().to_lowercase());
         out.push(("OTHER TYPES".to_string(), leftovers));
     }
     out

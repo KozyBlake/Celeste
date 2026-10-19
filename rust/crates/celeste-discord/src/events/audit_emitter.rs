@@ -605,10 +605,9 @@ impl celeste_events::AuditEmitter for DiscordAuditEmitter {
         location: &str,
         user_id: &str,
         display_name: &str,
-        print_id: &str,
-        file_id: Option<&str>,
-        image_url: Option<&str>,
+        print: celeste_events::SpawnedFile<'_>,
     ) {
+        let celeste_events::SpawnedFile { id: print_id, file_id, image_url } = print;
         let mut embed = self
             .base_embed(audit_type::SPAWN_PRINT)
             .title(format!("{} spawned a print", escape_markdown(display_name)))
@@ -642,10 +641,9 @@ impl celeste_events::AuditEmitter for DiscordAuditEmitter {
         location: &str,
         user_id: &str,
         display_name: &str,
-        emoji_id: &str,
-        file_id: Option<&str>,
-        image_url: Option<&str>,
+        emoji: celeste_events::SpawnedFile<'_>,
     ) {
+        let celeste_events::SpawnedFile { id: emoji_id, file_id, image_url } = emoji;
         let mut embed = self
             .base_embed(audit_type::SPAWN_EMOJI)
             .title(format!("{} spawned an emoji", escape_markdown(display_name)))
@@ -679,11 +677,9 @@ impl celeste_events::AuditEmitter for DiscordAuditEmitter {
         location: &str,
         user_id: &str,
         display_name: &str,
-        prop_id: &str,
-        author_id: Option<&str>,
-        author_name: Option<&str>,
-        image_url: Option<&str>,
+        prop: celeste_events::SpawnedProp<'_>,
     ) {
+        let celeste_events::SpawnedProp { id: prop_id, author_id, author_name, image_url } = prop;
         let mut embed = self
             .base_embed(audit_type::SPAWN_PROP)
             .title(format!("{} spawned a prop", escape_markdown(display_name)))

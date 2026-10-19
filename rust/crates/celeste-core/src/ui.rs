@@ -373,7 +373,7 @@ mod tests {
         departed.set_base_advisory(None, None, 99);
         departed.left = Some(at(300));
 
-        let mut all = vec![departed.clone(), present_low.clone(), present_high.clone()];
+        let mut all = [departed.clone(), present_low.clone(), present_high.clone()];
         all.sort_by(compare_players);
         assert_eq!(all.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["b", "a", "c"]);
     }

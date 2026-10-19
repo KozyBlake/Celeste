@@ -211,8 +211,11 @@ mod tests {
 
     #[test]
     fn structural_panels_are_square_and_only_controls_are_rounded() {
-        assert_eq!(RADIUS_PANEL, 0);
-        assert!(RADIUS_CONTROL > 0 && RADIUS_CONTROL <= 4);
+        let panel = egui::CornerRadius::same(RADIUS_PANEL);
+        let control = egui::CornerRadius::same(RADIUS_CONTROL);
+        assert_eq!(panel, egui::CornerRadius::ZERO, "panels are structural, so square");
+        assert!(control.nw > panel.nw, "controls you can press are rounded");
+        assert!(control.nw <= 4, "control rounding stays subtle");
     }
 
     #[test]

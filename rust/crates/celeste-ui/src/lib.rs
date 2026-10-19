@@ -30,6 +30,6 @@ pub mod state;
 pub mod theme;
 pub mod tts;
 
-pub use app::run;
+pub use app::{run, CelesteAppContext};
 pub use celeste_core::ui::{ConnectedPlayer, InstanceState, PlayerJoin};
 pub use state::UiState;

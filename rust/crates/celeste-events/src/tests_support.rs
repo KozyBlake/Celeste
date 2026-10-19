@@ -137,14 +137,14 @@ impl crate::AuditEmitter for RecordingEmitter {
     async fn emit_user_spawn_sticker(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, s: &str, _f: Option<&str>) {
         self.record(format!("sticker:{u}:{s}"));
     }
-    async fn emit_user_spawn_print(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, p: &str, _f: Option<&str>, _i: Option<&str>) {
-        self.record(format!("print:{u}:{p}"));
+    async fn emit_user_spawn_print(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, p: crate::emitter::SpawnedFile<'_>) {
+        self.record(format!("print:{u}:{}", p.id));
     }
-    async fn emit_user_spawn_emoji(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, e: &str, _f: Option<&str>, _i: Option<&str>) {
-        self.record(format!("emoji:{u}:{e}"));
+    async fn emit_user_spawn_emoji(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, e: crate::emitter::SpawnedFile<'_>) {
+        self.record(format!("emoji:{u}:{}", e.id));
     }
-    async fn emit_user_spawn_prop(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, p: &str, _ai: Option<&str>, _an: Option<&str>, _i: Option<&str>) {
-        self.record(format!("prop:{u}:{p}"));
+    async fn emit_user_spawn_prop(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, p: crate::emitter::SpawnedProp<'_>) {
+        self.record(format!("prop:{u}:{}", p.id));
     }
     async fn emit_user_video(&self, _t: NaiveDateTime, _l: &str, u: &str, _d: &str, url: &str, _title: &str) {
         self.record(format!("video:{u}:{url}"));

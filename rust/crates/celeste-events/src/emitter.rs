@@ -9,6 +9,27 @@
 
 use chrono::NaiveDateTime;
 
+/// What was spawned, for the two spawn events that carry a file: a print or
+/// an emoji. The who/where/when half stays as arguments, because every
+/// emission shares it; this is the half that differs per event.
+#[derive(Debug, Clone, Copy)]
+pub struct SpawnedFile<'a> {
+    /// The print or emoji id.
+    pub id: &'a str,
+    pub file_id: Option<&'a str>,
+    pub image_url: Option<&'a str>,
+}
+
+/// What was spawned, for a prop, which carries its author rather than a
+/// file id.
+#[derive(Debug, Clone, Copy)]
+pub struct SpawnedProp<'a> {
+    pub id: &'a str,
+    pub author_id: Option<&'a str>,
+    pub author_name: Option<&'a str>,
+    pub image_url: Option<&'a str>,
+}
+
 /// Port of the `ScarletDiscordJDA.emitExtended*` surface the event listener
 /// calls, plus `isEmitting`.
 ///
@@ -68,9 +89,7 @@ pub trait AuditEmitter: Send + Sync {
         location: &str,
         user_id: &str,
         display_name: &str,
-        print_id: &str,
-        file_id: Option<&str>,
-        image_url: Option<&str>,
+        print: SpawnedFile<'_>,
     );
     async fn emit_user_spawn_emoji(
         &self,
@@ -78,9 +97,7 @@ pub trait AuditEmitter: Send + Sync {
         location: &str,
         user_id: &str,
         display_name: &str,
-        emoji_id: &str,
-        file_id: Option<&str>,
-        image_url: Option<&str>,
+        emoji: SpawnedFile<'_>,
     );
     async fn emit_user_spawn_prop(
         &self,
@@ -88,10 +105,7 @@ pub trait AuditEmitter: Send + Sync {
         location: &str,
         user_id: &str,
         display_name: &str,
-        prop_id: &str,
-        author_id: Option<&str>,
-        author_name: Option<&str>,
-        image_url: Option<&str>,
+        prop: SpawnedProp<'_>,
     );
     async fn emit_user_video(
         &self,
@@ -132,9 +146,9 @@ impl AuditEmitter for NoopAuditEmitter {
     }
     async fn emit_user_spawn_pedestal(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _c: &str, _i: &str) {}
     async fn emit_user_spawn_sticker(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _s: &str, _f: Option<&str>) {}
-    async fn emit_user_spawn_print(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _p: &str, _f: Option<&str>, _i: Option<&str>) {}
-    async fn emit_user_spawn_emoji(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _e: &str, _f: Option<&str>, _i: Option<&str>) {}
-    async fn emit_user_spawn_prop(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _p: &str, _ai: Option<&str>, _an: Option<&str>, _i: Option<&str>) {}
+    async fn emit_user_spawn_print(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _p: SpawnedFile<'_>) {}
+    async fn emit_user_spawn_emoji(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _e: SpawnedFile<'_>) {}
+    async fn emit_user_spawn_prop(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _p: SpawnedProp<'_>) {}
     async fn emit_user_video(&self, _t: NaiveDateTime, _l: &str, _u: &str, _d: &str, _url: &str, _title: &str) {}
 }
 

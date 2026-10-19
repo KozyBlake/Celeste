@@ -101,6 +101,75 @@ pub enum LoginOutcome {
     RequiresTwoFactor(Vec<String>),
 }
 
+/// The optional filters VRChat's `getGroupAuditLogs` accepts.
+///
+/// Gathered into one value rather than passed as five positional arguments:
+/// three of them are `Option<&str>`, so the compiler cannot tell them apart,
+/// and the call sites read as a row of bare `None`s whose meaning depends on
+/// counting commas. `GroupAuditLogFilter::between(..).of_types(..)` says
+/// which filter is which.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GroupAuditLogFilter<'a> {
+    pub start_date: Option<DateTime<Utc>>,
+    pub end_date: Option<DateTime<Utc>>,
+    /// Comma-separated ids, passed through unchanged because the API accepts
+    /// several values in one parameter.
+    pub actor_ids: Option<&'a str>,
+    /// Comma-separated audit event types, same convention as `actor_ids`.
+    pub event_types: Option<&'a str>,
+    /// Comma-separated ids of what was acted upon, same convention.
+    pub target_ids: Option<&'a str>,
+}
+
+impl<'a> GroupAuditLogFilter<'a> {
+    /// Everything inside a time window, which is what every caller starts
+    /// from. `Default::default()` is the unfiltered whole log.
+    #[must_use]
+    pub fn between(start_date: DateTime<Utc>, end_date: DateTime<Utc>) -> Self {
+        Self {
+            start_date: Some(start_date),
+            end_date: Some(end_date),
+            ..Self::default()
+        }
+    }
+
+    /// Narrow to entries performed by `actor_ids` (comma-separated).
+    #[must_use]
+    pub fn by_actors(mut self, actor_ids: &'a str) -> Self {
+        self.actor_ids = Some(actor_ids);
+        self
+    }
+
+    /// Narrow to entries of `event_types` (comma-separated).
+    #[must_use]
+    pub fn of_types(mut self, event_types: &'a str) -> Self {
+        self.event_types = Some(event_types);
+        self
+    }
+
+    /// Narrow to entries acting on `target_ids` (comma-separated).
+    #[must_use]
+    pub fn about_targets(mut self, target_ids: &'a str) -> Self {
+        self.target_ids = Some(target_ids);
+        self
+    }
+}
+
+/// The body of `createGroupPost`.
+///
+/// A struct rather than six positional arguments because `title`, `text` and
+/// `visibility` are all `&str`: swapping two of them at a call site compiles
+/// cleanly and posts the wrong thing to a group.
+#[derive(Debug, Clone, Copy)]
+pub struct NewGroupPost<'a> {
+    pub title: &'a str,
+    pub text: &'a str,
+    pub visibility: &'a str,
+    pub send_notification: bool,
+    pub image_id: Option<&'a str>,
+    pub role_id: Option<&'a str>,
+}
+
 pub struct VrChatClient {
     http: Client,
     base_url: String,
@@ -390,7 +459,7 @@ impl VrChatClient {
         n: u32,
         offset: u32,
     ) -> Result<PaginatedGroupAuditLogEntryList, VrChatError> {
-        self.get_group_audit_logs_filtered(group_id, n, offset, None, None, None, None, None)
+        self.get_group_audit_logs_filtered(group_id, n, offset, &GroupAuditLogFilter::default())
             .await
     }
 
@@ -403,26 +472,22 @@ impl VrChatClient {
         group_id: &str,
         n: u32,
         offset: u32,
-        start_date: Option<DateTime<Utc>>,
-        end_date: Option<DateTime<Utc>>,
-        actor_ids: Option<&str>,
-        event_types: Option<&str>,
-        target_ids: Option<&str>,
+        filter: &GroupAuditLogFilter<'_>,
     ) -> Result<PaginatedGroupAuditLogEntryList, VrChatError> {
         let mut query = vec![("n", n.to_string()), ("offset", offset.to_string())];
-        if let Some(start_date) = start_date {
+        if let Some(start_date) = filter.start_date {
             query.push(("startDate", start_date.to_rfc3339()));
         }
-        if let Some(end_date) = end_date {
+        if let Some(end_date) = filter.end_date {
             query.push(("endDate", end_date.to_rfc3339()));
         }
-        if let Some(actor_ids) = actor_ids.filter(|value| !value.trim().is_empty()) {
+        if let Some(actor_ids) = filter.actor_ids.filter(|value| !value.trim().is_empty()) {
             query.push(("actorIds", actor_ids.to_string()));
         }
-        if let Some(event_types) = event_types.filter(|value| !value.trim().is_empty()) {
+        if let Some(event_types) = filter.event_types.filter(|value| !value.trim().is_empty()) {
             query.push(("eventTypes", event_types.to_string()));
         }
-        if let Some(target_ids) = target_ids.filter(|value| !value.trim().is_empty()) {
+        if let Some(target_ids) = filter.target_ids.filter(|value| !value.trim().is_empty()) {
             query.push(("targetIds", target_ids.to_string()));
         }
         let response = self
@@ -439,27 +504,14 @@ impl VrChatClient {
     pub async fn query_group_audit_logs(
         &self,
         group_id: &str,
-        start_date: DateTime<Utc>,
-        end_date: DateTime<Utc>,
-        actor_ids: Option<&str>,
-        event_types: Option<&str>,
-        target_ids: Option<&str>,
+        filter: &GroupAuditLogFilter<'_>,
     ) -> Result<Vec<crate::models::GroupAuditLogEntry>, VrChatError> {
         const PAGE_SIZE: u32 = 100;
         let mut offset = 0;
         let mut entries = Vec::new();
         loop {
             let page = self
-                .get_group_audit_logs_filtered(
-                    group_id,
-                    PAGE_SIZE,
-                    offset,
-                    Some(start_date),
-                    Some(end_date),
-                    actor_ids,
-                    event_types,
-                    target_ids,
-                )
+                .get_group_audit_logs_filtered(group_id, PAGE_SIZE, offset, filter)
                 .await?;
             entries.extend(page.results);
             if !page.has_next {
@@ -475,23 +527,10 @@ impl VrChatClient {
     pub async fn count_group_audit_logs(
         &self,
         group_id: &str,
-        start_date: DateTime<Utc>,
-        end_date: DateTime<Utc>,
-        actor_ids: Option<&str>,
-        event_types: Option<&str>,
-        target_ids: Option<&str>,
+        filter: &GroupAuditLogFilter<'_>,
     ) -> Result<i64, VrChatError> {
         Ok(self
-            .get_group_audit_logs_filtered(
-                group_id,
-                0,
-                0,
-                Some(start_date),
-                Some(end_date),
-                actor_ids,
-                event_types,
-                target_ids,
-            )
+            .get_group_audit_logs_filtered(group_id, 0, 0, filter)
             .await?
             .total_count)
     }
@@ -1169,23 +1208,18 @@ impl VrChatClient {
     pub async fn create_group_post(
         &self,
         group_id: &str,
-        title: &str,
-        text: &str,
-        visibility: &str,
-        send_notification: bool,
-        image_id: Option<&str>,
-        role_id: Option<&str>,
+        post: &NewGroupPost<'_>,
     ) -> Result<crate::models::GroupPost, VrChatError> {
         let mut body = serde_json::json!({
-            "title": title,
-            "text": text,
-            "visibility": visibility,
-            "sendNotification": send_notification,
+            "title": post.title,
+            "text": post.text,
+            "visibility": post.visibility,
+            "sendNotification": post.send_notification,
         });
-        if let Some(role_id) = role_id {
+        if let Some(role_id) = post.role_id {
             body["roleIds"] = serde_json::json!([role_id]);
         }
-        if let Some(image_id) = image_id {
+        if let Some(image_id) = post.image_id {
             body["imageId"] = serde_json::json!(image_id);
         }
         let response = self
@@ -3154,12 +3188,14 @@ mod tests {
         let post = client
             .create_group_post(
                 "grp_1",
-                "Hello",
-                "World",
-                "group",
-                false,
-                Some("file_1"),
-                Some("grol_1"),
+                &NewGroupPost {
+                    title: "Hello",
+                    text: "World",
+                    visibility: "group",
+                    send_notification: false,
+                    image_id: Some("file_1"),
+                    role_id: Some("grol_1"),
+                },
             )
             .await
             .unwrap();
@@ -3358,11 +3394,10 @@ mod tests {
         let entries = client
             .query_group_audit_logs(
                 "grp_1",
-                start,
-                end,
-                Some("usr_actor"),
-                Some("group.user.ban"),
-                Some("usr_target"),
+                &GroupAuditLogFilter::between(start, end)
+                    .by_actors("usr_actor")
+                    .of_types("group.user.ban")
+                    .about_targets("usr_target"),
             )
             .await
             .unwrap();

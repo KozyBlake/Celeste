@@ -1230,7 +1230,7 @@ impl CelesteEventListener {
     ///
     /// Both arrive in the same `/users/{id}/groups` response that produces
     /// the match, so carrying them costs nothing extra.
-
+    ///
     /// Java additionally repeats the lookup under each configured alternate
     /// VRChat account, so a membership hidden from the main account can
     /// still be seen. Alt accounts aren't ported (see PORTING.md), so this
@@ -1512,10 +1512,12 @@ impl CelesteEventListener {
                 &location,
                 &user_id,
                 &display_name,
-                &prop_id,
-                author_id,
-                author_name,
-                image_url,
+                crate::emitter::SpawnedProp {
+                    id: &prop_id,
+                    author_id,
+                    author_name,
+                    image_url,
+                },
             )
             .await;
         self.deps.data.custom_event_new(
@@ -1595,7 +1597,13 @@ impl CelesteEventListener {
         let location = self.client_location.clone().unwrap_or_default();
         self.deps
             .emitter
-            .emit_user_spawn_print(timestamp, &location, &owner_id, &display_name, print_id, file_id, image_url)
+            .emit_user_spawn_print(
+                timestamp,
+                &location,
+                &owner_id,
+                &display_name,
+                crate::emitter::SpawnedFile { id: print_id, file_id, image_url },
+            )
             .await;
         self.deps.data.custom_event_new(
             audit_type::SPAWN_PRINT,
@@ -1631,7 +1639,13 @@ impl CelesteEventListener {
         let location = self.client_location.clone().unwrap_or_default();
         self.deps
             .emitter
-            .emit_user_spawn_emoji(timestamp, &location, user_id, &display_name, inventory_id, file_id, image_url)
+            .emit_user_spawn_emoji(
+                timestamp,
+                &location,
+                user_id,
+                &display_name,
+                crate::emitter::SpawnedFile { id: inventory_id, file_id, image_url },
+            )
             .await;
         self.deps.data.custom_event_new(
             audit_type::SPAWN_EMOJI,

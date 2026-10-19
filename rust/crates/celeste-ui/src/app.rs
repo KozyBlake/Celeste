@@ -2033,24 +2033,19 @@ impl CelesteApp {
     /// the caller and handed in; this used to open its own copies here,
     /// which meant the GUI and the event listener would have been looking
     /// at two different in-memory views of the same files.
-    pub fn new(
-        state: UiState,
-        shared: celeste_discord::data::SharedState,
-        data_dir: PathBuf,
-        runtime_handle: tokio::runtime::Handle,
-        tts: Arc<crate::tts::TtsService>,
-        tts_route: Arc<crate::tts::TtsSinkAdapter>,
-        pronoun_lists: Arc<celeste_core::pronoun_lists::PronounLists>,
-        two_factor_tx: std::sync::mpsc::Sender<(
-            Arc<celeste_vrchat::client::VrChatClient>,
-            Vec<String>,
-        )>,
-        two_factor_rx: std::sync::mpsc::Receiver<(
-            Arc<celeste_vrchat::client::VrChatClient>,
-            Vec<String>,
-        )>,
-        managed_clients: Arc<celeste_vrchat::managed_clients::ManagedClientStore>,
-    ) -> Self {
+    pub fn new(context: CelesteAppContext) -> Self {
+        let CelesteAppContext {
+            state,
+            shared,
+            data_dir,
+            runtime_handle,
+            tts,
+            tts_route,
+            pronoun_lists,
+            two_factor_tx,
+            two_factor_rx,
+            managed_clients,
+        } = context;
         let celeste_data = shared.celeste_data.clone();
         let staff_list = shared.staff_list.clone();
         let secret_staff_list = shared.secret_staff_list.clone();
@@ -3718,7 +3713,7 @@ impl CelesteApp {
                         .clicked()
                     {
                         ui.ctx().copy_text(evidence.clone());
-                        self.state.append_cli_output(&format!(
+                        self.state.append_cli_output(format!(
                             "Copied avatar report evidence for {}.",
                             view.player_name
                         ));
@@ -3865,7 +3860,7 @@ impl CelesteApp {
         if let Some(text) = copy {
             ctx.copy_text(text);
             self.state
-                .append_cli_output(&format!("Copied {player_name}'s watched groups."));
+                .append_cli_output(format!("Copied {player_name}'s watched groups."));
         }
         if !open {
             self.watched_groups_open = None;
@@ -6534,12 +6529,12 @@ impl CelesteApp {
             // No profile was ever chosen: show everything.
             return true;
         };
-        match (profile.as_str(), needs) {
-            ("local_logger", _) => false,
-            ("vrchat_only", TutorialNeeds::Discord) => false,
-            ("discord_only", TutorialNeeds::VrChat) => false,
-            _ => true,
-        }
+        !matches!(
+            (profile.as_str(), needs),
+            ("local_logger", _)
+                | ("vrchat_only", TutorialNeeds::Discord)
+                | ("discord_only", TutorialNeeds::VrChat)
+        )
     }
 
     fn tutorial_uses_demo_data(&self) -> bool {
@@ -7944,13 +7939,14 @@ impl CelesteApp {
                     .selected_text(selected)
                     .width(CONTROL_WIDTH - 24.0)
                     .show_ui(ui, |ui| {
-                        if descriptor.id() != "graphics_renderer" {
-                            if ui
+                        // Short-circuits, so the row is not drawn at all for
+                        // the renderer setting, which has no "system default".
+                        if descriptor.id() != "graphics_renderer"
+                            && ui
                                 .selectable_value(&mut current, String::new(), "System default")
                                 .changed()
-                            {
-                                descriptor.set_from_string("", "ui");
-                            }
+                        {
+                            descriptor.set_from_string("", "ui");
                         }
                         if values.is_empty() {
                             ui.weak("(nothing installed)");
@@ -8160,7 +8156,7 @@ impl CelesteApp {
         match op.as_str() {
             "check" => {
                 let report = self.readiness_report();
-                self.state.append_cli_output(&report.to_text());
+                self.state.append_cli_output(report.to_text());
             }
             "help" | "info" => self.state.append_cli_output(
                 "Celeste CLI commands:\n  help/info                 show this list\n  check                    check what is working and what is not\n  logout                   log out of VRChat\n  exit/halt/quit/stop       stop Celeste\n  reboot/restart            restart Celeste\n  explore                  open the data folder\n  tts <text>               speak text\n  link <usr_id> <snowflake> link VRChat and Discord users\n  importgroups <file|URL>   import watched groups CSV\n  importgroupsjson <file|URL> import watched groups JSON\n  clear                    clear this output",
@@ -9076,7 +9072,7 @@ fn commit_text_setting(lost_focus: bool, enter_pressed: bool) -> bool {
 
 fn row_background(player: &celeste_core::ui::ConnectedPlayer) -> Option<egui::Color32> {
     (player.pronouns_flagged && player.left.is_none() && player.text_color.is_none())
-        .then(|| crate::theme::PRONOUNS_FLAGGED_FILL)
+        .then_some(crate::theme::PRONOUNS_FLAGGED_FILL)
 }
 
 /// Port of `getOverrideForegroundColor` in `ScarletUI.java:787-813`. The
@@ -9088,29 +9084,38 @@ fn row_foreground(player: &celeste_core::ui::ConnectedPlayer) -> Option<egui::Co
     }
     player
         .pronouns_flagged
-        .then(|| crate::theme::PRONOUNS_FLAGGED_TEXT)
+        .then_some(crate::theme::PRONOUNS_FLAGGED_TEXT)
+}
+
+/// Everything the main window needs, all of it built before the window
+/// exists. One value rather than ten positional arguments threaded through
+/// `run` into `CelesteApp::new`: most of them are `Arc<_>` handles that a
+/// call site could silently reorder.
+pub struct CelesteAppContext {
+    pub state: UiState,
+    pub shared: celeste_discord::data::SharedState,
+    pub data_dir: PathBuf,
+    pub runtime_handle: tokio::runtime::Handle,
+    pub tts: Arc<crate::tts::TtsService>,
+    pub tts_route: Arc<crate::tts::TtsSinkAdapter>,
+    pub pronoun_lists: Arc<celeste_core::pronoun_lists::PronounLists>,
+    pub two_factor_tx: std::sync::mpsc::Sender<(
+        Arc<celeste_vrchat::client::VrChatClient>,
+        Vec<String>,
+    )>,
+    pub two_factor_rx: std::sync::mpsc::Receiver<(
+        Arc<celeste_vrchat::client::VrChatClient>,
+        Vec<String>,
+    )>,
+    pub managed_clients: Arc<celeste_vrchat::managed_clients::ManagedClientStore>,
 }
 
 pub fn run(
-    state: UiState,
-    shared: celeste_discord::data::SharedState,
-    data_dir: PathBuf,
-    runtime_handle: tokio::runtime::Handle,
-    tts: Arc<crate::tts::TtsService>,
-    tts_route: Arc<crate::tts::TtsSinkAdapter>,
-    pronoun_lists: Arc<celeste_core::pronoun_lists::PronounLists>,
-    two_factor_tx: std::sync::mpsc::Sender<(
-        Arc<celeste_vrchat::client::VrChatClient>,
-        Vec<String>,
-    )>,
-    two_factor_rx: std::sync::mpsc::Receiver<(
-        Arc<celeste_vrchat::client::VrChatClient>,
-        Vec<String>,
-    )>,
-    managed_clients: Arc<celeste_vrchat::managed_clients::ManagedClientStore>,
+    context: CelesteAppContext,
     renderer_preference: &str,
 ) -> eframe::Result<()> {
-    let bounds = shared
+    let bounds = context
+        .shared
         .settings
         .ui_bounds
         .get_or_null()
@@ -9119,7 +9124,7 @@ pub fn run(
     // bundled Celeste mark without a rebuild.
     let mut viewport =
         egui::ViewportBuilder::default().with_app_id(celeste_core::identity::DESKTOP_APP_ID);
-    if let Some(icon) = load_window_icon(&data_dir) {
+    if let Some(icon) = load_window_icon(&context.data_dir) {
         viewport = viewport.with_icon(icon);
     }
     if let Some(bounds) = bounds {
@@ -9134,7 +9139,7 @@ pub fn run(
     viewport = viewport.with_min_inner_size([560.0, 360.0]);
     tracing::info!(
         preference = %renderer_preference,
-        renderer = crate::platform::native_renderer_label(&renderer_preference),
+        renderer = crate::platform::native_renderer_label(renderer_preference),
         "Celeste graphics renderer selected"
     );
     let options = eframe::NativeOptions {
@@ -9158,18 +9163,7 @@ pub fn run(
                     "Celeste graphics adapter selected"
                 );
             }
-            Ok(Box::new(CelesteApp::new(
-                state,
-                shared,
-                data_dir,
-                runtime_handle,
-                tts,
-                tts_route,
-                pronoun_lists,
-                two_factor_tx,
-                two_factor_rx,
-                managed_clients,
-            )))
+            Ok(Box::new(CelesteApp::new(context)))
         }),
     )
 }
@@ -9884,11 +9878,13 @@ mod tests {
 
     #[test]
     fn group_instance_request_matches_java_wire_shape() {
-        let mut form = CreateInstanceForm::default();
-        form.kind = InstanceKind::GroupPlus;
-        form.age_gate = true;
-        form.avatar_gate = "Good".into();
-        form.display_name = "Movie night".into();
+        let form = CreateInstanceForm {
+            kind: InstanceKind::GroupPlus,
+            age_gate: true,
+            avatar_gate: "Good".into(),
+            display_name: "Movie night".into(),
+            ..Default::default()
+        };
         let request = create_instance_request(
             &form,
             "wrld_01234567-89ab-cdef-0123-456789abcdef",
@@ -9904,8 +9900,10 @@ mod tests {
 
     #[test]
     fn invite_plus_request_is_personal_and_requestable() {
-        let mut form = CreateInstanceForm::default();
-        form.kind = InstanceKind::InvitePlus;
+        let form = CreateInstanceForm {
+            kind: InstanceKind::InvitePlus,
+            ..Default::default()
+        };
         let request = create_instance_request(
             &form,
             "wrld_01234567-89ab-cdef-0123-456789abcdef",

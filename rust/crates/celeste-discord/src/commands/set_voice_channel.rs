@@ -19,7 +19,7 @@ pub fn register() -> CreateCommand {
         ).channel_types(vec![ChannelType::Voice]))
 }
 
-fn selected_channel<'a>(command: &'a CommandInteraction) -> Option<&'a PartialChannel> {
+fn selected_channel(command: &CommandInteraction) -> Option<&PartialChannel> {
     command
         .data
         .options()

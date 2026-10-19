@@ -11,6 +11,8 @@ use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedValue};
 use serenity::model::channel::{AutoArchiveDuration, ChannelType};
 
+use celeste_vrchat::client::GroupAuditLogFilter;
+
 use crate::data::{CelesteDataKey, SecretStaffListKey, SettingsKey};
 
 pub const MODERATION_LOG_NAME: &str = "moderation-log";
@@ -129,7 +131,10 @@ pub async fn run_query_target(ctx: &Context, command: &CommandInteraction) -> se
     let from = to - Duration::days(days_back);
     let entries = match context
         .client
-        .query_group_audit_logs(&context.group_id, from, to, None, None, Some(&vrc_id))
+        .query_group_audit_logs(
+            &context.group_id,
+            &GroupAuditLogFilter::between(from, to).about_targets(&vrc_id),
+        )
         .await
     {
         Ok(entries) => entries,
@@ -253,7 +258,10 @@ pub async fn run_query_actor(ctx: &Context, command: &CommandInteraction) -> ser
     let from = to - Duration::days(days_back);
     let entries = match context
         .client
-        .query_group_audit_logs(&context.group_id, from, to, Some(&vrc_id), None, None)
+        .query_group_audit_logs(
+            &context.group_id,
+            &GroupAuditLogFilter::between(from, to).by_actors(&vrc_id),
+        )
         .await
     {
         Ok(entries) => entries,
@@ -357,11 +365,9 @@ pub async fn run_actor_summary(
             .client
             .count_group_audit_logs(
                 &context.group_id,
-                from,
-                to,
-                Some(&vrc_id),
-                Some(event_type),
-                None,
+                &GroupAuditLogFilter::between(from, to)
+                    .by_actors(&vrc_id)
+                    .of_types(event_type),
             )
             .await;
         counts.push(format!(

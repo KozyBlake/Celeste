@@ -123,8 +123,11 @@ enum Stage {
     Done,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SetupProfile {
+    /// The wizard's starting point: the profile question has not been
+    /// answered yet, so nothing is hidden.
+    #[default]
     Full,
     VrChatOnly,
     DiscordOnly,
@@ -149,12 +152,6 @@ enum SetupWindowLayout {
     LegacyImport,
     Discord,
     Finish,
-}
-
-impl Default for SetupProfile {
-    fn default() -> Self {
-        Self::Full
-    }
 }
 
 /// What the wizard did this frame, decided during rendering and applied
@@ -1399,11 +1396,7 @@ impl SetupWizard {
                             } => render_legacy_import_stage(
                                 ui,
                                 &self.settings.data_dir,
-                                detected,
-                                archive,
-                                overlaps,
-                                mode,
-                                error,
+                                LegacyImportState { detected, archive, overlaps, mode, error },
                                 &mut action,
                             ),
                             Stage::SetupProfile { selected } => {
@@ -1783,16 +1776,24 @@ fn render_vibecoded_notice(ui: &mut egui::Ui, action: &mut Action) {
     });
 }
 
+/// The legacy-import stage's own mutable state, lent to the renderer for
+/// one frame. Grouped because these five always travel together and four of
+/// them are `&mut Option<..>`, which positional arguments cannot keep apart.
+struct LegacyImportState<'a> {
+    detected: &'a mut Option<std::path::PathBuf>,
+    archive: &'a mut Option<std::path::PathBuf>,
+    overlaps: &'a mut Vec<String>,
+    mode: &'a mut celeste_core::legacy_import::ImportMode,
+    error: &'a mut Option<String>,
+}
+
 fn render_legacy_import_stage(
     ui: &mut egui::Ui,
     destination: &std::path::Path,
-    detected: &mut Option<std::path::PathBuf>,
-    archive: &mut Option<std::path::PathBuf>,
-    overlaps: &mut Vec<String>,
-    mode: &mut celeste_core::legacy_import::ImportMode,
-    error: &mut Option<String>,
+    state: LegacyImportState<'_>,
     action: &mut Action,
 ) {
+    let LegacyImportState { detected, archive, overlaps, mode, error } = state;
     ui.heading("Bring your Scarlet data into Celeste");
     ui.add_space(8.0);
     ui.label(

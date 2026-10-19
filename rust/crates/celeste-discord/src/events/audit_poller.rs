@@ -16,6 +16,7 @@ use celeste_core::moderation_tags::ModerationTags;
 use celeste_core::settings::Settings;
 use celeste_core::staff_list::StaffList;
 use celeste_core::watched_entities::WatchedEntities;
+use celeste_vrchat::client::GroupAuditLogFilter;
 use celeste_vrchat::models::GroupAuditLogEntry;
 use serenity::builder::{
     CreateActionRow, CreateAllowedMentions, CreateButton, CreateEmbed, CreateEmbedAuthor,
@@ -48,17 +49,20 @@ pub struct AuditPoller {
 }
 
 impl AuditPoller {
-    pub fn new(
-        vrchat: SharedVrChatClient,
-        http: SharedHttp,
-        config: Arc<DiscordConfigStore>,
-        data: Arc<CelesteData>,
-        settings: Arc<Settings>,
-        secret_staff: Arc<StaffList>,
-        moderation_tags: Arc<ModerationTags>,
-        watched_users: Arc<WatchedEntities>,
-    ) -> Self {
-        Self { vrchat, http, config, data, settings, secret_staff, moderation_tags, watched_users }
+    /// Every dependency the poller has is one the rest of the process
+    /// already shares, so it takes the bundle rather than eight clones
+    /// whose order a caller has to get right.
+    pub fn new(shared: &crate::data::SharedState) -> Self {
+        Self {
+            vrchat: shared.vrchat_client.clone(),
+            http: shared.http.clone(),
+            config: shared.discord_config.clone(),
+            data: shared.celeste_data.clone(),
+            settings: shared.settings.clone(),
+            secret_staff: shared.secret_staff_list.clone(),
+            moderation_tags: shared.moderation_tags.clone(),
+            watched_users: shared.watched_users.clone(),
+        }
     }
 
     fn group_id(&self) -> Option<String> {
@@ -81,7 +85,7 @@ impl AuditPoller {
         }
         let (from, to, mut next_cursor) = query_window(cursor, now);
         let entries = client
-            .query_group_audit_logs(&group_id, from, to, None, None, None)
+            .query_group_audit_logs(&group_id, &GroupAuditLogFilter::between(from, to))
             .await?;
         for entry in entries {
             next_cursor = next_cursor.max(entry.created_at);
@@ -304,11 +308,9 @@ impl AuditPoller {
         let entries = match client
             .query_group_audit_logs(
                 &group_id,
-                now - Duration::days(i64::from(period_days)),
-                now,
-                None,
-                Some("group.instance.kick"),
-                Some(&target.id),
+                &GroupAuditLogFilter::between(now - Duration::days(i64::from(period_days)), now)
+                    .of_types("group.instance.kick")
+                    .about_targets(&target.id),
             )
             .await
         {

@@ -20,5 +20,8 @@ pub mod emitter;
 mod tests_support;
 pub mod listener;
 
-pub use emitter::{AuditEmitter, AvatarSearch, NoAvatarSearch, NoopAuditEmitter, NoopTts, SearchedAvatar, TtsSink};
+pub use emitter::{
+    AuditEmitter, AvatarSearch, NoAvatarSearch, NoopAuditEmitter, NoopTts, SearchedAvatar,
+    SpawnedFile, SpawnedProp, TtsSink,
+};
 pub use listener::CelesteEventListener;

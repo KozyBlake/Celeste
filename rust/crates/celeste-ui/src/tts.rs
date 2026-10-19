@@ -379,7 +379,14 @@ pub struct TtsService {
     nuisance_alert: Option<PathBuf>,
 }
 
+impl Default for TtsService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TtsService {
+    #[must_use]
     pub fn new() -> Self {
         let engine = Engine::detect();
         let engine_name = engine.as_ref().map(Engine::name);

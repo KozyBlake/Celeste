@@ -102,7 +102,7 @@ impl Report {
     pub fn problems(&self) -> Vec<&Finding> {
         let mut problems: Vec<&Finding> =
             self.findings.iter().filter(|finding| finding.severity != Severity::Ok).collect();
-        problems.sort_by(|left, right| right.severity.cmp(&left.severity));
+        problems.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
         problems
     }
 

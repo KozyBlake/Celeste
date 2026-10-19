@@ -318,16 +318,7 @@ fn run() -> anyhow::Result<()> {
     // This is separate from the local output-log listener above: it is what
     // creates durable moderation records and Discord moderation threads.
     runtime.spawn(celeste_discord::events::audit_poller::run(
-        celeste_discord::events::audit_poller::AuditPoller::new(
-            shared.vrchat_client.clone(),
-            shared.http.clone(),
-            shared.discord_config.clone(),
-            shared.celeste_data.clone(),
-            settings.clone(),
-            shared.secret_staff_list.clone(),
-            shared.moderation_tags.clone(),
-            shared.watched_users.clone(),
-        ),
+        celeste_discord::events::audit_poller::AuditPoller::new(&shared),
     ));
 
     // Report the VRChat session in the status bar. Whether the session
@@ -456,16 +447,18 @@ fn run() -> anyhow::Result<()> {
             let _ = celeste_ui::dialogs::info_message("Celeste graphics recovery", message);
         }
         let window_result = celeste_ui::run(
-            ui_state,
-            shared,
-            data_dir,
-            runtime.handle().clone(),
-            tts,
-            tts_route,
-            pronoun_lists,
-            two_factor_tx,
-            two_factor_rx,
-            managed_clients,
+            celeste_ui::CelesteAppContext {
+                state: ui_state,
+                shared,
+                data_dir,
+                runtime_handle: runtime.handle().clone(),
+                tts,
+                tts_route,
+                pronoun_lists,
+                two_factor_tx,
+                two_factor_rx,
+                managed_clients,
+            },
             &renderer_preference,
         );
         match window_result {
@@ -801,7 +794,7 @@ fn spawn_vrchat_session_watchdog(
             if must_recover {
                 let now = std::time::Instant::now();
                 let retry_ready = last_recovery_attempt
-                    .map_or(true, |last| now.duration_since(last) >= RECOVERY_RETRY);
+                    .is_none_or(|last| now.duration_since(last) >= RECOVERY_RETRY);
                 if retry_ready {
                     last_recovery_attempt = Some(now);
                     tracing::warn!("VRChat session is no longer authorized; attempting unattended recovery");

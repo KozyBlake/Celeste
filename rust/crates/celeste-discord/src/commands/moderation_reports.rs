@@ -11,6 +11,8 @@ use serenity::client::Context;
 use serenity::model::application::{CommandInteraction, CommandOptionType, ResolvedValue};
 use serenity::model::channel::AutoArchiveDuration;
 
+use celeste_vrchat::client::GroupAuditLogFilter;
+
 use crate::data::{CelesteDataKey, SecretStaffListKey, SettingsKey, StaffListKey};
 
 pub const SUMMARY_NAME: &str = "moderation-summary";
@@ -73,11 +75,9 @@ pub async fn run_summary(ctx: &Context, command: &CommandInteraction) -> serenit
         .client
         .query_group_audit_logs(
             &context.group_id,
-            start,
-            end,
-            None,
-            Some("group.instance.kick,group.instance.warn,group.user.ban,group.invite.create"),
-            None,
+            &GroupAuditLogFilter::between(start, end).of_types(
+                "group.instance.kick,group.instance.warn,group.user.ban,group.invite.create",
+            ),
         )
         .await
     {
@@ -134,11 +134,9 @@ pub async fn run_summary(ctx: &Context, command: &CommandInteraction) -> serenit
         .client
         .query_group_audit_logs(
             &context.group_id,
-            start,
-            end,
-            None,
-            Some("group.member.join,group.member.leave,group.member.remove,group.invite.create"),
-            None,
+            &GroupAuditLogFilter::between(start, end).of_types(
+                "group.member.join,group.member.leave,group.member.remove,group.invite.create",
+            ),
         )
         .await
         .unwrap_or_default();
@@ -277,11 +275,7 @@ pub async fn run_outstanding(ctx: &Context, command: &CommandInteraction) -> ser
         .client
         .query_group_audit_logs(
             &context.group_id,
-            start,
-            end,
-            None,
-            Some(&event_types),
-            None,
+            &GroupAuditLogFilter::between(start, end).of_types(&event_types),
         )
         .await
     {

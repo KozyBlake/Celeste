@@ -784,17 +784,19 @@ mod tests {
     /// break a test.
     #[test]
     fn metadata_json_keys_match_javas_field_names() {
-        let mut meta = AuditEntryMetadata::default();
-        meta.guild_snowflake = Some("1".into());
-        meta.channel_snowflake = Some("2".into());
-        meta.message_snowflake = Some("3".into());
-        meta.thread_snowflake = Some("4".into());
-        meta.aux_message_snowflake = Some("5".into());
-        meta.entry_description = Some("d".into());
-        meta.entry_redacted = true;
-        meta.aux_actor_id = Some("usr_1".into());
-        meta.aux_actor_display_name = Some("Someone".into());
-        meta.parent_event_id = Some("p".into());
+        let meta = AuditEntryMetadata {
+            guild_snowflake: Some("1".into()),
+            channel_snowflake: Some("2".into()),
+            message_snowflake: Some("3".into()),
+            thread_snowflake: Some("4".into()),
+            aux_message_snowflake: Some("5".into()),
+            entry_description: Some("d".into()),
+            entry_redacted: true,
+            aux_actor_id: Some("usr_1".into()),
+            aux_actor_display_name: Some("Someone".into()),
+            parent_event_id: Some("p".into()),
+            ..Default::default()
+        };
         let json = serde_json::to_value(&meta).unwrap();
         for key in [
             "guildSnowflake",
@@ -815,8 +817,10 @@ mod tests {
             assert!(json.get(key).is_some(), "AuditEntryMetadata is missing Java's `{key}`");
         }
 
-        let mut user = UserMetadata::default();
-        user.user_snowflake = Some("12345".into());
+        let user = UserMetadata {
+            user_snowflake: Some("12345".into()),
+            ..Default::default()
+        };
         let json = serde_json::to_value(&user).unwrap();
         for key in ["userSnowflake", "auditEntryIds", "evidenceSubmissions"] {
             assert!(json.get(key).is_some(), "UserMetadata is missing Java's `{key}`");

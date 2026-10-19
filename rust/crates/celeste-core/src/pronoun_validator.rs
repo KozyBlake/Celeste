@@ -140,7 +140,7 @@ pub fn flag_reason(pronouns: Option<&str>, lists: Option<&PronounLists>) -> Opti
     if trimmed.chars().count() > MAX_TOTAL_LEN {
         return Some("unusually long for a pronouns field");
     }
-    let segments = trimmed.split(|c| matches!(c, '/' | '\\' | ',' | '&' | '|')).filter(|s| !s.is_empty()).count();
+    let segments = trimmed.split(['/', '\\', ',', '&', '|']).filter(|s| !s.is_empty()).count();
     if segments > MAX_SEGMENTS {
         return Some("too many segments to be a pronoun set");
     }

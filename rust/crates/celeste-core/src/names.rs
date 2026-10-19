@@ -37,7 +37,7 @@ pub fn to_ascii(name: &str) -> Option<String> {
     let n = map_stroke_latin(&n);
     let n: String = n.nfkd().collect();
     let mut n = strip_combining_marks(&n);
-    if n.chars().any(|c| !c.is_ascii()) {
+    if !n.is_ascii() {
         n = deunicode::deunicode(&n);
         n = n.replace("[?]", "");
         n = strip_combining_marks(&n);
@@ -71,7 +71,7 @@ pub fn to_visual_ascii(name: &str) -> Option<String> {
     let n = map_visual_latin_confusables(&n);
     let n: String = n.nfkd().collect();
     let n = strip_combining_marks(&n);
-    if n.chars().any(|c| !c.is_ascii()) {
+    if !n.is_ascii() {
         return None;
     }
     let n = collapse_whitespace(&n);

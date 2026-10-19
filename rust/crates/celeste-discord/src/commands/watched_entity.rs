@@ -624,7 +624,7 @@ async fn run_remove_menu(
         .unwrap_or_else(|| entity.id.clone());
         entries.push((entity.id, name));
     }
-    entries.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    entries.sort_by_key(|entry| entry.1.to_lowercase());
     super::watched_remove_menu(ctx, command, kind.singular(), kind.plural(), entries).await
 }
 

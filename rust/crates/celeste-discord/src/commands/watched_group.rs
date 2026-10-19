@@ -88,7 +88,7 @@ pub async fn autocomplete(ctx: &Context, command: &CommandInteraction) -> sereni
             }
         }
     }
-    choices.sort_by(|left, right| left.1.to_lowercase().cmp(&right.1.to_lowercase()));
+    choices.sort_by_key(|choice| choice.1.to_lowercase());
     for (id, name) in choices.into_iter().take(25) {
         response = response.add_string_choice(group_choice_label(&name, &id), id);
     }
@@ -508,7 +508,7 @@ async fn run_remove_menu(
         .unwrap_or_else(|| group.id.clone());
         entries.push((group.id, name));
     }
-    entries.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    entries.sort_by_key(|entry| entry.1.to_lowercase());
     super::watched_remove_menu(ctx, command, "group", "groups", entries).await
 }
 

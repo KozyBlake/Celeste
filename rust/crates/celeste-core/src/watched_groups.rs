@@ -310,7 +310,7 @@ impl WatchedGroups {
         }
         let previous = {
             let mut groups = self.groups.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(group) = groups.get_mut(group_id) else { return None };
+            let group = groups.get_mut(group_id)?;
             match group.last_seen_name.as_deref() {
                 Some(stored) if stored == name => return None, // unchanged; no write
                 Some(stored) => {

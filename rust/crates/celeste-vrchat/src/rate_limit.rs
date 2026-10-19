@@ -164,6 +164,44 @@ pub fn parse_retry_after(header: Option<&str>) -> Duration {
     parsed.unwrap_or(DEFAULT_BACKOFF).clamp(MIN_BACKOFF, MAX_BACKOFF)
 }
 
+
+/// Sends a request through a limiter.
+///
+/// An extension trait rather than a method on the client so that wiring it
+/// in is a pure suffix change at each call site — `.send().await?` becomes
+/// `.send_limited(&self.limiter).await?` — with no expression to capture
+/// and rewrite. Java gets this for free from okhttp's interceptor chain;
+/// reqwest has no equivalent, and a sweep that has to parse each call site
+/// is a sweep that can corrupt one.
+pub trait SendLimited {
+    /// Acquires a token, sends, and on a 429 backs the whole client off for
+    /// as long as `Retry-After` asks.
+    fn send_limited(
+        self,
+        limiter: &VrcRateLimiter,
+    ) -> impl std::future::Future<Output = reqwest::Result<reqwest::Response>>;
+}
+
+impl SendLimited for reqwest::RequestBuilder {
+    async fn send_limited(
+        self,
+        limiter: &VrcRateLimiter,
+    ) -> reqwest::Result<reqwest::Response> {
+        limiter.acquire().await;
+        let response = self.send().await?;
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let backoff = parse_retry_after(
+                response.headers().get("retry-after").and_then(|value| value.to_str().ok()),
+            );
+            tracing::warn!(
+                "VRChat rate-limited this client (HTTP 429); backing every request off for {backoff:?}"
+            );
+            limiter.penalize(backoff);
+        }
+        Ok(response)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,42 +252,5 @@ mod tests {
         // A zero penalty is a no-op, as in Java.
         limiter.penalize(Duration::ZERO);
         assert!(limiter.is_backing_off());
-    }
-}
-
-/// Sends a request through a limiter.
-///
-/// An extension trait rather than a method on the client so that wiring it
-/// in is a pure suffix change at each call site — `.send().await?` becomes
-/// `.send_limited(&self.limiter).await?` — with no expression to capture
-/// and rewrite. Java gets this for free from okhttp's interceptor chain;
-/// reqwest has no equivalent, and a sweep that has to parse each call site
-/// is a sweep that can corrupt one.
-pub trait SendLimited {
-    /// Acquires a token, sends, and on a 429 backs the whole client off for
-    /// as long as `Retry-After` asks.
-    fn send_limited(
-        self,
-        limiter: &VrcRateLimiter,
-    ) -> impl std::future::Future<Output = reqwest::Result<reqwest::Response>>;
-}
-
-impl SendLimited for reqwest::RequestBuilder {
-    async fn send_limited(
-        self,
-        limiter: &VrcRateLimiter,
-    ) -> reqwest::Result<reqwest::Response> {
-        limiter.acquire().await;
-        let response = self.send().await?;
-        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let backoff = parse_retry_after(
-                response.headers().get("retry-after").and_then(|value| value.to_str().ok()),
-            );
-            tracing::warn!(
-                "VRChat rate-limited this client (HTTP 429); backing every request off for {backoff:?}"
-            );
-            limiter.penalize(backoff);
-        }
-        Ok(response)
     }
 }

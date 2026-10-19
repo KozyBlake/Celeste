@@ -441,6 +441,66 @@ fn find_bool(entry: &Map<String, Value>, aliases: &[&str]) -> Option<bool> {
     })
 }
 
+
+/// Adapts this searcher to the event listener's
+/// [`celeste_events::AvatarSearch`], so the player table's avatar status can
+/// resolve through the same providers, cache and back-off the Discord
+/// commands use — rather than a second client with its own cache hammering
+/// the same services.
+///
+/// The provider list is read per search from the same settings the
+/// `/vrchat-search avatar` command reads, so enabling or editing custom
+/// providers takes effect without a restart.
+pub struct ListenerAvatarSearch {
+    search: Arc<AvatarSearch>,
+    settings: Arc<celeste_core::settings::Settings>,
+}
+
+impl ListenerAvatarSearch {
+    pub fn new(search: Arc<AvatarSearch>, settings: Arc<celeste_core::settings::Settings>) -> Self {
+        ListenerAvatarSearch { search, settings }
+    }
+
+    fn providers(&self) -> Vec<String> {
+        if self.settings.avatar_search_providers_enabled.get() {
+            self.settings
+                .avatar_search_providers
+                .get()
+                .into_iter()
+                // Same exclusion the command applies.
+                .filter(|url| !url.to_ascii_lowercase().contains("api.avatarrecovery.com"))
+                .collect()
+        } else {
+            BUILTIN_PROVIDERS.iter().map(|url| (*url).to_string()).collect()
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl celeste_events::AvatarSearch for ListenerAvatarSearch {
+    async fn search_by_name(&self, avatar_display_name: &str) -> Vec<celeste_events::SearchedAvatar> {
+        if !celeste_core::features::avatar_search_enabled() {
+            return Vec::new();
+        }
+        self.search
+            .search_all(&self.providers(), avatar_display_name)
+            .await
+            .into_iter()
+            // Java filters to exact name equality before treating a result
+            // as identification.
+            .filter(|avatar| avatar.name.as_deref() == Some(avatar_display_name))
+            .map(|avatar| celeste_events::SearchedAvatar {
+                id: avatar.id,
+                name: avatar.name,
+                performance_rating: avatar
+                    .performance
+                    .as_ref()
+                    .and_then(|performance| performance.pc_rating.clone().or_else(|| performance.android_rating.clone())),
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,64 +591,5 @@ mod tests {
         let state = search.state.lock().await;
         assert!(state.cache.is_empty());
         assert!(state.failures.is_empty());
-    }
-}
-
-/// Adapts this searcher to the event listener's
-/// [`celeste_events::AvatarSearch`], so the player table's avatar status can
-/// resolve through the same providers, cache and back-off the Discord
-/// commands use — rather than a second client with its own cache hammering
-/// the same services.
-///
-/// The provider list is read per search from the same settings the
-/// `/vrchat-search avatar` command reads, so enabling or editing custom
-/// providers takes effect without a restart.
-pub struct ListenerAvatarSearch {
-    search: Arc<AvatarSearch>,
-    settings: Arc<celeste_core::settings::Settings>,
-}
-
-impl ListenerAvatarSearch {
-    pub fn new(search: Arc<AvatarSearch>, settings: Arc<celeste_core::settings::Settings>) -> Self {
-        ListenerAvatarSearch { search, settings }
-    }
-
-    fn providers(&self) -> Vec<String> {
-        if self.settings.avatar_search_providers_enabled.get() {
-            self.settings
-                .avatar_search_providers
-                .get()
-                .into_iter()
-                // Same exclusion the command applies.
-                .filter(|url| !url.to_ascii_lowercase().contains("api.avatarrecovery.com"))
-                .collect()
-        } else {
-            BUILTIN_PROVIDERS.iter().map(|url| (*url).to_string()).collect()
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl celeste_events::AvatarSearch for ListenerAvatarSearch {
-    async fn search_by_name(&self, avatar_display_name: &str) -> Vec<celeste_events::SearchedAvatar> {
-        if !celeste_core::features::avatar_search_enabled() {
-            return Vec::new();
-        }
-        self.search
-            .search_all(&self.providers(), avatar_display_name)
-            .await
-            .into_iter()
-            // Java filters to exact name equality before treating a result
-            // as identification.
-            .filter(|avatar| avatar.name.as_deref() == Some(avatar_display_name))
-            .map(|avatar| celeste_events::SearchedAvatar {
-                id: avatar.id,
-                name: avatar.name,
-                performance_rating: avatar
-                    .performance
-                    .as_ref()
-                    .and_then(|performance| performance.pc_rating.clone().or_else(|| performance.android_rating.clone())),
-            })
-            .collect()
     }
 }

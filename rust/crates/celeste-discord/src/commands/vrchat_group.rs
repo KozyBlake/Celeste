@@ -46,7 +46,7 @@ use serenity::model::application::{
 use serenity::model::prelude::ButtonStyle;
 
 use celeste_vrchat::client::{
-    PERMISSION_ALL, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_AUDIT_VIEW,
+    NewGroupPost, PERMISSION_ALL, PERMISSION_GROUP_ANNOUNCEMENT_MANAGE, PERMISSION_GROUP_AUDIT_VIEW,
     PERMISSION_GROUP_BANS_MANAGE, PERMISSION_GROUP_INSTANCE_MANAGE,
     PERMISSION_GROUP_INVITES_MANAGE, PERMISSION_GROUP_MEMBERS_VIEWALL,
 };
@@ -1155,12 +1155,14 @@ async fn create_post(
         .client
         .create_group_post(
             &context.group_id,
-            title,
-            text,
-            visibility,
-            send_notification,
-            image_id,
-            role_id,
+            &NewGroupPost {
+                title,
+                text,
+                visibility,
+                send_notification,
+                image_id,
+                role_id,
+            },
         )
         .await
     {
