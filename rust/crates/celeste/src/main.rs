@@ -438,12 +438,20 @@ fn run() -> anyhow::Result<()> {
         // resolves a token, or immediately if setup already ran.
         startup_splash.finish();
         if let Some(reason) = celeste_ui::platform::renderer_recovery_reason() {
+            let now_trying = celeste_ui::platform::native_renderer_label(&renderer_preference);
+            let about_it = if renderer_preference == "software" {
+                "Software rendering needs no graphics driver at all, so it works anywhere, but it \
+                 draws on the processor and will feel slower than a GPU."
+            } else {
+                "That renderer asks less of the graphics driver than the one which failed."
+            };
             let message = format!(
-                "Celeste could not initialize its automatic graphics renderer (normally DirectX 12 on Windows) on the previous launch.\n\n\
-                 Windows reported:\n{reason}\n\n\
-                 Celeste is trying again with the OpenGL compatibility renderer. No settings or data were removed. \
-                 This is temporary; if Celeste opens normally, select OpenGL under Settings → General → Appearance \
-                 to keep using it. You can return to Automatic after updating or changing the graphics driver."
+                "Celeste could not start its graphics renderer on the previous launch.\n\n\
+                 The system reported:\n{reason}\n\n\
+                 Celeste is trying again with: {now_trying}\n{about_it}\n\n\
+                 No settings or data were removed. If Celeste opens normally you can make this \
+                 choice permanent under Settings \u{2192} General \u{2192} Graphics renderer, or leave it on \
+                 Automatic and let Celeste work it out again at every start."
             );
             let _ = celeste_ui::dialogs::info_message("Celeste graphics recovery", message);
         }
@@ -462,21 +470,30 @@ fn run() -> anyhow::Result<()> {
         );
         match window_result {
             Ok(()) => {}
-            Err(error)
-                if cfg!(windows)
-                    && renderer_preference == "auto"
-                    && !celeste_ui::platform::is_renderer_recovery() =>
-            {
-                let reason = error.to_string();
-                tracing::error!(%reason, "Automatic graphics initialization failed; relaunching once with OpenGL");
-                renderer_recovery = Some(reason);
-            }
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "the main Celeste window could not open using {}: {error}",
-                    celeste_ui::platform::native_renderer_label(&renderer_preference)
-                ));
-            }
+            // Every renderer that can fail has a less demanding one below it
+            // and the ladder terminates, so this cannot loop. Recovering from
+            // an explicitly chosen renderer as well as from "auto" is
+            // deliberate: a saved choice that stopped working on this machine
+            // should not be what keeps Celeste from opening.
+            Err(error) => match celeste_ui::platform::next_recovery_renderer(&renderer_preference) {
+                Some(next) => {
+                    let reason = error.to_string();
+                    tracing::error!(
+                        %reason,
+                        failed = %renderer_preference,
+                        next,
+                        "Graphics initialization failed; relaunching with the next renderer"
+                    );
+                    renderer_recovery = Some((next, reason));
+                }
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "the main Celeste window could not open using {}, and there is no renderer \
+                         with lower requirements left to try: {error}",
+                        celeste_ui::platform::native_renderer_label(&renderer_preference)
+                    ));
+                }
+            },
         }
     }
 
@@ -497,8 +514,8 @@ fn run() -> anyhow::Result<()> {
     // remaining process-local workers with Celeste itself.
     runtime.shutdown_timeout(std::time::Duration::from_secs(3));
 
-    if let Some(reason) = renderer_recovery {
-        relaunch_with_renderer_recovery(&reason)?;
+    if let Some((next_renderer, reason)) = renderer_recovery {
+        relaunch_with_renderer_recovery(next_renderer, &reason)?;
     } else if restart_requested {
         relaunch_current_process()?;
     }
@@ -517,12 +534,12 @@ fn relaunch_current_process() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn relaunch_with_renderer_recovery(reason: &str) -> anyhow::Result<()> {
+fn relaunch_with_renderer_recovery(renderer: &str, reason: &str) -> anyhow::Result<()> {
     let executable = std::env::current_exe()?;
     let mut command = std::process::Command::new(executable);
     command
         .args(std::env::args_os().skip(1))
-        .env(celeste_ui::platform::RENDERER_RECOVERY_ENV, "opengl")
+        .env(celeste_ui::platform::RENDERER_RECOVERY_ENV, renderer)
         .env(
             celeste_ui::platform::RENDERER_RECOVERY_REASON_ENV,
             reason.chars().take(2_000).collect::<String>(),
@@ -538,10 +555,10 @@ fn show_startup_failure(message: &str) {
     eprintln!("Celeste could not start: {message}");
     let report = format!(
         "Celeste could not start.\n\n{message}\n\n\
-         If this is a graphics error, try launching Celeste with `--safe-mode`, or try \
-         `--renderer vulkan`. Launchers can set CELESTE_RENDERER=opengl instead. A copy \
-         of this error was written to startup-error.txt \
-         in Celeste's default data folder."
+         If this is a graphics error, launch Celeste with `--safe-mode`, which picks a renderer \
+         that needs no graphics driver at all. `--renderer software`, `--renderer opengl` or \
+         `--renderer vulkan` choose one directly, and launchers can set CELESTE_RENDERER instead. \
+         A copy of this error was written to startup-error.txt in Celeste's default data folder."
     );
     let path = celeste_core::paths::default_data_dir().join("startup-error.txt");
     if let Some(parent) = path.parent() {

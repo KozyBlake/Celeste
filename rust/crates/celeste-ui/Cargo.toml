@@ -16,9 +16,9 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-eframe = { version = "0.29", features = ["wgpu"] }
-egui = "0.29"
-egui_extras = "0.29"
+eframe = { version = "0.31", features = ["wgpu"] }
+egui = "0.31"
+egui_extras = "0.31"
 image.workspace = true
 open = "5"
 # Native file/message dialogs: the data-folder question has to be asked
@@ -26,12 +26,23 @@ open = "5"
 # file picker.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
-# eframe intentionally depends on wgpu with its default features disabled.
-# Enable DX12 explicitly for Windows so selecting `Backends::DX12` does not
-# produce an empty backend set at runtime. This only unifies features into
-# eframe's existing wgpu dependency; Celeste uses wgpu through eframe.
+# eframe depends on wgpu with its default features disabled, enabling only
+# `metal` and `webgpu`. On Windows that would leave DirectX 12 compiled out,
+# so `Backends::DX12` would resolve to an empty backend set at runtime.
+# Enable it explicitly. Vulkan and GLES need no feature flag: wgpu always
+# builds those two on Windows, Linux and Android, so the renderer cascade in
+# `platform.rs` can fall through DX12 -> Vulkan -> GL on one binary.
+#
+# wgpu 24 is a hard floor, not a routine bump. Up to and including wgpu 23,
+# `wgpu_hal::auxil::dxgi::factory::should_keep_adapter` discarded the
+# "Microsoft Basic Render Driver" DXGI adapter -- the WARP software
+# rasterizer that is the ONLY D3D12 adapter present on a machine with no
+# usable GPU driver (a Proxmox/QEMU guest on the VirtIO GPU DOD display-only
+# driver, for instance). wgpu 24 inverted that filter to keep the software
+# adapter and drop the duplicate alias instead. On wgpu 22 those machines
+# enumerate zero adapters and Celeste cannot open a window at all.
 [target.'cfg(windows)'.dependencies]
-wgpu = { version = "22.1", features = ["dx12"], default-features = false }
+wgpu = { version = "24", features = ["dx12"], default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

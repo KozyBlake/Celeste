@@ -325,9 +325,9 @@ impl Settings {
                 "auto",
                 || {
                     #[cfg(target_os = "windows")]
-                    let choices = ["auto", "directx12", "vulkan", "opengl"];
+                    let choices = ["auto", "directx12", "vulkan", "opengl", "software"];
                     #[cfg(not(target_os = "windows"))]
-                    let choices = ["auto", "vulkan", "opengl"];
+                    let choices = ["auto", "vulkan", "opengl", "software"];
                     choices.into_iter().map(str::to_string).collect()
                 },
             ),

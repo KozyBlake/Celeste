@@ -92,10 +92,10 @@ pub const DEFAULT_ACCENT: Color32 = rgb(200, 55, 65);
 
 /// Structural panels are square. This is the single biggest reason the old
 /// UI read as stacked cards: four different radii nesting inside each other.
-pub const RADIUS_PANEL: f32 = 0.0;
+pub const RADIUS_PANEL: u8 = 0;
 /// Only things you can press. Small enough to read as a control rather than
 /// a card.
-pub const RADIUS_CONTROL: f32 = 3.0;
+pub const RADIUS_CONTROL: u8 = 3;
 
 /// The spacing scale. Every margin and gap is one of these.
 pub const GAP_TIGHT: f32 = 4.0;
@@ -103,7 +103,7 @@ pub const GAP: f32 = 8.0;
 pub const GAP_WIDE: f32 = 16.0;
 
 /// Padding inside a panel. One value, so panels line up with each other.
-pub const PANEL_PAD: f32 = 12.0;
+pub const PANEL_PAD: i8 = 12;
 
 // ── Type ──────────────────────────────────────────────────────────────────
 // Four steps. egui ships one family, so weight and size carry the hierarchy.
@@ -126,10 +126,10 @@ pub fn hairline() -> egui::Stroke {
 /// instead of a bespoke `Frame` per call site is what keeps panels from
 /// drifting apart again.
 pub fn panel_frame(fill: Color32) -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(fill)
         .stroke(hairline())
-        .rounding(egui::Rounding::same(RADIUS_PANEL))
+        .corner_radius(egui::CornerRadius::same(RADIUS_PANEL))
         .inner_margin(egui::Margin::same(PANEL_PAD))
 }
 
@@ -211,8 +211,8 @@ mod tests {
 
     #[test]
     fn structural_panels_are_square_and_only_controls_are_rounded() {
-        assert_eq!(RADIUS_PANEL, 0.0);
-        assert!(RADIUS_CONTROL > 0.0 && RADIUS_CONTROL <= 4.0);
+        assert_eq!(RADIUS_PANEL, 0);
+        assert!(RADIUS_CONTROL > 0 && RADIUS_CONTROL <= 4);
     }
 
     #[test]

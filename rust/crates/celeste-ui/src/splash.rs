@@ -134,9 +134,9 @@ impl eframe::App for StartupSplash {
 
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::INK)
-                    .inner_margin(egui::Margin::same(28.0)),
+                    .inner_margin(egui::Margin::same(28)),
             )
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {

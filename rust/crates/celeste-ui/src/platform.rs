@@ -27,7 +27,12 @@ pub fn renderer_preference(saved: &str) -> Result<String, String> {
     while let Some(argument) = arguments.next() {
         let argument = argument.to_string_lossy();
         if argument == "--safe-mode" {
-            return Ok("opengl".to_string());
+            // Safe mode has to mean "the renderer with the fewest
+            // requirements", and on Windows that is the software rasterizer,
+            // not OpenGL: a Windows box with no graphics driver only offers
+            // GDI's OpenGL 1.1, far below egui_glow's 3.3. Elsewhere Mesa's
+            // llvmpipe makes OpenGL the softest landing.
+            return Ok(if cfg!(windows) { "software" } else { "opengl" }.to_string());
         }
         if argument == "--renderer" {
             let value = arguments
@@ -49,12 +54,29 @@ pub fn renderer_preference(saved: &str) -> Result<String, String> {
 fn validate_renderer(value: &str) -> Result<String, String> {
     let value = value.trim().to_ascii_lowercase();
     match value.as_str() {
-        "auto" | "vulkan" | "opengl" => Ok(value),
+        "auto" | "vulkan" | "opengl" | "software" => Ok(value),
         "directx12" if cfg!(windows) => Ok(value),
         "directx12" => Err("DirectX 12 is only available on Windows".to_string()),
         _ => Err(format!(
-            "Unknown graphics renderer `{value}`; use auto, directx12, vulkan, or opengl"
+            "Unknown graphics renderer `{value}`; use auto, directx12, vulkan, opengl, or software"
         )),
+    }
+}
+
+/// The next renderer to try after `current` failed to open a window.
+///
+/// Each rung asks less of the machine than the one above it, and the ladder
+/// ends, so recovery cannot loop. On Windows the software rasterizer comes
+/// before OpenGL: a Windows machine with no graphics driver has only GDI's
+/// OpenGL 1.1, far below the 3.3 egui_glow needs, while the Direct3D 12
+/// software rasterizer is part of the operating system and always present.
+/// Everywhere else OpenGL is the softer landing, because Mesa's llvmpipe is
+/// a complete software OpenGL, so "auto" already went through Glow.
+pub fn next_recovery_renderer(current: &str) -> Option<&'static str> {
+    match current {
+        "auto" | "directx12" | "vulkan" => Some("software"),
+        "software" if cfg!(windows) => Some("opengl"),
+        _ => None,
     }
 }
 
@@ -85,12 +107,14 @@ pub fn is_headless() -> bool {
 }
 
 /// Windows' built-in fallback OpenGL implementation is only version 1.1,
-/// which cannot run egui_glow. Prefer wgpu there so normal installations
-/// and GPU-passthrough VMs use DirectX 12. Linux keeps the proven Glow path.
+/// which cannot run egui_glow, so a Windows machine with no graphics driver
+/// can only be drawn to through wgpu, which can reach the Direct3D 12
+/// software rasterizer. Linux keeps the proven Glow path, where Mesa's
+/// llvmpipe is a complete software OpenGL 4.5 and needs no special handling.
 pub fn native_renderer(preference: &str) -> eframe::Renderer {
     match preference {
-        "directx12" | "vulkan" => eframe::Renderer::Wgpu,
         "opengl" => eframe::Renderer::Glow,
+        "directx12" | "vulkan" | "software" => eframe::Renderer::Wgpu,
         _ if cfg!(windows) => eframe::Renderer::Wgpu,
         _ => eframe::Renderer::Glow,
     }
@@ -101,40 +125,211 @@ pub fn native_renderer_label(preference: &str) -> &'static str {
         "directx12" => "DirectX 12 (wgpu)",
         "vulkan" => "Vulkan (wgpu)",
         "opengl" => "OpenGL (Glow)",
-        _ if cfg!(windows) => "Automatic: DirectX 12 (wgpu)",
+        "software" => "Software rendering (wgpu, CPU adapter)",
+        _ if cfg!(windows) => "Automatic: DirectX 12, Vulkan or OpenGL, then software (wgpu)",
         _ => "Automatic: OpenGL (Glow)",
     }
 }
 
-/// Keep Celeste's tiny 2D interface from using game-style allocation without
-/// overriding the operating system's GPU selection. Adapter policy belongs to
-/// Windows and the graphics driver, not to a moderation logger.
+/// Graphics APIs to enumerate adapters from. `None` keeps eframe's defaults.
+fn requested_backends(preference: &str) -> Option<eframe::wgpu::Backends> {
+    use eframe::wgpu::Backends;
+
+    // Enumerating every native backend costs nothing when one is absent --
+    // it simply contributes no adapters -- and is what lets a single build
+    // cover current hardware, hardware too old for Direct3D 12, and machines
+    // with no usable GPU driver at all. Which API exposes the software
+    // rasterizer differs by platform: WARP is a Direct3D 12 adapter on
+    // Windows, while lavapipe (Vulkan) and llvmpipe (GL) fill that role
+    // elsewhere, so no single backend can be the fallback everywhere.
+    let every_native_backend = Backends::DX12 | Backends::VULKAN | Backends::GL;
+    match preference {
+        "directx12" => Some(Backends::DX12),
+        "vulkan" => Some(Backends::VULKAN),
+        "auto" | "software" => Some(every_native_backend),
+        _ => None,
+    }
+}
+
+/// Ordering between graphics APIs when one machine exposes the same GPU
+/// through several of them, which is normal on Windows.
+fn backend_preference_rank(backend: eframe::wgpu::Backend) -> u8 {
+    use eframe::wgpu::Backend;
+    match backend {
+        Backend::Dx12 | Backend::Metal => 0,
+        Backend::Vulkan => 1,
+        Backend::Gl => 2,
+        _ => 3,
+    }
+}
+
+/// Ordering between kinds of adapter. A CPU adapter sorts last but remains a
+/// valid answer -- on a machine with no usable GPU driver it is the only one.
+fn device_type_rank(device_type: eframe::wgpu::DeviceType, prefer_low_power: bool) -> u8 {
+    use eframe::wgpu::DeviceType;
+    match device_type {
+        DeviceType::DiscreteGpu => u8::from(prefer_low_power),
+        DeviceType::IntegratedGpu => u8::from(!prefer_low_power),
+        // Paravirtualised GPUs (virgl and friends) are real acceleration.
+        DeviceType::VirtualGpu => 2,
+        DeviceType::Other => 3,
+        DeviceType::Cpu => 4,
+    }
+}
+
+fn describe_adapter(info: &eframe::wgpu::AdapterInfo) -> String {
+    let mut description = format!("{} [{:?}/{:?}]", info.name, info.backend, info.device_type);
+    if !info.driver.is_empty() {
+        description.push_str(" driver ");
+        description.push_str(&info.driver);
+    }
+    if !info.driver_info.is_empty() {
+        description.push_str(" (");
+        description.push_str(&info.driver_info);
+        description.push(')');
+    }
+    description
+}
+
+fn describe_adapters(adapters: &[&eframe::wgpu::Adapter]) -> String {
+    adapters
+        .iter()
+        .map(|adapter| describe_adapter(&adapter.get_info()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Celeste's own adapter policy, replacing wgpu's `request_adapter`.
 ///
-/// The standard wgpu environment variables remain escape hatches for
-/// unusual machines and diagnostics.
-pub fn native_wgpu_options(preference: &str) -> eframe::egui_wgpu::WgpuConfiguration {
-    let mut options = eframe::egui_wgpu::WgpuConfiguration::default();
+/// The rules it exists to satisfy, in order:
+///
+/// 1. A CPU adapter is a valid answer, not a failure. wgpu only returns one
+///    from `request_adapter` when asked for a fallback adapter explicitly,
+///    which eframe never does, so the default path fails outright on a
+///    machine whose only renderer is the software rasterizer. That is the
+///    common case on a virtual machine and the reason Celeste could not open
+///    a window there at all.
+/// 2. Real hardware still wins whenever it is present, through any API.
+/// 3. Among equals, keep the order the operating system enumerated. Adapter
+///    policy on a multi-GPU machine belongs to the OS and the graphics
+///    driver, not to a moderation logger; the sort below is stable, so it
+///    only ever reorders across the classes it names.
+///
+/// Every adapter found is logged, because the alternative when a user
+/// reports a blank or missing window is guessing about their hardware.
+fn choose_adapter(
+    adapters: &[eframe::wgpu::Adapter],
+    surface: Option<&eframe::wgpu::Surface<'_>>,
+    software_only: bool,
+) -> Result<eframe::wgpu::Adapter, String> {
+    use eframe::wgpu::DeviceType;
 
-    if std::env::var_os("WGPU_POWER_PREF").is_none() {
-        options.power_preference = eframe::wgpu::PowerPreference::None;
-    }
-    if std::env::var_os("WGPU_BACKEND").is_none() {
-        options.supported_backends = match preference {
-            "directx12" => eframe::wgpu::Backends::DX12,
-            "vulkan" => eframe::wgpu::Backends::VULKAN,
-            _ if cfg!(windows) => eframe::wgpu::Backends::DX12,
-            _ => options.supported_backends,
-        };
+    if adapters.is_empty() {
+        return Err(
+            "this machine exposed no DirectX 12, Vulkan or OpenGL graphics adapters at all"
+                .to_string(),
+        );
     }
 
-    // Celeste renders a handful of panels, text and one small icon. It has
-    // no reason to trade a larger GPU heap for game-style throughput.
-    let default_descriptor = options.device_descriptor.clone();
-    options.device_descriptor = std::sync::Arc::new(move |adapter| {
-        let mut descriptor = default_descriptor(adapter);
-        descriptor.memory_hints = eframe::wgpu::MemoryHints::MemoryUsage;
-        descriptor
+    for adapter in adapters {
+        tracing::info!(
+            adapter = %describe_adapter(&adapter.get_info()),
+            "Celeste found a graphics adapter"
+        );
+    }
+
+    let mut candidates = adapters
+        .iter()
+        .filter(|adapter| !software_only || adapter.get_info().device_type == DeviceType::Cpu)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        let found = adapters.iter().collect::<Vec<_>>();
+        return Err(format!(
+            "no software graphics adapter is available; this machine offers only: {}",
+            describe_adapters(&found)
+        ));
+    }
+
+    // An adapter that cannot present to Celeste's window is unusable however
+    // capable it is. A display-only driver and a headless compute device
+    // both show up here.
+    if let Some(surface) = surface {
+        let presentable = candidates
+            .iter()
+            .copied()
+            .filter(|adapter| !surface.get_capabilities(adapter).formats.is_empty())
+            .collect::<Vec<_>>();
+        if presentable.is_empty() {
+            return Err(format!(
+                "none of this machine's graphics adapters can draw to a window: {}",
+                describe_adapters(&candidates)
+            ));
+        }
+        candidates = presentable;
+    }
+
+    let prefer_low_power = std::env::var("WGPU_POWER_PREF")
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("low"));
+    candidates.sort_by_key(|adapter| {
+        let info = adapter.get_info();
+        (
+            device_type_rank(info.device_type, prefer_low_power),
+            backend_preference_rank(info.backend),
+        )
     });
+
+    let chosen = candidates[0].clone();
+    let info = chosen.get_info();
+    if info.device_type == DeviceType::Cpu {
+        tracing::warn!(
+            adapter = %describe_adapter(&info),
+            "Celeste is rendering in software because no usable GPU was found. This is expected \
+             on a virtual machine or a system without graphics drivers: slower, but correct."
+        );
+    } else {
+        tracing::info!(
+            adapter = %describe_adapter(&info),
+            "Celeste selected a graphics adapter"
+        );
+    }
+    Ok(chosen)
+}
+
+/// Keep Celeste's tiny 2D interface from using game-style allocation, and
+/// install the adapter policy above in place of wgpu's own.
+///
+/// `WGPU_BACKEND` still overrides the backend set, and `WGPU_POWER_PREF=low`
+/// still asks for the integrated GPU ahead of the discrete one; both remain
+/// escape hatches for unusual machines and diagnostics.
+pub fn native_wgpu_options(preference: &str) -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup};
+
+    let mut options = WgpuConfiguration::default();
+    let software_only = preference == "software";
+
+    if let WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup {
+        if std::env::var_os("WGPU_BACKEND").is_none() {
+            if let Some(backends) = requested_backends(preference) {
+                setup.instance_descriptor.backends = backends;
+            }
+        }
+        setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, surface| {
+            choose_adapter(adapters, surface, software_only)
+        }));
+
+        // Celeste renders a handful of panels, text and one small icon, so it
+        // has no reason to trade a larger GPU heap for game-style throughput.
+        // Asking for exactly what the chosen adapter reports also stops a
+        // weak or software adapter being rejected for failing to meet limits
+        // Celeste never uses.
+        setup.device_descriptor = std::sync::Arc::new(|adapter| eframe::wgpu::DeviceDescriptor {
+            label: Some("celeste wgpu device"),
+            required_features: eframe::wgpu::Features::default(),
+            required_limits: adapter.limits(),
+            memory_hints: eframe::wgpu::MemoryHints::MemoryUsage,
+        });
+    }
+
     options.desired_maximum_frame_latency = Some(1);
     options
 }
@@ -425,6 +620,130 @@ mod tests {
         assert!(matches!(native_renderer("opengl"), eframe::Renderer::Glow));
         assert!(matches!(native_renderer("vulkan"), eframe::Renderer::Wgpu));
         assert!(matches!(native_renderer("directx12"), eframe::Renderer::Wgpu));
+    }
+
+    /// Software rendering has to be reachable on every platform, because a
+    /// machine with no usable graphics driver exists on all of them.
+    #[test]
+    fn software_rendering_is_selectable_everywhere() {
+        assert_eq!(validate_renderer(" Software ").unwrap(), "software");
+        assert!(matches!(native_renderer("software"), eframe::Renderer::Wgpu));
+        assert!(native_renderer_label("software").to_lowercase().contains("software"));
+    }
+
+    /// The recovery ladder must always reach the ground. If a rung ever
+    /// pointed back up, Celeste would relaunch itself forever.
+    #[test]
+    fn the_recovery_ladder_always_terminates_without_repeating() {
+        for start in ["auto", "directx12", "vulkan", "software", "opengl"] {
+            let mut seen = vec![start.to_string()];
+            let mut current = start.to_string();
+            while let Some(next) = next_recovery_renderer(&current) {
+                assert!(
+                    !seen.iter().any(|rung| rung == next),
+                    "recovery from {start} revisits {next}: {seen:?}"
+                );
+                assert!(
+                    validate_renderer(next).is_ok() || !cfg!(windows),
+                    "recovery from {start} proposes the invalid renderer {next}"
+                );
+                seen.push(next.to_string());
+                current = next.to_string();
+            }
+            assert!(seen.len() <= 4, "recovery from {start} took too many steps: {seen:?}");
+        }
+        assert_eq!(next_recovery_renderer("opengl"), None);
+    }
+
+    /// Restricting Windows to Direct3D 12 is what left machines with Vulkan
+    /// or OpenGL but no D3D12 -- which is to say older machines -- with
+    /// nothing to render on.
+    #[test]
+    fn automatic_and_software_enumerate_every_native_backend() {
+        use eframe::wgpu::Backends;
+        for preference in ["auto", "software"] {
+            let backends = requested_backends(preference)
+                .unwrap_or_else(|| panic!("{preference} should pin an explicit backend set"));
+            for (name, backend) in [
+                ("DX12", Backends::DX12),
+                ("Vulkan", Backends::VULKAN),
+                ("GL", Backends::GL),
+            ] {
+                assert!(
+                    backends.contains(backend),
+                    "{preference} must still enumerate {name}"
+                );
+            }
+        }
+        assert_eq!(requested_backends("vulkan"), Some(Backends::VULKAN));
+    }
+
+    #[test]
+    fn hardware_outranks_software_and_low_power_flips_only_the_gpus() {
+        use eframe::wgpu::DeviceType;
+        let rank = |device_type| device_type_rank(device_type, false);
+        assert!(rank(DeviceType::DiscreteGpu) < rank(DeviceType::IntegratedGpu));
+        assert!(rank(DeviceType::IntegratedGpu) < rank(DeviceType::VirtualGpu));
+        assert!(rank(DeviceType::VirtualGpu) < rank(DeviceType::Other));
+        // The whole point: a CPU adapter is last, but it is still on the list.
+        assert!(rank(DeviceType::Other) < rank(DeviceType::Cpu));
+
+        let low = |device_type| device_type_rank(device_type, true);
+        assert!(low(DeviceType::IntegratedGpu) < low(DeviceType::DiscreteGpu));
+        assert_eq!(low(DeviceType::Cpu), rank(DeviceType::Cpu));
+    }
+
+    /// The regression this whole renderer cascade exists for.
+    ///
+    /// wgpu's own `request_adapter` will not return a CPU adapter unless it
+    /// is asked for a fallback adapter explicitly, which eframe never does,
+    /// so a machine whose only renderer is a software rasterizer failed with
+    /// "no suitable adapter found". Celeste's selector has to accept one.
+    ///
+    /// This runs against whatever the build machine really has. It asserts
+    /// nothing when no adapter at all is present, since that is a property of
+    /// the machine rather than of the code under test.
+    #[test]
+    fn the_adapter_policy_accepts_a_software_adapter() {
+        use eframe::wgpu;
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: requested_backends("auto").unwrap_or(wgpu::Backends::all()),
+            ..Default::default()
+        });
+        let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+        // A hardware-dependent test should say what hardware it ran against,
+        // or a pass on a machine with nothing installed looks like a pass on
+        // a machine that was properly exercised.
+        let found = adapters.iter().collect::<Vec<_>>();
+        eprintln!("adapters on this machine: [{}]", describe_adapters(&found));
+        if adapters.is_empty() {
+            eprintln!("no graphics adapters here, so there is nothing to assert");
+            return;
+        }
+
+        let chosen = choose_adapter(&adapters, None, false)
+            .expect("an adapter exists, so selection must not fail");
+        assert!(adapters.iter().any(|a| a.get_info() == chosen.get_info()));
+
+        let software = adapters
+            .iter()
+            .any(|a| a.get_info().device_type == wgpu::DeviceType::Cpu);
+        if software {
+            let chosen = choose_adapter(&adapters, None, true)
+                .expect("a CPU adapter is present, so forcing software must succeed");
+            assert_eq!(
+                chosen.get_info().device_type,
+                wgpu::DeviceType::Cpu,
+                "forcing software must not quietly hand back a GPU"
+            );
+        } else {
+            assert!(
+                choose_adapter(&adapters, None, true).is_err(),
+                "with no CPU adapter present, forcing software must say so rather than \
+                 silently falling back to hardware"
+            );
+        }
     }
 
     #[test]

@@ -2273,8 +2273,8 @@ impl CelesteApp {
         style.visuals.faint_bg_color = crate::theme::PANEL;
         style.visuals.selection.bg_fill = self.accent.gamma_multiply(0.62);
         style.visuals.selection.stroke.color = crate::theme::TEXT;
-        style.visuals.window_rounding = egui::Rounding::same(crate::theme::RADIUS_PANEL);
-        style.visuals.menu_rounding = egui::Rounding::same(crate::theme::RADIUS_PANEL);
+        style.visuals.window_corner_radius = egui::CornerRadius::same(crate::theme::RADIUS_PANEL);
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(crate::theme::RADIUS_PANEL);
         for widget in [
             &mut style.visuals.widgets.noninteractive,
             &mut style.visuals.widgets.inactive,
@@ -2283,7 +2283,7 @@ impl CelesteApp {
             &mut style.visuals.widgets.open,
         ] {
             // Only things you can press are rounded; panels stay square.
-            widget.rounding = egui::Rounding::same(crate::theme::RADIUS_CONTROL);
+            widget.corner_radius = egui::CornerRadius::same(crate::theme::RADIUS_CONTROL);
         }
         style.visuals.widgets.inactive.weak_bg_fill = crate::theme::RAISED;
         style.visuals.widgets.hovered.weak_bg_fill = crate::theme::RULE_STRONG;
@@ -2384,18 +2384,18 @@ impl CelesteApp {
     /// Shared visual primitives. Keeping these here prevents each newly
     /// ported screen from inventing its own shade, border and corner radius.
     fn card_frame() -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(crate::theme::PANEL)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::RULE))
-            .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
+            .corner_radius(egui::CornerRadius::same(crate::theme::RADIUS_PANEL))
             .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD))
     }
 
     fn inset_frame() -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(crate::theme::WELL)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::RULE))
-            .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
+            .corner_radius(egui::CornerRadius::same(crate::theme::RADIUS_PANEL))
             .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD))
     }
 
@@ -2524,15 +2524,15 @@ impl CelesteApp {
                 } else {
                     &status
                 };
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgba_unmultiplied(
                         colour.r(),
                         colour.g(),
                         colour.b(),
                         28,
                     ))
-                    .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
-                    .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                    .corner_radius(egui::CornerRadius::same(crate::theme::RADIUS_PANEL))
+                    .inner_margin(egui::Margin::symmetric(10, 5))
                     .show(ui, |ui| {
                         ui.colored_label(colour, label);
                     });
@@ -2544,10 +2544,10 @@ impl CelesteApp {
         ui.separator();
         ui.add_space(3.0);
         let controls = ui.horizontal_wrapped(|ui| {
-            let tabs = egui::Frame::none()
+            let tabs = egui::Frame::NONE
                 .fill(crate::theme::WELL)
-                .rounding(egui::Rounding::same(crate::theme::RADIUS_PANEL))
-                .inner_margin(egui::Margin::same(crate::theme::GAP_TIGHT))
+                .corner_radius(egui::CornerRadius::same(crate::theme::RADIUS_PANEL))
+                .inner_margin(egui::Margin::same(crate::theme::GAP_TIGHT as i8))
                 .show(ui, |ui| self.tab_bar(ui));
             self.tutorial_layout.tab_bar = Some(tabs.response.rect);
             ui.separator();
@@ -3101,9 +3101,9 @@ impl CelesteApp {
             .unwrap_or_else(|| "Current instance".to_string());
         let instance_card = Self::card_frame()
             .inner_margin(if compact_height {
-                egui::Margin::symmetric(12.0, 7.0)
+                egui::Margin::symmetric(12, 7)
             } else {
-                egui::Margin::symmetric(14.0, 11.0)
+                egui::Margin::symmetric(14, 11)
             })
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
@@ -3275,7 +3275,7 @@ impl CelesteApp {
                 ui.add_space(8.0);
                 let empty_panel_height = ui.available_height();
                 Self::inset_frame()
-                    .inner_margin(egui::Margin::same(crate::theme::GAP))
+                    .inner_margin(egui::Margin::same(crate::theme::GAP as i8))
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         ui.set_min_height((empty_panel_height - 12.0).max(0.0));
@@ -3313,7 +3313,7 @@ impl CelesteApp {
             ui.add_space(8.0);
             let table_panel_height = ui.available_height();
             Self::inset_frame()
-                .inner_margin(egui::Margin::same(crate::theme::GAP))
+                .inner_margin(egui::Margin::same(crate::theme::GAP as i8))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.set_min_height((table_panel_height - 12.0).max(0.0));
@@ -5219,7 +5219,7 @@ impl CelesteApp {
             .resizable(false)
             .exact_width(176.0)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::PANEL)
                     .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
@@ -5275,7 +5275,7 @@ impl CelesteApp {
 
         let settings_content = egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::INK)
                     .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
@@ -6083,9 +6083,9 @@ impl CelesteApp {
             let mut close = false;
             egui::CentralPanel::default()
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(crate::theme::INK)
-                        .inner_margin(egui::Margin::same(32.0)),
+                        .inner_margin(egui::Margin::same(32)),
                 )
                 .show(ctx, |ui| {
                     ui.add_space(36.0);
@@ -6986,13 +6986,15 @@ impl CelesteApp {
             }
             painter.rect_stroke(
                 target.expand(2.0),
-                crate::theme::RADIUS_PANEL + 2.0,
+                crate::theme::RADIUS_PANEL + 2,
                 egui::Stroke::new(5.0_f32, self.accent.gamma_multiply(0.28)),
+                egui::StrokeKind::Middle,
             );
             painter.rect_stroke(
                 target,
                 crate::theme::RADIUS_PANEL,
                 egui::Stroke::new(2.0_f32, self.accent),
+                egui::StrokeKind::Middle,
             );
             painter.text(
                 target.left_top() + egui::vec2(2.0, -8.0),
@@ -7016,7 +7018,7 @@ impl CelesteApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 164.0])
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::from_rgba_unmultiplied(
                             panel.r(),
                             panel.g(),
@@ -7024,7 +7026,7 @@ impl CelesteApp {
                             218,
                         ))
                         .stroke(egui::Stroke::new(1.0_f32, self.accent.gamma_multiply(0.7)))
-                        .inner_margin(egui::Margin::symmetric(12.0, 8.0)),
+                        .inner_margin(egui::Margin::symmetric(12, 8)),
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -8315,9 +8317,9 @@ impl eframe::App for CelesteApp {
             let mut back = false;
             egui::TopBottomPanel::top("setup_settings_header")
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(crate::theme::PANEL)
-                        .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+                        .inner_margin(egui::Margin::symmetric(14, 10)),
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -8336,7 +8338,7 @@ impl eframe::App for CelesteApp {
                     );
                 });
             egui::CentralPanel::default()
-                .frame(egui::Frame::none().fill(crate::theme::INK))
+                .frame(egui::Frame::NONE.fill(crate::theme::INK))
                 .show(ctx, |ui| self.settings_tab(ui));
             if back {
                 self.flush_pending_setting_edits();
@@ -8619,9 +8621,9 @@ impl eframe::App for CelesteApp {
 
         egui::TopBottomPanel::top("toolbar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::PANEL)
-                    .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+                    .inner_margin(egui::Margin::symmetric(14, 10)),
             )
             .show(ctx, |ui| {
                 self.toolbar(ui);
@@ -8630,9 +8632,9 @@ impl eframe::App for CelesteApp {
         let status_state = self.tutorial_state();
         let status_bar = egui::TopBottomPanel::bottom("status_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::PANEL)
-                    .inner_margin(egui::Margin::symmetric(12.0, 6.0)),
+                    .inner_margin(egui::Margin::symmetric(12, 6)),
             )
             .show(ctx, |ui| {
                 let (present, left, total) = status_state.status_counts();
@@ -8713,7 +8715,7 @@ impl eframe::App for CelesteApp {
 
         let main_content = egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::INK)
                     .inner_margin(egui::Margin::same(crate::theme::PANEL_PAD)),
             )
@@ -8863,6 +8865,7 @@ fn string_choice_label<'a>(id: &str, value: &'a str) -> &'a str {
         "directx12" => "DirectX 12 (wgpu)",
         "vulkan" => "Vulkan (wgpu)",
         "opengl" => "OpenGL (Glow)",
+        "software" => "Software rendering (no GPU needed)",
         _ => value,
     }
 }
@@ -8981,7 +8984,7 @@ fn apply_font_fallbacks(ctx: &egui::Context, paths: &[PathBuf]) {
         let name = format!("celeste-system-fallback-{index}");
         definitions
             .font_data
-            .insert(name.clone(), egui::FontData::from_owned(bytes));
+            .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             if let Some(fonts) = definitions.families.get_mut(&family) {
                 fonts.push(name.clone());

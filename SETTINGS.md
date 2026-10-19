@@ -29,7 +29,7 @@ or from Discord with `/settings edit`.
 
 | Setting | Id | Type | What it does |
 |---|---|---|---|
-| Graphics renderer (restart to apply) | `graphics_renderer` | one of a list discovered at runtime | Chooses the graphics API used to draw Celeste. Automatic is recommended; change this only to work around a graphics-driver problem, then restart Celeste. |
+| Graphics renderer (restart to apply) | `graphics_renderer` | one of a list discovered at runtime | Chooses the graphics API used to draw Celeste. Automatic is recommended: it tries each API your machine has and falls back to software rendering on a virtual machine or a system with no graphics driver. Pick Software to force that fallback, or another API to work around a graphics-driver problem. Restart Celeste to apply. |
 | Colour section headers with accent | `ui_accent_headers` | boolean (default `false`) | Tints section headings with your accent colour. |
 | Confirmation dialog for group invites | `ui_confirm_group_invite` | boolean (default `false`) | Asks before sending a group invite. |
 | Desktop UI language (restart to apply) | `ui_language` | one of a list discovered at runtime | Language for the desktop window. Takes effect after a restart. |

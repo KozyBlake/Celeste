@@ -121,7 +121,7 @@ pub fn describe(id: &str) -> Option<&'static str> {
 
         // ── Interface ────────────────────────────────────────────────────
         "ui_language" => "Language for the desktop window. Takes effect after a restart.",
-        "graphics_renderer" => "Chooses the graphics API used to draw Celeste. Automatic is recommended; change this only to work around a graphics-driver problem, then restart Celeste.",
+        "graphics_renderer" => "Chooses the graphics API used to draw Celeste. Automatic is recommended: it tries each API your machine has and falls back to software rendering on a virtual machine or a system with no graphics driver. Pick Software to force that fallback, or another API to work around a graphics-driver problem. Restart Celeste to apply.",
         "ui_left_player_dim_percent" => "How far to fade players who have left, so they stay readable without competing with the people still present.",
         "ui_accent_headers" => "Tints section headings with your accent colour.",
         "ui_confirm_group_invite" => "Asks before sending a group invite.",

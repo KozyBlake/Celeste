@@ -326,22 +326,33 @@ First launch opens a setup wizard for the Discord bot token, the guild, and the 
 
 #### Graphics compatibility and safe mode
 
-Celeste normally uses DirectX 12 on Windows and OpenGL on Linux. The renderer
-can be changed under **Settings → General → Appearance**; the change takes
-effect after a restart. Windows also offers Vulkan for driver diagnostics.
+Celeste is meant to open on anything, including a machine with no GPU at all.
+On Windows it tries DirectX 12, then Vulkan, then OpenGL, and if the machine
+has no usable graphics driver it falls back to **software rendering** on the
+processor. Linux uses OpenGL, where Mesa's llvmpipe already provides a complete
+software implementation. The renderer can be fixed under **Settings → General
+→ Graphics renderer**; the change takes effect after a restart.
 
-If the automatic Windows renderer cannot initialize, Celeste relaunches once
-with OpenGL compatibility mode and shows the graphics error that caused the
-recovery. The fallback is temporary and does not overwrite the saved setting.
-To start in compatibility mode yourself:
+Software rendering needs no graphics driver whatsoever, so it is the right
+choice on a virtual machine (Proxmox, QEMU, Hyper-V, a VPS) or on a system
+running on basic display drivers. It is slower than a GPU but entirely
+correct, and Celeste's interface is light enough that it stays comfortable.
+
+If a renderer cannot start, Celeste relaunches with the next one down and shows
+the graphics error that caused the recovery. The fallback is temporary and does
+not overwrite the saved setting. To go straight to the renderer with the
+fewest requirements:
 
 ```powershell
 .\celeste.exe --safe-mode
 ```
 
-Every platform also accepts `--renderer auto`, `--renderer directx12` (Windows
-only), `--renderer vulkan`, or `--renderer opengl`. For launchers and desktop
-shortcuts, the same override can be supplied through `CELESTE_RENDERER`.
+Every platform also accepts `--renderer auto`, `--renderer software`,
+`--renderer vulkan`, `--renderer opengl`, and `--renderer directx12` on
+Windows. For launchers and desktop shortcuts, the same override can be
+supplied through `CELESTE_RENDERER`. Celeste logs every graphics adapter it
+finds and the one it picks, so a startup log is enough to tell what a machine
+offered.
 
 #### Unsigned builds
 
