@@ -81,7 +81,7 @@ pub struct GroupAuditLogEntry {
     pub id: String,
     #[serde(rename = "groupId")]
     pub group_id: String,
-    #[serde(rename = "createdAt")]
+    #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: DateTime<Utc>,
     #[serde(rename = "actorId")]
     pub actor_id: Option<String>,
@@ -314,7 +314,7 @@ pub struct GroupAnnouncement {
     pub author_id: Option<String>,
     #[serde(rename = "imageUrl")]
     pub image_url: Option<String>,
-    #[serde(rename = "createdAt")]
+    #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: Option<String>,
     #[serde(rename = "updatedAt")]
     pub updated_at: Option<String>,
@@ -347,7 +347,7 @@ pub struct GroupPost {
     #[serde(rename = "roleIds", default)]
     pub role_ids: Vec<String>,
     pub visibility: Option<String>,
-    #[serde(rename = "createdAt")]
+    #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: Option<String>,
     #[serde(rename = "updatedAt")]
     pub updated_at: Option<String>,
@@ -536,5 +536,48 @@ mod audit_page_tests {
         assert_eq!(page.results.len(), 1);
         assert_eq!(page.results[0].actor_display_name.as_deref(), Some("Someone"));
         assert!(page.has_next);
+    }
+
+    /// Regression: VRChat serves the group audit log's timestamp as
+    /// `created_at`, not `createdAt` like every other field in the same
+    /// object. Because `GroupAuditLogEntry::created_at` is required, that
+    /// made *every* audit entry fail to deserialize, so instance warns,
+    /// kicks and bans were silently dropped on the floor and never reached
+    /// Discord. Accepting both spellings is the fix.
+    ///
+    /// The payload below is a real one, recorded from a live group, with
+    /// the ids and display names replaced. The names keep their original
+    /// character classes on purpose: a Cyrillic-homoglyph actor and a
+    /// fullwidth target are what VRChat display names actually look like.
+    #[test]
+    fn audit_entries_accept_vrchats_snake_case_timestamp() {
+        let live = serde_json::json!({
+            "id": "gaud_00000000-0000-4000-8000-000000000001",
+            "groupId": "grp_00000000-0000-4000-8000-000000000002",
+            "created_at": "2026-10-20T18:39:42.677Z",
+            "actorId": "usr_00000000-0000-4000-8000-000000000003",
+            "actorDisplayName": "Аlісе",
+            "targetId": "usr_00000000-0000-4000-8000-000000000004",
+            "eventType": "group.instance.warn",
+            "description": "Аlісе has issued an instance warn for Ｂｏｂ.",
+            "data": { "location": "wrld_x:1~group(grp_y)~groupAccessType(plus)~region(use)" }
+        });
+        let entry: GroupAuditLogEntry = serde_json::from_value(live).unwrap();
+        assert_eq!(entry.event_type, "group.instance.warn");
+        assert_eq!(
+            entry.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "2026-10-20T18:39:42.677Z"
+        );
+        assert_eq!(entry.actor_display_name.as_deref(), Some("Аlісе"));
+
+        // The camelCase spelling must keep working: this is an added
+        // tolerance, not a swap, and other endpoints may still use it.
+        let camel = serde_json::json!({
+            "id": "gaud_1", "groupId": "grp_1",
+            "createdAt": "2026-10-20T18:39:42.677Z",
+            "eventType": "group.user.ban"
+        });
+        let entry: GroupAuditLogEntry = serde_json::from_value(camel).unwrap();
+        assert_eq!(entry.event_type, "group.user.ban");
     }
 }
