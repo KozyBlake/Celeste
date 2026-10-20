@@ -32,7 +32,7 @@
   {
     "name": "VRC Kmart",
     "url": "https://vrchat.com/home/group/grp_8c7c423b-cfab-40f5-a53a-a8431655826b",
-    "role": "Community support and testing"
+    "role": "Community support and testing; reported the virtual-machine startup failure behind the software-rendering fallback"
   },
   {
     "name": "Fran560",

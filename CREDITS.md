@@ -37,6 +37,9 @@ you tested and would like to be named here, say so.
 
 - [Fran560](https://vrchat.com/home/user/usr_60257903-b52a-463a-a48e-e188eb5b6947)
   reported the Intel Arc/Vulkan VRAM issue.
+- [VRC Kmart](https://vrchat.com/home/group/grp_8c7c423b-cfab-40f5-a53a-a8431655826b)
+  reported that Celeste would not start on a virtual machine with no
+  usable GPU, which uncovered the missing software-rendering fallback.
 
 ## Artwork
 
