@@ -102,6 +102,10 @@ impl RecordingEmitter {
 
 #[async_trait::async_trait]
 impl crate::AuditEmitter for RecordingEmitter {
+    fn audit_entry_expected(&self) {
+        self.record("audit-refresh-requested".to_string());
+    }
+
     async fn is_emitting(&self, _event_type: &str) -> bool {
         true
     }

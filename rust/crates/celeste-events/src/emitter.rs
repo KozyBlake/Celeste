@@ -43,6 +43,20 @@ pub trait AuditEmitter: Send + Sync {
     /// before doing the work an emission would need.
     async fn is_emitting(&self, event_type: &str) -> bool;
 
+    /// Something just happened locally that the group audit log will
+    /// almost certainly record in a moment -- a warn or a kick seen in
+    /// this instance's own log.
+    ///
+    /// The audit poller is on a timer (60s by default), so without this
+    /// the authoritative record is up to a minute behind an action the
+    /// client already knows about. This asks for that poll to be brought
+    /// forward; it is a hint, not a second notification path, so the
+    /// embed, thread and tags still come from the one audit entry.
+    ///
+    /// Default is a no-op: a run with no Discord connection has no
+    /// poller to wake.
+    fn audit_entry_expected(&self) {}
+
     async fn emit_user_join(&self, timestamp: NaiveDateTime, location: &str, user_id: &str, display_name: &str);
     async fn emit_user_leave(&self, timestamp: NaiveDateTime, location: &str, user_id: &str, display_name: &str);
     async fn emit_staff_join(&self, timestamp: NaiveDateTime, location: &str, user_id: &str, display_name: &str);

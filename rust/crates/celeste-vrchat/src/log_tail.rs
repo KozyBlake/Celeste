@@ -266,13 +266,29 @@ pub enum LogEventKind {
     /// and to whom, never by whom — guessing an actor from whoever was
     /// nearby would be a fabricated moderation record.
     PlayerKicked { display_name: String },
+    /// `[ModerationManager] <display name> has been warned`: an instance
+    /// warn that took effect in the instance this client is in.
+    ///
+    /// **Not in Java**, which matches only the vote-kick line.
+    ///
+    /// Unlike [`LogEventKind::PlayerKicked`], a group-role instance warn
+    /// *does* write a `group.instance.warn` audit entry, so this line is
+    /// not the only record of it -- it is the *fast* one. It arrives
+    /// within a second, where the audit poller is on a timer and may be a
+    /// minute behind. Celeste uses it to bring the authoritative poll
+    /// forward, not to replace it.
+    ///
+    /// VRChat names no actor here either, so the actor comes from the
+    /// audit entry that follows.
+    PlayerWarned { display_name: String },
     /// A `[ModerationManager]` line whose shape this parser does not know.
     ///
-    /// Not a parsed event — an instrument. The only moderation line
-    /// Celeste recognises is the vote-kick, so a moderation action taken
-    /// by someone with VRChat-side privileges leaves no trace it can act
-    /// on: it is not a group-role action, so the group audit log never
-    /// records it, and locally the target simply appears to leave.
+    /// Not a parsed event — an instrument. Celeste recognises the
+    /// vote-kick, the kick and the warn; any other moderation action
+    /// taken by someone with VRChat-side privileges leaves no trace it
+    /// can act on, because it is not a group-role action, so the group
+    /// audit log never records it and locally the target simply appears
+    /// to leave.
     ///
     /// The prefix allowlist already passes every `[ModerationManager]`
     /// line through, so anything VRChat does write was reaching the parser
@@ -432,6 +448,11 @@ pub fn parse_entry_text(text: &str) -> Option<LogEventKind> {
         if let Some(display_name) = after_mm.strip_suffix(" has been kicked") {
             if !display_name.is_empty() {
                 return Some(LogEventKind::PlayerKicked { display_name: display_name.to_string() });
+            }
+        }
+        if let Some(display_name) = after_mm.strip_suffix(" has been warned") {
+            if !display_name.is_empty() {
+                return Some(LogEventKind::PlayerWarned { display_name: display_name.to_string() });
             }
         }
         return Some(LogEventKind::UnrecognizedModeration { text: after_mm.to_string() });
@@ -1293,6 +1314,24 @@ mod moderation_line_tests {
         assert_eq!(
             parse_entry_text("[ModerationManager] something entirely new happened"),
             Some(LogEventKind::UnrecognizedModeration { text: "something entirely new happened".to_string() })
+        );
+    }
+
+    /// The warn line arrives about a second after the action, where the
+    /// audit poller can be a minute behind it. Recorded from a live
+    /// instance warn; the fullwidth name is what VRChat actually wrote.
+    #[test]
+    fn an_instance_warn_is_parsed_from_the_local_log() {
+        assert_eq!(
+            parse_entry_text("[ModerationManager] \u{ff30}\u{ff45}\u{ff4e}\u{ff4e}\u{ff59} has been warned"),
+            Some(LogEventKind::PlayerWarned {
+                display_name: "\u{ff30}\u{ff45}\u{ff4e}\u{ff4e}\u{ff59}".to_string()
+            })
+        );
+        // An empty name is not a warn; it falls through to the catch-all.
+        assert_eq!(
+            parse_entry_text("[ModerationManager]  has been warned"),
+            Some(LogEventKind::UnrecognizedModeration { text: " has been warned".to_string() })
         );
     }
 

@@ -385,6 +385,10 @@ fn user_link(user_id: &str) -> String {
 
 #[async_trait::async_trait]
 impl celeste_events::AuditEmitter for DiscordAuditEmitter {
+    fn audit_entry_expected(&self) {
+        crate::events::audit_poller::poll_soon();
+    }
+
     async fn is_emitting(&self, event_type: &str) -> bool {
         self.http.read().await.is_some() && self.configured_channel(event_type, false).is_some()
     }

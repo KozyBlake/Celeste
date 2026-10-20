@@ -421,6 +421,9 @@ impl CelesteEventListener {
             LogEventKind::PlayerKicked { display_name } => {
                 self.log_player_kicked(preamble, timestamp, display_name)
             }
+            LogEventKind::PlayerWarned { display_name } => {
+                self.log_player_warned(preamble, timestamp, display_name)
+            }
             LogEventKind::UnrecognizedModeration { text } => {
                 self.log_unrecognized_moderation(preamble, &text)
             }
@@ -1326,6 +1329,38 @@ impl CelesteEventListener {
             Some(user_id) => format!("{display_name} ({user_id}) was kicked from the instance; VRChat does not record who did it."),
             None => format!("{display_name} was kicked from the instance; VRChat does not record who did it."),
         });
+        // A group-role kick writes `group.instance.kick`; a VRChat-side one
+        // writes nothing. Asking either way costs one poll and saves up to
+        // a minute when there is something to find.
+        self.deps.emitter.audit_entry_expected();
+    }
+
+    /// An instance warn that took effect in this instance.
+    ///
+    /// **Not in Java.** Unlike a kick, a group-role warn does write a
+    /// `group.instance.warn` audit entry, so this is the fast half of the
+    /// story and the audit poller supplies the rest: who issued it, the
+    /// moderation thread, and the tags. The local line names no actor, so
+    /// nothing here attributes the action -- it reports that the warn
+    /// landed and brings the authoritative poll forward.
+    fn log_player_warned(&mut self, preamble: bool, timestamp: NaiveDateTime, display_name: String) {
+        if preamble {
+            return;
+        }
+        let user_id = self.display_name_to_user_id.get(&display_name).cloned();
+        match &user_id {
+            Some(user_id) => tracing::info!(
+                "Warned in the instance: {display_name} ({user_id}) at {timestamp} - the audit entry names who issued it"
+            ),
+            None => tracing::info!(
+                "Warned in the instance: {display_name} (user id unknown) at {timestamp} - the audit entry names who issued it"
+            ),
+        }
+        self.deps.ui.append_cli_output(&match &user_id {
+            Some(user_id) => format!("{display_name} ({user_id}) was warned in the instance."),
+            None => format!("{display_name} was warned in the instance."),
+        });
+        self.deps.emitter.audit_entry_expected();
     }
 
     /// Reports a `[ModerationManager]` line Celeste cannot parse — once
@@ -1349,6 +1384,7 @@ impl CelesteEventListener {
             "Unrecognized VRChat moderation line (Celeste cannot attribute this action): {text}"
         );
         self.deps.ui.append_cli_output(&format!("Unparsed moderation event from VRChat: {text}"));
+        self.deps.emitter.audit_entry_expected();
     }
 
     /// Port of `log_vtkInit`.
@@ -2132,6 +2168,44 @@ mod tests {
         h.listener.handle(entry(false, 101, player_joined("Church", "usr_church"))).await;
         assert_eq!(h.ui.calls().joins.len(), 1);
         assert_eq!(h.ui.player("usr_church").unwrap().name, "Church");
+    }
+
+    /// An instance warn is visible in the local log about a second after
+    /// it happens; the audit poller that carries the actor, the thread and
+    /// the tags is on a 60s timer. The local line exists to pull that poll
+    /// forward, so the listener must ask for a refresh -- without this the
+    /// authoritative record is up to a minute late.
+    #[tokio::test]
+    async fn a_local_warn_asks_for_the_audit_poll_to_be_brought_forward() {
+        let mut h = harness(true);
+        h.listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        h.listener.handle(entry(false, 101, player_joined("Ｐｅｎｎｙ", "usr_penny"))).await;
+        let before = h.emitter.events().len();
+
+        h.listener
+            .handle(entry(false, 102, LogEventKind::PlayerWarned { display_name: "Ｐｅｎｎｙ".into() }))
+            .await;
+
+        let new: Vec<String> = h.emitter.events().into_iter().skip(before).collect();
+        assert!(
+            new.iter().any(|event| event == "audit-refresh-requested"),
+            "a local warn must bring the audit poll forward, got {new:?}"
+        );
+    }
+
+    /// Replaying an old log at startup must not wake the poller: those
+    /// actions are long since in the audit log and already processed.
+    #[tokio::test]
+    async fn replaying_old_log_lines_does_not_wake_the_poller() {
+        let mut h = harness(true);
+        h.listener.handle(entry(true, 100, joined(GROUP_LOCATION))).await;
+        h.listener
+            .handle(entry(true, 101, LogEventKind::PlayerWarned { display_name: "Ｐｅｎｎｙ".into() }))
+            .await;
+        assert!(
+            !h.emitter.events().iter().any(|event| event == "audit-refresh-requested"),
+            "preamble replay must not request a refresh"
+        );
     }
 
     #[tokio::test]
