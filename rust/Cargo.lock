@@ -779,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "celeste"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "celeste-core",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "celeste-core"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -834,14 +834,14 @@ dependencies = [
 
 [[package]]
 name = "celeste-dave"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "celeste-discord"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "celeste-events"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "celeste-core",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "celeste-gif"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -892,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "celeste-ui"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "celeste-core",
  "celeste-discord",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "celeste-vrchat"
-version = "0.10.0"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
