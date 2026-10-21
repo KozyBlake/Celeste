@@ -32,7 +32,6 @@ or from Discord with `/settings edit`.
 | Graphics renderer (restart to apply) | `graphics_renderer` | one of a list discovered at runtime | Chooses the graphics API used to draw Celeste. Automatic is recommended: it tries each API your machine has and falls back to software rendering on a virtual machine or a system with no graphics driver. Pick Software to force that fallback, or another API to work around a graphics-driver problem. Restart Celeste to apply. |
 | Colour section headers with accent | `ui_accent_headers` | boolean (default `false`) | Tints section headings with your accent colour. |
 | Confirmation dialog for group invites | `ui_confirm_group_invite` | boolean (default `false`) | Asks before sending a group invite. |
-| Desktop UI language (restart to apply) | `ui_language` | one of a list discovered at runtime | Language for the desktop window. Takes effect after a restart. |
 | Dim players who left (%) | `ui_left_player_dim_percent` | integer `0`–`80` (default `35`) | How far to fade players who have left, so they stay readable without competing with the people still present. |
 | Show CLI tab | `ui_show_cli_tab` | boolean (default `true`) | Shows the CLI tab. |
 | Show UI during load | `ui_show_during_load` | boolean (default `false`) | Opens the window while Celeste is still starting, rather than when it is ready. |
@@ -103,6 +102,7 @@ or from Discord with `/settings edit`.
 | TTS: Flag suspicious pronouns | `tts_flag_suspicious_pronouns` | boolean (default `true`) | Reads the pronoun itself aloud as part of the warning, rather than only saying one was flagged. |
 | TTS: Use default system audio device | `tts_use_default_audio_device` | boolean (default `true`) | Speaks through this computer's audio output. Turn off to speak into the configured Discord voice channel instead. |
 | TTS: Voice name | `tts_voice_name` | one of a list discovered at runtime | Which installed system voice to speak with. Leave empty for the default. |
+| TTS: Volume | `tts_volume_percent` | integer `0`–`100` (default `100`) | How loud spoken callouts and the alert chime play through this computer, as a percentage of the engine's own level. Takes effect on the next announcement. Does not affect Discord voice, where the level belongs to the channel rather than to this machine. |
 
 ## Discord
 
