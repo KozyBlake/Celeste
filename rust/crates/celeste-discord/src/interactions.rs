@@ -2090,7 +2090,7 @@ mod tests {
         let ticket = crate::commands::ticket_config::MESSAGE_MODAL_ID;
         assert!(ticket.starts_with(crate::commands::settings::MODAL_PREFIX));
         assert!(!is_settings_modal(ticket));
-        assert!(is_settings_modal("settings:ui_language"));
+        assert!(is_settings_modal("settings:graphics_renderer"));
     }
 
     #[test]

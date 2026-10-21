@@ -971,7 +971,7 @@ impl VrChatClient {
             .http
             .post(self.url(&format!("/groups/{group_id}/bans")))
             .json(&serde_json::json!({ "userId": user_id }))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -986,7 +986,7 @@ impl VrChatClient {
         let response = self
             .http
             .delete(self.url(&format!("/groups/{group_id}/bans/{user_id}")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1003,7 +1003,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/members/{user_id}")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -1613,6 +1613,40 @@ impl VrChatClient {
     ) -> Result<bool, VrChatError> {
         self.has_group_permission(group_id, user_id, permission, true)
             .await
+    }
+
+    /// Whether `user_id` holds *any* of `permissions` in `group_id`, with the
+    /// group owner counting as a grant.
+    ///
+    /// Same two requests however many permissions are tested, which is the
+    /// point: "is this person a moderator here?" is a question about several
+    /// permissions at once, and asking
+    /// [`Self::user_has_group_permission`] once per permission would repeat
+    /// the group and member fetch every time.
+    pub async fn user_has_any_group_permission(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        permissions: &[&str],
+    ) -> Result<bool, VrChatError> {
+        let group = self.get_group(group_id, true).await?;
+        if group.owner_id.as_deref() == Some(user_id) {
+            return Ok(true);
+        }
+        let Some(member) = self.get_group_member(group_id, user_id).await? else {
+            return Ok(false);
+        };
+        let Some(roles) = &group.roles else {
+            return Ok(false);
+        };
+        Ok(roles
+            .iter()
+            .filter(|role| member.role_ids.contains(&role.id))
+            .any(|role| {
+                role.permissions
+                    .iter()
+                    .any(|held| held == PERMISSION_ALL || permissions.contains(&held.as_str()))
+            }))
     }
 
     async fn has_group_permission(

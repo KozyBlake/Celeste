@@ -595,6 +595,56 @@ fn linux_audio_settings_candidates(
     candidates
 }
 
+/// Raises a native desktop notification.
+///
+/// Shelled out rather than taken as a dependency, matching how Celeste
+/// already reaches speech engines and audio players: no extra crate, and a
+/// missing tool degrades to "no notification" instead of a build that only
+/// works on one distribution.
+///
+/// Windows is deliberately absent. Its native idiom for "a window wants
+/// you" is the taskbar flash, which Celeste already requests, and raising a
+/// real toast needs either a module that is not installed by default or
+/// hand-written WinRT XML.
+pub fn desktop_notification(summary: &str, body: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let spawned = std::process::Command::new("notify-send")
+            .args(["--app-name=Celeste", "--urgency=normal", summary, body])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Err(error) = spawned {
+            tracing::debug!(%error, "notify-send is unavailable; no desktop notification");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // AppleScript string literals take backslash escapes, and an
+        // unescaped quote in a player name would otherwise end the script.
+        let escape = |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            "display notification \"{}\" with title \"Celeste\" subtitle \"{}\"",
+            escape(body),
+            escape(summary)
+        );
+        let spawned = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Err(error) = spawned {
+            tracing::debug!(%error, "osascript is unavailable; no desktop notification");
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (summary, body);
+    }
+}
+
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn open_audio_settings(_panel: AudioSettingsPanel) -> Result<&'static str, String> {
     Err("Celeste cannot open sound settings automatically on this operating system.".to_string())

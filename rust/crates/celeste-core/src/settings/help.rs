@@ -44,6 +44,7 @@ pub fn describe(id: &str) -> Option<&'static str> {
         "tts_announce_visitor_rank" => "Speaks a warning when a Visitor-rank player joins.",
         "tts_announce_nuisance_rank" => "Speaks a warning when a probable-nuisance player joins.",
         "tts_flag_suspicious_pronouns" => "Reads the pronoun itself aloud as part of the warning, rather than only saying one was flagged.",
+        "tts_volume_percent" => "How loud spoken callouts and the alert chime play through this computer, as a percentage of the engine's own level. Takes effect on the next announcement. Does not affect Discord voice, where the level belongs to the channel rather than to this machine.",
         "tts_voice_name" => "Which installed system voice to speak with. Leave empty for the default.",
         "tts_use_default_audio_device" => "Speaks through this computer's audio output. Turn off to speak into the configured Discord voice channel instead.",
 
@@ -120,7 +121,6 @@ pub fn describe(id: &str) -> Option<&'static str> {
         "cache_cleanup_days" => "How old a file has to be before cleanup removes it, in days.",
 
         // ── Interface ────────────────────────────────────────────────────
-        "ui_language" => "Language for the desktop window. Takes effect after a restart.",
         "graphics_renderer" => "Chooses the graphics API used to draw Celeste. Automatic is recommended: it tries each API your machine has and falls back to software rendering on a virtual machine or a system with no graphics driver. Pick Software to force that fallback, or another API to work around a graphics-driver problem. Restart Celeste to apply.",
         "ui_left_player_dim_percent" => "How far to fade players who have left, so they stay readable without competing with the people still present.",
         "ui_accent_headers" => "Tints section headings with your accent colour.",

@@ -175,6 +175,7 @@ fn run() -> anyhow::Result<()> {
         secret_staff_list: Arc::new(celeste_core::staff_list::StaffList::open(&data_dir, "secret_staff_list.json")),
         moderation_tags: Arc::new(celeste_core::moderation_tags::ModerationTags::open(&data_dir, "moderation_tags.json")),
         watched_groups: Arc::new(celeste_core::watched_groups::WatchedGroups::open(&data_dir, "watched_groups.json")),
+        auto_ban_groups: Arc::new(celeste_core::auto_ban_groups::AutoBanGroups::open(&data_dir)),
         watched_users: Arc::new(celeste_core::watched_entities::WatchedEntities::open(
             &data_dir,
             "watched_users.json",
@@ -289,6 +290,7 @@ fn run() -> anyhow::Result<()> {
         watched_users: shared.watched_users.clone(),
         watched_avatars: shared.watched_avatars.clone(),
         watched_groups: shared.watched_groups.clone(),
+        auto_ban_groups: shared.auto_ban_groups.clone(),
         pronoun_lists: pronoun_lists.clone(),
         tts: tts_route.clone(),
         avatar_search: Arc::new(celeste_discord::avatar_search::ListenerAvatarSearch::new(

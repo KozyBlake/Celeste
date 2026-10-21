@@ -4,10 +4,10 @@
 
 pub mod change_listener;
 pub mod cache_cleanup;
+pub mod auto_ban_groups;
 pub mod data;
 pub mod features;
 pub mod file_backups;
-pub mod i18n;
 pub mod identity;
 pub mod instance_roster;
 pub mod java_hash;

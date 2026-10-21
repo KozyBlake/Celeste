@@ -6,12 +6,16 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 const MIXED_CHARACTER_ALERT: &[u8] = include_bytes!("../resources/tts/mixed-character-alert.wav");
 const NUISANCE_ALERT: &[u8] = include_bytes!("../resources/tts/bl_sfx_siren_chirp.wav");
+/// A soft two-note chime for a prompt that opened while Celeste was not
+/// the focused window. Deliberately not the siren: this says "look at me",
+/// not "something is wrong".
+const ATTENTION_ALERT: &[u8] = include_bytes!("../resources/tts/attention.wav");
 
 // Keep the Windows script in one testable string. Rendering first and then
 // playing the WAV mirrors Scarlet's reliable path and avoids SAPI silently
@@ -35,6 +39,10 @@ try {
   $v=$env:CELESTE_TTS_VOICE
   if (![string]::IsNullOrWhiteSpace($v)) {
     try { $s.SelectVoice($v) } catch { }
+  }
+  $vol=$env:CELESTE_TTS_VOLUME
+  if (![string]::IsNullOrWhiteSpace($vol)) {
+    try { $s.Volume=[int]$vol } catch { }
   }
   $s.SetOutputToWaveFile($wav)
   $s.Speak($env:CELESTE_TTS_TEXT)
@@ -133,7 +141,7 @@ impl Engine {
     /// player is available, and the caller then falls back to letting the
     /// engine play directly, as Java falls back to Java Sound.
     #[cfg(target_os = "linux")]
-    fn play_via_player(&self, text: &str, voice: &str) -> Option<std::io::Result<Child>> {
+    fn play_via_player(&self, text: &str, voice: &str, volume: i32) -> Option<std::io::Result<Child>> {
         let prefix = resolve_player_prefix()?;
         let wav = std::env::temp_dir().join(format!(
             "celeste-tts-{}-{}.wav",
@@ -202,7 +210,7 @@ impl Engine {
         }
         let (player, args) = prefix.split_first()?;
         let mut command = Command::new(player);
-        command.args(args).arg(&wav);
+        command.args(args).args(player_volume_args(player, volume)).arg(&wav);
         let spawned = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -217,11 +225,16 @@ impl Engine {
         Some(spawned)
     }
 
-    fn spawn(&self, text: &str, voice: &str) -> std::io::Result<Child> {
+    fn spawn(&self, text: &str, voice: &str, volume: i32) -> std::io::Result<Child> {
         #[cfg(target_os = "linux")]
-        if let Some(result) = self.play_via_player(text, voice) {
+        if let Some(result) = self.play_via_player(text, voice, volume) {
             return result;
         }
+        // Reached only when no external player exists, so each engine has
+        // to attenuate itself. Flite and pico2wave have no volume control
+        // of their own; pico cannot play audio at all without the player
+        // stage, so neither is a practical gap.
+        let volume = volume.clamp(0, 100);
         // The stored id is `engine/voice`; command-line synthesizers only
         // understand the voice portion. Keeping the prefix here made macOS
         // and direct Linux playback silently fall back to their defaults.
@@ -233,11 +246,21 @@ impl Engine {
                 if !voice.is_empty() {
                     command.args(["-v", voice]);
                 }
+                // eSpeak amplitude is 0-200 with 100 as its default, so a
+                // percentage maps straight onto it.
+                if volume < 100 {
+                    command.args(["-a", &volume.to_string()]);
+                }
                 command.arg(text);
                 command
             }
             Self::SpdSay(path) => {
                 let mut command = Command::new(path);
+                // speech-dispatcher takes -100..100 relative to the voice's
+                // own level, so full volume is 0 rather than 100.
+                if volume < 100 {
+                    command.args(["-i", &(volume - 100).to_string()]);
+                }
                 command.args(["--wait", text]);
                 command
             }
@@ -263,7 +286,14 @@ impl Engine {
                 if !voice.is_empty() {
                     command.args(["-v", voice]);
                 }
-                command.arg(text);
+                // `say` has no volume flag; the embedded command is how its
+                // own markup sets one, and it applies to the rest of the
+                // utterance.
+                if volume < 100 {
+                    command.arg(format!("[[volm {:.2}]]{text}", f64::from(volume) / 100.0));
+                } else {
+                    command.arg(text);
+                }
                 command
             }
             Self::PowerShell(path) => {
@@ -284,6 +314,7 @@ impl Engine {
                 command
                     .env("CELESTE_TTS_VOICE", voice)
                     .env("CELESTE_TTS_TEXT", text)
+                    .env("CELESTE_TTS_VOLUME", volume.to_string())
                     .env("CELESTE_TTS_WAV", &wav);
                 command.args([
                     "-NoProfile",
@@ -311,6 +342,32 @@ impl Engine {
             // sense - no audio and no reason.
             .stderr(Stdio::piped())
             .spawn()
+    }
+}
+
+/// Volume arguments for an external WAV player, as a percentage.
+///
+/// Only the players that can actually attenuate get arguments. `aplay`
+/// has no volume option at all, and a player supplied through
+/// `CELESTE_TTS_PLAYER` is the operator's own command -- guessing a flag
+/// for either would be a spawn failure rather than a quieter clip, so both
+/// are left at their own level.
+#[cfg(target_os = "linux")]
+fn player_volume_args(player: &str, percent: i32) -> Vec<String> {
+    if percent >= 100 {
+        return Vec::new();
+    }
+    let percent = percent.clamp(0, 100);
+    let name = std::path::Path::new(player)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| player.to_string());
+    match name.as_str() {
+        // pw-play takes a linear 0.0-1.0 cubic-mapped volume.
+        "pw-play" | "pw-cat" => vec![format!("--volume={:.3}", f64::from(percent) / 100.0)],
+        // paplay's scale is 0-65536, where 65536 is the stream's own level.
+        "paplay" => vec![format!("--volume={}", percent * 65536 / 100)],
+        _ => Vec::new(),
     }
 }
 
@@ -358,6 +415,11 @@ enum Request {
 
 pub struct TtsService {
     sender: mpsc::Sender<Request>,
+    /// Playback level as a percentage, read by the worker when a clip is
+    /// about to play rather than when it was queued -- so turning the
+    /// slider down affects whatever speaks next, not just what is queued
+    /// after it.
+    volume_percent: Arc<AtomicI32>,
     paused: Arc<AtomicBool>,
     shutting_down: Arc<AtomicBool>,
     active: Arc<Mutex<Option<Child>>>,
@@ -377,6 +439,7 @@ pub struct TtsService {
     engine_name: Option<&'static str>,
     mixed_character_alert: Option<PathBuf>,
     nuisance_alert: Option<PathBuf>,
+    attention_alert: Option<PathBuf>,
 }
 
 impl Default for TtsService {
@@ -393,6 +456,7 @@ impl TtsService {
         let mixed_character_alert =
             extract_alert("mixed-character-alert.wav", MIXED_CHARACTER_ALERT);
         let nuisance_alert = extract_alert("bl_sfx_siren_chirp.wav", NUISANCE_ALERT);
+        let attention_alert = extract_alert("attention.wav", ATTENTION_ALERT);
         let (sender, receiver) = mpsc::channel();
         let paused = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
@@ -400,6 +464,8 @@ impl TtsService {
         let generation = Arc::new(AtomicU64::new(0));
         let pending = Arc::new(AtomicU64::new(0));
         let active: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+        let volume_percent = Arc::new(AtomicI32::new(100));
+        let worker_volume = volume_percent.clone();
         let worker_active = active.clone();
         let worker_shutdown = shutting_down.clone();
         let worker_skip = skip_requested.clone();
@@ -411,11 +477,14 @@ impl TtsService {
                 worker(
                     receiver,
                     engine,
-                    worker_active,
-                    worker_shutdown,
-                    worker_skip,
-                    worker_generation,
-                    worker_pending,
+                    WorkerShared {
+                        active: worker_active,
+                        shutting_down: worker_shutdown,
+                        skip_requested: worker_skip,
+                        generation: worker_generation,
+                        pending: worker_pending,
+                        volume_percent: worker_volume,
+                    },
                 )
             })
             .expect("spawn TTS worker");
@@ -426,6 +495,7 @@ impl TtsService {
         }
         Self {
             sender,
+            volume_percent,
             skip_requested,
             generation,
             pending,
@@ -435,6 +505,7 @@ impl TtsService {
             engine_name,
             mixed_character_alert,
             nuisance_alert,
+            attention_alert,
         }
     }
 
@@ -475,6 +546,12 @@ impl TtsService {
 
     pub fn set_paused(&self, paused: bool) {
         self.paused.store(paused, Ordering::SeqCst);
+    }
+
+    /// Sets the playback level, as a percentage of the engine's own.
+    pub fn set_volume(&self, percent: i32) {
+        self.volume_percent
+            .store(percent.clamp(0, 100), Ordering::Relaxed);
     }
 
     pub fn submit(&self, text: impl Into<String>, voice: impl Into<String>) -> Result<(), String> {
@@ -544,6 +621,15 @@ impl TtsService {
             return Err("The TTS worker stopped.".to_string());
         }
         Ok(())
+    }
+
+    /// The chime for a prompt raised while Celeste was in the background.
+    ///
+    /// Ignores the pause state: pausing callouts silences moderation
+    /// chatter, and a dialog waiting on an answer is not chatter -- Celeste
+    /// is asking the operator a question and cannot proceed without one.
+    pub fn submit_attention_alert(&self) -> Result<(), String> {
+        self.submit_audio(self.attention_alert.as_ref(), false)
     }
 
     /// Java's `submitMixedCharacterNameJoinAlert`: alert first, then the
@@ -639,15 +725,29 @@ impl Drop for TtsService {
     }
 }
 
-fn worker(
-    receiver: mpsc::Receiver<Request>,
-    engine: Option<Engine>,
+/// The handles the worker shares with [`TtsService`].
+///
+/// Grouped rather than passed one by one: the worker needs all of them for
+/// the life of the thread, and a six-argument tail of `Arc`s is a list
+/// nobody can read at the call site.
+struct WorkerShared {
     active: Arc<Mutex<Option<Child>>>,
     shutting_down: Arc<AtomicBool>,
     skip_requested: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     pending: Arc<AtomicU64>,
-) {
+    volume_percent: Arc<AtomicI32>,
+}
+
+fn worker(receiver: mpsc::Receiver<Request>, engine: Option<Engine>, shared: WorkerShared) {
+    let WorkerShared {
+        active,
+        shutting_down,
+        skip_requested,
+        generation,
+        pending,
+        volume_percent,
+    } = shared;
     struct PendingRequest<'a>(&'a AtomicU64);
     impl Drop for PendingRequest<'_> {
         fn drop(&mut self) {
@@ -682,7 +782,7 @@ fn worker(
                 let Some(engine) = Engine::for_voice(&voice).or_else(|| engine.clone()) else {
                     continue;
                 };
-                engine.spawn(&text, &voice)
+                engine.spawn(&text, &voice, volume_percent.load(Ordering::Relaxed))
             }
             Request::Audio {
                 path,
@@ -691,7 +791,7 @@ fn worker(
                 if request_generation != generation.load(Ordering::SeqCst) {
                     continue;
                 }
-                spawn_audio_file(&path)
+                spawn_audio_file(&path, volume_percent.load(Ordering::Relaxed))
             }
             Request::Shutdown => unreachable!("shutdown handled before pending request guard"),
         };
@@ -795,7 +895,7 @@ fn extract_alert(name: &str, bytes: &[u8]) -> Option<PathBuf> {
     Some(path)
 }
 
-fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
+fn spawn_audio_file(path: &Path, volume: i32) -> std::io::Result<Child> {
     #[cfg(target_os = "linux")]
     {
         let prefix = resolve_player_prefix().ok_or_else(|| {
@@ -807,6 +907,7 @@ fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
         let (player, args) = prefix.split_first().expect("non-empty player command");
         return Command::new(player)
             .args(args)
+            .args(player_volume_args(player, volume))
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -818,7 +919,11 @@ fn spawn_audio_file(path: &Path) -> std::io::Result<Child> {
         let player = find_on_path("afplay").ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "afplay is unavailable")
         })?;
-        return Command::new(player).arg(path).spawn();
+        let mut command = Command::new(player);
+        if volume < 100 {
+            command.args(["-v", &format!("{:.3}", f64::from(volume.clamp(0, 100)) / 100.0)]);
+        }
+        return command.arg(path).spawn();
     }
     #[cfg(target_os = "windows")]
     {
@@ -1074,6 +1179,13 @@ impl TtsSinkAdapter {
         }
     }
 
+    /// Pushes the configured level at the service before queueing, so the
+    /// slider is read per utterance exactly as the voice name is.
+    fn apply_volume(&self) {
+        self.service
+            .set_volume(self.settings.tts_volume_percent.get());
+    }
+
     /// Skip the current announcement on whichever route it is playing on.
     ///
     /// The toolbar button used to call [`TtsService::skip`] directly,
@@ -1133,6 +1245,7 @@ impl TtsSinkAdapter {
             self.discord.is_some(),
         ) {
             OutputRoute::Local => {
+                self.apply_volume();
                 if let Err(err) = self.service.submit(text, voice) {
                     tracing::debug!("TTS({marker}): {err}");
                 }
@@ -1151,6 +1264,7 @@ impl TtsSinkAdapter {
                 if let Some(ui) = self.ui.as_ref() {
                     ui.set_tts_status(Some(problem.to_string()));
                 }
+                self.apply_volume();
                 if let Err(err) = self.service.submit(text, voice) {
                     tracing::debug!("TTS({marker}) fallback: {err}");
                 }
@@ -1174,7 +1288,8 @@ impl celeste_events::TtsSink for TtsSinkAdapter {
     fn speak_after_nuisance_alert(&self, marker: &str, text: &str) {
         let voice = self.settings.tts_voice_name.get();
         if self.settings.tts_use_default_audio_device.get() {
-            if let Err(err) = self.service.submit_nuisance_alert(text, voice) {
+            self.apply_volume();
+                if let Err(err) = self.service.submit_nuisance_alert(text, voice) {
                 tracing::debug!("TTS({marker}): {err}");
             }
         } else if let Some(discord) = &self.discord {
@@ -1187,10 +1302,11 @@ impl celeste_events::TtsSink for TtsSinkAdapter {
     }
 
     fn speak_mixed_character_name_alert(&self, marker: &str) {
-        let text = celeste_core::i18n::tr("adv.ttsMixedCharAlert", &[]);
+        let text = "Mixed-letter name joined. Check nameplates.".to_string();
         let voice = self.settings.tts_voice_name.get();
         if self.settings.tts_use_default_audio_device.get() {
-            if let Err(err) = self.service.submit_mixed_character_alert(text, voice) {
+            self.apply_volume();
+                if let Err(err) = self.service.submit_mixed_character_alert(text, voice) {
                 tracing::debug!("TTS({marker}): {err}");
             }
         } else if let Some(discord) = &self.discord {

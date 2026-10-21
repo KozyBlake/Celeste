@@ -1386,7 +1386,7 @@ fn create_instance_request(
 
 fn canonicalize_cli_command(op: &str) -> String {
     let low = op.trim().to_ascii_lowercase();
-    const CANONICAL: [&str; 26] = [
+    const CANONICAL: [&str; 25] = [
         "info",
         "help",
         "check",
@@ -1397,7 +1397,6 @@ fn canonicalize_cli_command(op: &str) -> String {
         "stop",
         "reboot",
         "restart",
-        "langlint",
         "simulate",
         "explore",
         "tts",
@@ -1416,28 +1415,6 @@ fn canonicalize_cli_command(op: &str) -> String {
     ];
     if CANONICAL.contains(&low.as_str()) {
         return low;
-    }
-    for (canonical, key) in [
-        ("help", "cli.alias.help"),
-        ("logout", "cli.alias.logout"),
-        ("exit", "cli.alias.exit"),
-        ("reboot", "cli.alias.reboot"),
-        ("langlint", "cli.alias.langlint"),
-        ("simulate", "cli.alias.simulate"),
-        ("explore", "cli.alias.explore"),
-        ("tts", "cli.alias.tts"),
-        ("link", "cli.alias.link"),
-        ("importgroups", "cli.alias.importgroups"),
-        ("importgroupsjson", "cli.alias.importgroupsjson"),
-    ] {
-        let aliases = celeste_core::i18n::tr(key, &[]);
-        if aliases != key
-            && aliases
-                .split(|c: char| c == ',' || c.is_whitespace())
-                .any(|alias| alias.eq_ignore_ascii_case(&low))
-        {
-            return canonical.into();
-        }
     }
     low
 }
@@ -1838,6 +1815,53 @@ pub struct WatchedGroupsView {
     memberships: Vec<celeste_core::watched_membership::WatchedMembership>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchListKind {
+    Users,
+    Groups,
+    Avatars,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NameResolutionTarget {
+    WatchedUsers,
+    WatchedGroups,
+    WatchedAvatars,
+    AutoBanGroups,
+}
+
+struct NameResolution {
+    target: NameResolutionTarget,
+    id: String,
+    result: Result<String, String>,
+}
+
+impl WatchListKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Users => "Watched users",
+            Self::Groups => "Watched groups",
+            Self::Avatars => "Watched avatars",
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Users => "watched_users.json",
+            Self::Groups => "watched_groups.json",
+            Self::Avatars => "watched_avatars.json",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Users => "usr_...",
+            Self::Groups => "grp_...",
+            Self::Avatars => "avtr_...",
+        }
+    }
+}
+
 struct PendingCacheCleanup {
     files: Vec<PathBuf>,
     bytes: u64,
@@ -1912,6 +1936,7 @@ pub struct CelesteApp {
     secret_staff_list: Arc<celeste_core::staff_list::StaffList>,
     moderation_tags: Arc<celeste_core::moderation_tags::ModerationTags>,
     watched_groups: Arc<celeste_core::watched_groups::WatchedGroups>,
+    auto_ban_groups: Arc<celeste_core::auto_ban_groups::AutoBanGroups>,
     watched_users: Arc<celeste_core::watched_entities::WatchedEntities>,
     watched_avatars: Arc<celeste_core::watched_entities::WatchedEntities>,
     pronoun_lists: Arc<celeste_core::pronoun_lists::PronounLists>,
@@ -1925,6 +1950,9 @@ pub struct CelesteApp {
     /// while that prompt is up; `exit_confirmed` lets the second close
     /// request through.
     exit_prompt_open: bool,
+    /// A window-attention request is outstanding and must be reset once the
+    /// operator actually looks at Celeste.
+    attention_requested: bool,
     exit_confirmed: bool,
     cli_input: String,
     settings_edit_buffers: std::collections::HashMap<String, String>,
@@ -1969,6 +1997,18 @@ pub struct CelesteApp {
     /// row's Ban action, which Java also confirms before acting).
     avatar_stats_open: Option<AvatarStatsView>,
     watched_groups_open: Option<WatchedGroupsView>,
+    watch_list_open: Option<WatchListKind>,
+    watch_list_input: String,
+    watch_list_search: String,
+    watch_list_notice: Option<String>,
+    auto_ban_groups_open: bool,
+    auto_ban_group_input: String,
+    auto_ban_group_search: String,
+    auto_ban_group_notice: Option<String>,
+    name_resolution_rx: Option<std::sync::mpsc::Receiver<NameResolution>>,
+    name_resolution_progress: Option<(NameResolutionTarget, usize, usize, usize)>,
+    name_resolution_queue: std::collections::VecDeque<NameResolutionTarget>,
+    background_name_resolution_started: bool,
     group_action_confirm: Option<(GroupAction, String, String)>,
     create_instance_open: bool,
     create_instance_form: CreateInstanceForm,
@@ -2051,6 +2091,7 @@ impl CelesteApp {
         let secret_staff_list = shared.secret_staff_list.clone();
         let moderation_tags = shared.moderation_tags.clone();
         let watched_groups = shared.watched_groups.clone();
+        let auto_ban_groups = shared.auto_ban_groups.clone();
         let watched_users = shared.watched_users.clone();
         let watched_avatars = shared.watched_avatars.clone();
         let vrchat_slot = shared.vrchat_client.clone();
@@ -2127,6 +2168,7 @@ impl CelesteApp {
                         secret_staff_list: secret_staff_list.clone(),
                         moderation_tags: moderation_tags.clone(),
                         watched_groups: watched_groups.clone(),
+                        auto_ban_groups: auto_ban_groups.clone(),
                         watched_users: watched_users.clone(),
                         watched_avatars: watched_avatars.clone(),
                     },
@@ -2190,6 +2232,7 @@ impl CelesteApp {
             secret_staff_list,
             moderation_tags,
             watched_groups,
+            auto_ban_groups,
             watched_users,
             watched_avatars,
             pronoun_lists,
@@ -2198,6 +2241,7 @@ impl CelesteApp {
             managed_clients,
             tab: Tab::Instance,
             exit_prompt_open: false,
+            attention_requested: false,
             exit_confirmed: false,
             cli_input: String::new(),
             settings_edit_buffers: std::collections::HashMap::new(),
@@ -2211,6 +2255,18 @@ impl CelesteApp {
             settings_search: String::new(),
             avatar_stats_open: None,
             watched_groups_open: None,
+            watch_list_open: None,
+            watch_list_input: String::new(),
+            watch_list_search: String::new(),
+            watch_list_notice: None,
+            auto_ban_groups_open: false,
+            auto_ban_group_input: String::new(),
+            auto_ban_group_search: String::new(),
+            auto_ban_group_notice: None,
+            name_resolution_rx: None,
+            name_resolution_progress: None,
+            name_resolution_queue: std::collections::VecDeque::new(),
+            background_name_resolution_started: false,
             group_action_confirm: None,
             create_instance_open: false,
             create_instance_form: CreateInstanceForm::default(),
@@ -2584,6 +2640,28 @@ impl CelesteApp {
                     ui.close_menu();
                 }
                 ui.separator();
+                for (label, kind) in [
+                    ("Watched users...", WatchListKind::Users),
+                    ("Watched groups...", WatchListKind::Groups),
+                    ("Watched avatars...", WatchListKind::Avatars),
+                ] {
+                    if ui.button(label).clicked() {
+                        self.auto_ban_groups_open = false;
+                        self.watch_list_open = Some(kind);
+                        self.watch_list_input.clear();
+                        self.watch_list_search.clear();
+                        self.watch_list_notice = None;
+                        ui.close_menu();
+                    }
+                }
+                if ui.button("Automatic ban groups...").clicked() {
+                    self.watch_list_open = None;
+                    self.auto_ban_groups_open = true;
+                    self.auto_ban_group_search.clear();
+                    self.auto_ban_group_notice = None;
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui.button("Clear current instance").clicked() {
                     self.clear_instance_confirm = true;
                     ui.close_menu();
@@ -2741,22 +2819,72 @@ impl CelesteApp {
     /// close, ask, and only then let a second close request through — so the
     /// X can't end a live session by accident, and shutdown is ordered
     /// rather than a kill.
+    /// Asks the window manager for attention, and chimes, when Celeste
+    /// raises a prompt that the operator is not looking at.
+    ///
+    /// Gated on focus, which is what makes it safe to call from anywhere: a
+    /// dialog the operator opened themselves arrives with Celeste focused
+    /// and stays silent. Only something Celeste raised on its own -- a
+    /// close request from the taskbar, a two-factor code it cannot proceed
+    /// without -- reaches the chime.
+    fn request_attention(&mut self, ctx: &egui::Context, message: &str) {
+        if ctx.input(|input| input.viewport().focused).unwrap_or(true) {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+            egui::UserAttentionType::Critical,
+        ));
+        self.attention_requested = true;
+        crate::platform::desktop_notification("Celeste needs you", message);
+        // Chime first, then the line: the service plays serially, so this
+        // lands as an alert followed by what it was about, the same shape
+        // as the nuisance-rank callout.
+        if let Some(settings) = self.settings.as_ref() {
+            self.tts.set_volume(settings.tts_volume_percent.get());
+            if let Err(error) = self.tts.submit_attention_alert() {
+                tracing::debug!("Attention chime: {error}");
+            }
+            // Spoken even when callouts are paused: pausing silences
+            // moderation chatter, not a question Celeste is blocked on.
+            if let Err(error) = self
+                .tts
+                .submit_accessibility(message, settings.tts_voice_name.get())
+            {
+                tracing::debug!("Attention speech: {error}");
+            }
+        }
+    }
+
+    /// Stops the taskbar flashing once Celeste is looked at.
+    fn clear_attention(&mut self, ctx: &egui::Context) {
+        if !self.attention_requested {
+            return;
+        }
+        if ctx.input(|input| input.viewport().focused).unwrap_or(true) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Reset,
+            ));
+            self.attention_requested = false;
+        }
+    }
+
     fn exit_confirm_window(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.exit_prompt_open = true;
+            self.request_attention(ctx, "Celeste is asking whether to quit.");
         }
         if !self.exit_prompt_open {
             return;
         }
         let mut quit = false;
         let mut stay = false;
-        egui::Window::new(celeste_core::i18n::tr("dialog.exit.title", &[]))
+        egui::Window::new("Confirm exit")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label(celeste_core::i18n::tr("dialog.exit.message", &[]));
+                ui.label("Are you sure you want to quit?");
                 // A session with people still in the instance is the case
                 // this prompt is really for; say so rather than making the
                 // user remember.
@@ -3629,7 +3757,7 @@ impl CelesteApp {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new("No instance detected").strong().size(crate::theme::TEXT_TITLE));
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(celeste_core::i18n::tr("ui.playerDataWillAppear", &[])).weak());
+                    ui.label(egui::RichText::new("Player data will appear here once connected").weak());
                 }
             }
         });
@@ -4580,8 +4708,7 @@ impl CelesteApp {
     fn setting_group(id: &str) -> &'static str {
         if matches!(
             id,
-            "ui_language"
-                | "graphics_renderer"
+            "graphics_renderer"
                 | "ui_left_player_dim_percent"
                 | "ui_accent_headers"
         ) {
@@ -7337,8 +7464,578 @@ impl CelesteApp {
         ctx.request_repaint();
     }
 
+    fn start_name_resolution(&mut self, target: NameResolutionTarget, ctx: egui::Context) -> bool {
+        let ids: Vec<String> = match target {
+            NameResolutionTarget::WatchedUsers => self
+                .watched_users
+                .get_all()
+                .into_iter()
+                .filter(|entry| entry.last_seen_name.is_none())
+                .map(|entry| entry.id)
+                .collect(),
+            NameResolutionTarget::WatchedGroups => self
+                .watched_groups
+                .get_all()
+                .into_iter()
+                .filter(|entry| entry.last_seen_name.is_none())
+                .map(|entry| entry.id)
+                .collect(),
+            NameResolutionTarget::WatchedAvatars => self
+                .watched_avatars
+                .get_all()
+                .into_iter()
+                .filter(|entry| entry.last_seen_name.is_none())
+                .map(|entry| entry.id)
+                .collect(),
+            NameResolutionTarget::AutoBanGroups => self
+                .auto_ban_groups
+                .get_all()
+                .into_iter()
+                .filter(|entry| entry.last_seen_name.is_none())
+                .map(|entry| entry.id)
+                .collect(),
+        };
+        if ids.is_empty() {
+            return false;
+        }
+
+        let total = ids.len();
+        let slot = self.vrchat_slot.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.name_resolution_rx = Some(rx);
+        self.name_resolution_progress = Some((target, 0, total, 0));
+        self.set_name_resolution_notice(target, format!("Resolving 0 of {total} names…"));
+        self.runtime_handle.spawn(async move {
+            let Some(client) = slot.read().await.clone() else {
+                let _ = tx.send(NameResolution {
+                    target,
+                    id: String::new(),
+                    result: Err("Sign in to VRChat so Celeste can resolve saved names.".into()),
+                });
+                ctx.request_repaint();
+                return;
+            };
+
+            for id in ids {
+                let result: Result<String, String> = match target {
+                    NameResolutionTarget::WatchedUsers => match client
+                        .get_user_cached(
+                            &id,
+                            celeste_vrchat::entity_cache::ALWAYS_PREFER_CACHED,
+                        )
+                        .await
+                    {
+                        Ok(user) => user
+                            .display_name
+                            .ok_or_else(|| "VRChat returned no display name".to_string()),
+                        Err(error) => Err(error.to_string()),
+                    },
+                    NameResolutionTarget::WatchedGroups
+                    | NameResolutionTarget::AutoBanGroups => match client
+                        .get_group_cached(
+                            &id,
+                            false,
+                            celeste_vrchat::entity_cache::within_1_day(),
+                        )
+                        .await
+                    {
+                        Ok(group) => Ok(group.name),
+                        Err(error) => Err(error.to_string()),
+                    },
+                    NameResolutionTarget::WatchedAvatars => match client
+                        .get_avatar_cached(
+                            &id,
+                            celeste_vrchat::entity_cache::ALWAYS_PREFER_CACHED,
+                        )
+                        .await
+                    {
+                        Ok(avatar) => Ok(avatar.name),
+                        Err(error) => Err(error.to_string()),
+                    },
+                };
+                if tx.send(NameResolution { target, id, result }).is_err() {
+                    break;
+                }
+                ctx.request_repaint();
+            }
+        });
+        true
+    }
+
+    fn ensure_background_name_resolution(&mut self, ctx: &egui::Context) {
+        if self.background_name_resolution_started {
+            return;
+        }
+        let signed_in = self
+            .vrchat_slot
+            .try_read()
+            .map(|slot| slot.is_some())
+            .unwrap_or(false);
+        if !signed_in {
+            return;
+        }
+
+        self.background_name_resolution_started = true;
+        self.name_resolution_queue.extend([
+            NameResolutionTarget::WatchedGroups,
+            NameResolutionTarget::WatchedUsers,
+            NameResolutionTarget::WatchedAvatars,
+            NameResolutionTarget::AutoBanGroups,
+        ]);
+        self.start_next_name_resolution(ctx.clone());
+    }
+
+    fn start_next_name_resolution(&mut self, ctx: egui::Context) {
+        while self.name_resolution_rx.is_none() {
+            let Some(target) = self.name_resolution_queue.pop_front() else {
+                break;
+            };
+            if self.start_name_resolution(target, ctx.clone()) {
+                break;
+            }
+        }
+    }
+
+    fn set_name_resolution_notice(&mut self, target: NameResolutionTarget, message: String) {
+        match target {
+            NameResolutionTarget::AutoBanGroups => self.auto_ban_group_notice = Some(message),
+            NameResolutionTarget::WatchedUsers
+            | NameResolutionTarget::WatchedGroups
+            | NameResolutionTarget::WatchedAvatars => self.watch_list_notice = Some(message),
+        }
+    }
+
+    fn poll_name_resolution(&mut self, ctx: &egui::Context) {
+        let mut results = Vec::new();
+        let mut disconnected = false;
+        if let Some(rx) = &self.name_resolution_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => results.push(result),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for resolved in results {
+            if resolved.id.is_empty() {
+                let message = match resolved.result {
+                    Ok(name) => name,
+                    Err(error) => error,
+                };
+                self.set_name_resolution_notice(
+                    resolved.target,
+                    message,
+                );
+                self.name_resolution_progress = None;
+                continue;
+            }
+            let succeeded = match resolved.result {
+                Ok(name) => {
+                    match resolved.target {
+                        NameResolutionTarget::WatchedUsers => {
+                            self.watched_users.record_seen_name(&resolved.id, &name)
+                        }
+                        NameResolutionTarget::WatchedGroups => {
+                            self.watched_groups.record_seen_name(&resolved.id, &name);
+                        }
+                        NameResolutionTarget::WatchedAvatars => {
+                            self.watched_avatars.record_seen_name(&resolved.id, &name)
+                        }
+                        NameResolutionTarget::AutoBanGroups => {
+                            self.auto_ban_groups.record_seen_name(&resolved.id, &name)
+                        }
+                    }
+                    true
+                }
+                Err(error) => {
+                    tracing::debug!(id = %resolved.id, %error, "Could not resolve saved entity name");
+                    false
+                }
+            };
+            if let Some((target, completed, total, failed)) = self.name_resolution_progress.as_mut()
+            {
+                if *target == resolved.target {
+                    *completed += 1;
+                    if !succeeded {
+                        *failed += 1;
+                    }
+                    let message = if *completed == *total {
+                        format!(
+                            "Resolved {} of {} names; {} unavailable.",
+                            *total - *failed,
+                            total,
+                            failed
+                        )
+                    } else {
+                        format!("Resolving {completed} of {total} names…")
+                    };
+                    let target = *target;
+                    self.set_name_resolution_notice(target, message);
+                }
+            }
+        }
+        if disconnected {
+            self.name_resolution_rx = None;
+            self.name_resolution_progress = None;
+            self.start_next_name_resolution(ctx.clone());
+        }
+    }
+
     fn utility_windows(&mut self, ctx: &egui::Context) {
         self.open_full_setup_if_requested(ctx);
+        if let Some(kind) = self.watch_list_open {
+            let mut open = true;
+            let mut remove_id = None;
+            egui::Window::new(kind.label())
+                .default_width(620.0)
+                .default_height(440.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Manage the IDs stored in {}. New entries use the default type and can be given messages, notes, tags, priorities, and other options through Celeste's Discord watched-list commands.",
+                        kind.file_name()
+                    ));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.watch_list_input)
+                                .hint_text(kind.hint())
+                                .desired_width(390.0),
+                        );
+                        let submit = ui.button("Add").clicked()
+                            || (response.lost_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                        if submit {
+                            let id = self.watch_list_input.trim().to_string();
+                            let result = match kind {
+                                WatchListKind::Users => {
+                                    if !self.watched_users.is_valid_id(&id) {
+                                        Err("Enter a valid VRChat user ID beginning with usr_.".to_string())
+                                    } else if self.watched_users.get_watched_entity(&id).is_some() {
+                                        Err("That user is already watched.".to_string())
+                                    } else {
+                                        self.watched_users.add_watched_entity(
+                                            celeste_core::watched_entities::WatchedEntity::new(&id),
+                                        );
+                                        Ok(())
+                                    }
+                                }
+                                WatchListKind::Groups => {
+                                    if !id.starts_with("grp_") || id.len() <= 4 || id.chars().any(char::is_whitespace) {
+                                        Err("Enter a valid VRChat group ID beginning with grp_.".to_string())
+                                    } else if self.watched_groups.get_watched_group(&id).is_some() {
+                                        Err("That group is already watched.".to_string())
+                                    } else {
+                                        self.watched_groups.add_watched_group(
+                                            celeste_core::watched_groups::WatchedGroup::new(&id),
+                                        );
+                                        Ok(())
+                                    }
+                                }
+                                WatchListKind::Avatars => {
+                                    if !self.watched_avatars.is_valid_id(&id) {
+                                        Err("Enter a valid VRChat avatar ID beginning with avtr_.".to_string())
+                                    } else if self.watched_avatars.get_watched_entity(&id).is_some() {
+                                        Err("That avatar is already watched.".to_string())
+                                    } else {
+                                        self.watched_avatars.add_watched_entity(
+                                            celeste_core::watched_entities::WatchedEntity::new(&id),
+                                        );
+                                        Ok(())
+                                    }
+                                }
+                            };
+                            match result {
+                                Ok(()) => {
+                                    self.watch_list_notice = Some(format!("Added {id}."));
+                                    self.watch_list_input.clear();
+                                }
+                                Err(message) => self.watch_list_notice = Some(message),
+                            }
+                        }
+                    });
+                    if let Some(notice) = &self.watch_list_notice {
+                        ui.label(egui::RichText::new(notice).small());
+                    }
+                    ui.separator();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.watch_list_search)
+                            .hint_text("Search names, IDs, types, or messages...")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(4.0);
+
+                    let mut entries: Vec<(String, Option<String>, String, Option<String>)> = match kind {
+                        WatchListKind::Users => self
+                            .watched_users
+                            .get_all()
+                            .into_iter()
+                            .map(|entry| (entry.id, entry.last_seen_name, entry.r#type.as_str().to_string(), entry.message))
+                            .collect(),
+                        WatchListKind::Groups => self
+                            .watched_groups
+                            .get_all()
+                            .into_iter()
+                            .map(|entry| (entry.id, entry.last_seen_name, entry.r#type.as_str().to_string(), entry.message))
+                            .collect(),
+                        WatchListKind::Avatars => self
+                            .watched_avatars
+                            .get_all()
+                            .into_iter()
+                            .map(|entry| (entry.id, entry.last_seen_name, entry.r#type.as_str().to_string(), entry.message))
+                            .collect(),
+                    };
+                    let query = self.watch_list_search.trim().to_lowercase();
+                    if !query.is_empty() {
+                        entries.retain(|(id, name, entry_type, message)| {
+                            id.to_lowercase().contains(&query)
+                                || name.as_deref().is_some_and(|value| value.to_lowercase().contains(&query))
+                                || entry_type.to_lowercase().contains(&query)
+                                || message.as_deref().is_some_and(|value| value.to_lowercase().contains(&query))
+                        });
+                    }
+                    entries.sort_by(|left, right| {
+                        let left_label = left.1.as_deref().or_else(|| {
+                            (kind == WatchListKind::Groups)
+                                .then_some(left.3.as_deref())
+                                .flatten()
+                        });
+                        let right_label = right.1.as_deref().or_else(|| {
+                            (kind == WatchListKind::Groups)
+                                .then_some(right.3.as_deref())
+                                .flatten()
+                        });
+                        left_label
+                            .unwrap_or(&left.0)
+                            .to_lowercase()
+                            .cmp(&right_label.unwrap_or(&right.0).to_lowercase())
+                    });
+                    if entries.is_empty() {
+                        ui.label(egui::RichText::new(if query.is_empty() { "This list is empty." } else { "No entries match this search." }).weak());
+                    } else {
+                        ui.label(format!("{} result{}", entries.len(), if entries.len() == 1 { "" } else { "s" }));
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for (id, name, entry_type, message) in entries {
+                                let saved_label = (kind == WatchListKind::Groups)
+                                    .then(|| message.as_deref().map(str::trim))
+                                    .flatten()
+                                    .filter(|value| !value.is_empty());
+                                let headline = name
+                                    .as_deref()
+                                    .or(saved_label)
+                                    .unwrap_or("Resolving name…");
+                                let message_is_headline = name.is_none() && saved_label.is_some();
+                                egui::Frame::NONE
+                                    .fill(crate::theme::WELL)
+                                    .corner_radius(egui::CornerRadius::same(crate::theme::RADIUS_PANEL))
+                                    .inner_margin(egui::Margin::same(8))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        headline,
+                                                    )
+                                                    .strong()
+                                                    .size(16.0),
+                                                );
+                                                ui.label(egui::RichText::new(&id).monospace().small().weak());
+                                                ui.horizontal_wrapped(|ui| {
+                                                    ui.label(egui::RichText::new(entry_type).small().weak());
+                                                    if !message_is_headline {
+                                                        if let Some(message) = message
+                                                            .as_deref()
+                                                            .map(str::trim)
+                                                            .filter(|value| !value.is_empty())
+                                                        {
+                                                            ui.label(
+                                                                egui::RichText::new(message).small(),
+                                                            );
+                                                        }
+                                                    }
+                                                });
+                                            });
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                if ui.button("Remove").clicked() {
+                                                    remove_id = Some(id.clone());
+                                                }
+                                            });
+                                        });
+                                    });
+                                ui.add_space(4.0);
+                            }
+                        });
+                    }
+                });
+            if let Some(id) = remove_id {
+                let removed = match kind {
+                    WatchListKind::Users => self.watched_users.remove_watched_entity(&id),
+                    WatchListKind::Groups => self.watched_groups.remove_watched_group(&id),
+                    WatchListKind::Avatars => self.watched_avatars.remove_watched_entity(&id),
+                };
+                if removed {
+                    self.watch_list_notice = Some(format!("Removed {id}."));
+                }
+            }
+            if !open {
+                self.watch_list_open = None;
+            }
+        }
+        if self.auto_ban_groups_open {
+            let mut open = true;
+            let mut remove_id = None;
+            // Same condition the listener gates on: one staff source is
+            // enough, and without one nothing on this list is ever acted on.
+            let configured = !self.staff_list.get_ids().is_empty()
+                || self.watched_groups.has_staff_group();
+            egui::Window::new("Automatic ban groups")
+                .default_width(620.0)
+                .default_height(440.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label("When a player joins your configured group's live instance, Celeste can check their visible group memberships and automatically ban them from your group if one matches this list.");
+                    ui.add_space(4.0);
+                    ui.colored_label(
+                        crate::theme::WARN,
+                        "This performs a real moderation action using the VRChat account signed into Celeste.",
+                    );
+                    ui.label(
+                        egui::RichText::new("That account must have permission to manage group bans. Hidden memberships cannot be detected. VRChat's public API can prevent re-entry with a group ban, but it cannot press the in-client Kick User action; Celeste reports when that manual kick may still be needed.")
+                            .small()
+                            .weak(),
+                    );
+                    if !configured {
+                        ui.add_space(4.0);
+                        ui.colored_label(
+                            crate::theme::WARN,
+                            "Automatic ban is disabled: Celeste does not know who your staff are.",
+                        );
+                        ui.label(
+                            egui::RichText::new("Nothing on this list is acted on until you add your moderators with /staff-list add, or set your moderation group's type to STAFF under Watched groups. This is required so that a half-configured install cannot ban your own staff.")
+                                .small()
+                                .weak(),
+                        );
+                    }
+                    ui.separator();
+                    ui.label("VRChat group ID to match");
+                    ui.horizontal(|ui| {
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.auto_ban_group_input)
+                                .hint_text("grp_...")
+                                .desired_width(390.0),
+                        );
+                        let submit = ui.button("Add to automatic bans").clicked()
+                            || (response.lost_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                        if submit && !configured {
+                            self.auto_ban_group_notice = Some(
+                                "Add your staff first: `/staff-list add`, or set your moderation group's type to STAFF under Watched groups. Automatic ban stays disabled until one of those exists.".to_string(),
+                            );
+                        } else if submit {
+                            match self.auto_ban_groups.add(&self.auto_ban_group_input) {
+                                Ok(true) => {
+                                    let id = self.auto_ban_group_input.trim().to_string();
+                                    self.auto_ban_group_input.clear();
+                                    self.auto_ban_group_notice = Some(format!("Added {id}. Celeste will learn its current name from the first visible match."));
+                                }
+                                Ok(false) => {
+                                    self.auto_ban_group_notice = Some("That group is already on the automatic-ban list.".to_string());
+                                }
+                                Err(error) => {
+                                    self.auto_ban_group_notice = Some(error.to_string());
+                                }
+                            }
+                        }
+                    });
+                    if let Some(notice) = &self.auto_ban_group_notice {
+                        ui.label(egui::RichText::new(notice).small());
+                    }
+                    ui.separator();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.auto_ban_group_search)
+                            .hint_text("Search group names or IDs...")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(4.0);
+
+                    let query = self.auto_ban_group_search.trim().to_lowercase();
+                    let groups: Vec<_> = self
+                        .auto_ban_groups
+                        .get_all()
+                        .into_iter()
+                        .filter(|group| {
+                            query.is_empty()
+                                || group.id.to_lowercase().contains(&query)
+                                || group.last_seen_name.as_deref().is_some_and(|name| name.to_lowercase().contains(&query))
+                        })
+                        .collect();
+                    if groups.is_empty() {
+                        ui.label(
+                            egui::RichText::new(if query.is_empty() {
+                                "No automatic-ban groups configured."
+                            } else {
+                                "No groups match this search."
+                            })
+                            .weak(),
+                        );
+                    } else {
+                        ui.label(format!(
+                            "{} configured automatic-ban group{}",
+                            groups.len(),
+                            if groups.len() == 1 { "" } else { "s" }
+                        ));
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for group in groups {
+                                egui::Frame::NONE
+                                    .fill(crate::theme::WELL)
+                                    .corner_radius(egui::CornerRadius::same(crate::theme::RADIUS_PANEL))
+                                    .inner_margin(egui::Margin::same(8))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        group
+                                                            .last_seen_name
+                                                            .as_deref()
+                                                            .unwrap_or(
+                                                                "Name learned on first visible match",
+                                                            ),
+                                                    )
+                                                    .strong()
+                                                    .size(16.0),
+                                                );
+                                                ui.label(egui::RichText::new(&group.id).monospace().small().weak());
+                                            });
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui.button("Remove").clicked() {
+                                                        remove_id = Some(group.id.clone());
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+                                ui.add_space(4.0);
+                            }
+                        });
+                    }
+                });
+            if let Some(group_id) = remove_id {
+                if self.auto_ban_groups.remove(&group_id) {
+                    self.auto_ban_group_notice = Some(format!("Removed {group_id}."));
+                }
+            }
+            if !open {
+                self.auto_ban_groups_open = false;
+            }
+        }
         if self.clear_instance_confirm {
             let mut confirm = false;
             let mut cancel = false;
@@ -8233,7 +8930,7 @@ impl CelesteApp {
             "importgroupsjson" => self.cli_import_groups(rest, "json"),
             "translate-advisories" | "restore-advisories" => self.state.append_cli_output("This command belongs to the intentionally omitted advisory-translation integration."),
             "simulate" => self.state.append_cli_output("Simulation/training mode is intentionally omitted from the Rust port."),
-            "repair-secure-store" | "langlint" | "vrchatapi-test" | "popup" | "popups" | "popup-test" => self.state.append_cli_output(format!("The `{op}` diagnostic command is not available in this build.")),
+            "repair-secure-store" | "vrchatapi-test" | "popup" | "popups" | "popup-test" => self.state.append_cli_output(format!("The `{op}` diagnostic command is not available in this build.")),
             other => self.state.append_cli_output(format!("Unknown command: {other} (type 'help')")),
         }
     }
@@ -8271,6 +8968,9 @@ impl CelesteApp {
 
 impl eframe::App for CelesteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.ensure_background_name_resolution(ctx);
+        self.poll_name_resolution(ctx);
+        self.clear_attention(ctx);
         // `send_viewport_cmd` requests a repaint of the viewport before it
         // even looks at the command, so sending the title unconditionally
         // here asked for a new frame on every frame. Celeste never reached
@@ -8364,6 +9064,13 @@ impl eframe::App for CelesteApp {
                         self.runtime_handle.clone(),
                         client,
                         &methods,
+                    );
+                    // Nothing else signals this: the sign-in simply never
+                    // finishes while the prompt sits unseen behind other
+                    // windows.
+                    self.request_attention(
+                        ctx,
+                        "Celeste needs your two-factor code to finish signing in.",
                     );
                     if self.wizard.is_none() {
                         tracing::warn!(
@@ -8476,6 +9183,7 @@ impl eframe::App for CelesteApp {
                                 secret_staff_list: self.secret_staff_list.clone(),
                                 moderation_tags: self.moderation_tags.clone(),
                                 watched_groups: self.watched_groups.clone(),
+                                auto_ban_groups: self.auto_ban_groups.clone(),
                                 watched_users: self.watched_users.clone(),
                                 watched_avatars: self.watched_avatars.clone(),
                             },
@@ -8637,12 +9345,9 @@ impl eframe::App for CelesteApp {
                 // Java's `updateStatusBar`, through the same message catalogue
                 // so the wording (and its translations) stay in one place.
                 let text = if total == 0 {
-                    celeste_core::i18n::tr("ui.statusNoInstance", &[])
+                    "No instance loaded".to_string()
                 } else {
-                    celeste_core::i18n::tr(
-                        "ui.statusBar",
-                        &[&present.to_string(), &left.to_string(), &total.to_string()],
-                    )
+                    format!(" ● {present} present   ○ {left} left   • {total} total this session")
                 };
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(text).small());
@@ -8667,9 +9372,7 @@ impl eframe::App for CelesteApp {
                         None => {
                             ui.separator();
                             ui.label(
-                                egui::RichText::new(
-                                    celeste_core::i18n::tr("ui.statusNoInstance", &[]).trim(),
-                                )
+                                egui::RichText::new("No instance loaded")
                                 .small()
                                 .weak(),
                             );
@@ -9773,7 +10476,7 @@ mod tests {
 
     #[test]
     fn settings_use_intentional_sections_instead_of_prefix_guessing() {
-        assert_eq!(CelesteApp::setting_group("ui_language"), "Appearance");
+        assert_eq!(CelesteApp::setting_group("graphics_renderer"), "Appearance");
         assert_eq!(
             CelesteApp::setting_group("ui_confirm_group_invite"),
             "Interface"

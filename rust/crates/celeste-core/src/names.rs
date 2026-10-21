@@ -154,7 +154,7 @@ pub fn is_entirely_in_scripts(name: &str, scripts: &[Script]) -> bool {
 /// intelligible, preferring the *visual* reading (what the moderator sees
 /// on the nameplate) over a transliteration of the impersonating script.
 pub fn sanitize_name_for_speech(display_name: &str) -> String {
-    let native = native_scripts_for_language(&crate::i18n::locale());
+    let native = native_scripts_for_language(&os_language());
     if !native.contains(&Script::Latin) && is_entirely_in_scripts(display_name, &native) {
         return display_name.trim().to_string();
     }
@@ -162,7 +162,7 @@ pub fn sanitize_name_for_speech(display_name: &str) -> String {
         return visual;
     }
     let Some(ascii) = to_ascii(display_name) else {
-        return crate::i18n::tr("adv.unnamedUser", &[]);
+        return "an unnamed user".to_string();
     };
     if has_mixed_letter_scripts(display_name) {
         return ascii;
@@ -200,20 +200,8 @@ pub fn describe_scripts(name: &str) -> String {
     match scripts.len() {
         0 => String::new(),
         1 => scripts.remove(0),
-        2 => format!("{} {} {}", scripts[0], crate::i18n::tr("script.andWord", &[]), scripts[1]),
-        _ => crate::i18n::tr("script.mixed", &[]),
-    }
-}
-
-/// Translated name of a writing system, English fallback — port of
-/// `Names.scriptLabel`.
-fn script_label(english: &str) -> String {
-    let key = format!("script.{english}");
-    let locale = crate::i18n::locale();
-    if crate::i18n::has(&locale, &key) {
-        crate::i18n::tr(&key, &[])
-    } else {
-        english.to_string()
+        2 => format!("{} and {}", scripts[0], scripts[1]),
+        _ => "mixed scripts".to_string(),
     }
 }
 
@@ -247,14 +235,43 @@ fn friendly_script_name(script: Script) -> String {
         Script::Cherokee => "Cherokee",
         _ => "non-Latin",
     };
-    script_label(english)
+    english.to_string()
+}
+
+/// The operating system's language, as a bare two-letter code.
+///
+/// Celeste's interface is English only. This exists for one decision that
+/// is not about wording: whether a display name is written in a script the
+/// listener reads natively, which decides whether TTS pronounces it as-is
+/// or romanises it. A Russian speaker should hear a Cyrillic name read, not
+/// transliterated, whatever language the buttons are in.
+fn os_language() -> String {
+    for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(value) = std::env::var(var) {
+            let lang: String = value.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+            if !lang.is_empty() {
+                return normalize_lang(&lang.to_ascii_lowercase());
+            }
+        }
+    }
+    "en".to_string()
+}
+
+/// A few deprecated ISO-639 codes are still what some systems report.
+fn normalize_lang(lang: &str) -> String {
+    match lang {
+        "in" => "id".to_string(),
+        "iw" => "he".to_string(),
+        "ji" => "yi".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// The writing systems a locale's own speakers read natively — port of
 /// `I18n.nativeScriptsForLocale`, kept here because it only exists to serve
 /// [`crate::names`]-driven TTS decisions.
 pub fn native_scripts_for_language(lang: &str) -> Vec<Script> {
-    match crate::i18n::normalize_lang(lang).as_str() {
+    match normalize_lang(lang).as_str() {
         "ru" | "uk" | "be" | "bg" | "sr" | "mk" | "kk" | "ky" | "tg" | "mn" => vec![Script::Cyrillic],
         "el" => vec![Script::Greek],
         "he" | "yi" => vec![Script::Hebrew],
@@ -464,7 +481,7 @@ mod tests {
         assert_eq!(describe_scripts("Блэйк"), "Cyrillic");
         assert!(describe_scripts("Блэйкさくら").contains("Cyrillic"));
         // Three or more collapses to the "mixed" label.
-        assert_eq!(describe_scripts("Блэйкさくらالعربية"), crate::i18n::tr("script.mixed", &[]));
+        assert_eq!(describe_scripts("Блэйкさくらالعربية"), "mixed scripts");
     }
 
     #[test]
@@ -493,7 +510,7 @@ mod tests {
         // moderator hears "Cyrillic Bleik" rather than a mangled attempt.
         assert_eq!(sanitize_name_for_speech("Блэйк"), "Cyrillic Bleik");
         // Nothing pronounceable at all falls back to the catalogue string.
-        assert_eq!(sanitize_name_for_speech("\u{1F600}"), crate::i18n::tr("adv.unnamedUser", &[]));
+        assert_eq!(sanitize_name_for_speech("\u{1F600}"), "an unnamed user");
     }
 
     #[test]

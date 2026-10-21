@@ -55,6 +55,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDateTime, TimeZone, Utc};
+use celeste_core::auto_ban_groups::{AutoBanGroup, AutoBanGroups};
 use celeste_core::data::CelesteData;
 use celeste_core::instance_roster::InstanceRoster;
 use celeste_core::pacer::Pacer;
@@ -65,7 +66,10 @@ use celeste_core::trust_rank::TrustRank;
 use celeste_core::ui::{InstanceState, PlayerJoin, CelesteUi, NO_PRIORITY};
 use celeste_core::watched_entities::WatchedEntities;
 use celeste_core::watched_groups::WatchedGroups;
-use celeste_vrchat::client::VrChatClient;
+use celeste_vrchat::client::{
+    VrChatClient, PERMISSION_GROUP_AUDIT_VIEW, PERMISSION_GROUP_BANS_MANAGE,
+    PERMISSION_GROUP_INSTANCE_MODERATE,
+};
 use celeste_vrchat::log_tail::{LogEvent, LogEventKind, TailerEvent};
 
 use crate::emitter::{AuditEmitter, TtsSink};
@@ -101,6 +105,7 @@ pub struct ListenerDeps {
     pub watched_users: Arc<WatchedEntities>,
     pub watched_avatars: Arc<WatchedEntities>,
     pub watched_groups: Arc<WatchedGroups>,
+    pub auto_ban_groups: Arc<AutoBanGroups>,
     pub pronoun_lists: Arc<PronounLists>,
     pub tts: Arc<dyn TtsSink>,
     pub emitter: Arc<dyn AuditEmitter>,
@@ -152,6 +157,12 @@ pub struct CelesteEventListener {
     /// is always "what are they in?" - the judgement moderators fall back
     /// on now that an avatar cannot be pulled and tested.
     watched_group_profiles: std::collections::HashMap<String, celeste_core::crash_watch::WatchedGroupProfile>,
+    /// One automatic-ban attempt per user per instance. A repeated join log
+    /// or several matching affiliations must never send several bans.
+    auto_ban_attempted: HashSet<String>,
+    /// Preflight result for the configured group, kept because it answers
+    /// the same question for every join.
+    auto_ban_preflight: Option<AutoBanPreflight>,
     /// Distinct `[ModerationManager]` shapes already reported this run.
     seen_moderation_shapes: std::collections::HashSet<String>,
     live_avatar_switches_without_api_log: u32,
@@ -183,6 +194,44 @@ struct CheckOutcome {
     /// trait's `player_update` takes a borrowed closure it cannot queue, so
     /// such an update is dropped (see `UiState`'s trait impl).
     watched_memberships: Vec<celeste_core::watched_membership::WatchedMembership>,
+    auto_ban_matches: Vec<AutoBanGroup>,
+    /// Why a match must not be banned, when it must not be. `None` with a
+    /// non-empty `auto_ban_matches` is the ban-them case.
+    auto_ban_exempt: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GroupChecks {
+    watched: Vec<WatchedGroupHit>,
+    auto_ban: Vec<AutoBanGroup>,
+    /// A `STAFF`-typed watched group this account is in, by the name worth
+    /// showing. Free: it falls out of the memberships already fetched.
+    staff_group: Option<String>,
+}
+
+/// Group permissions that mean "this account has moderation authority
+/// here", and so must never be auto-banned by it. Deliberately narrow: an
+/// invite or announcement permission is not moderation authority.
+const MODERATOR_PERMISSIONS: &[&str] = &[
+    PERMISSION_GROUP_BANS_MANAGE,
+    PERMISSION_GROUP_INSTANCE_MODERATE,
+    PERMISSION_GROUP_AUDIT_VIEW,
+];
+
+/// The automatic-ban preflight for one group: which account Celeste is
+/// signed in as, and whether that account may manage the group's bans.
+#[derive(Debug, Clone)]
+struct AutoBanPreflight {
+    group_id: String,
+    actor_id: String,
+    actor_name: Option<String>,
+    authorized: bool,
+}
+
+impl AutoBanPreflight {
+    fn actor_label(&self) -> &str {
+        self.actor_name.as_deref().unwrap_or(&self.actor_id)
+    }
 }
 
 /// How stale a cached profile may be and still answer a join check.
@@ -209,6 +258,8 @@ impl CheckOutcome {
             account_age: None,
             age_verification_status: None,
             watched_memberships: Vec::new(),
+            auto_ban_matches: Vec::new(),
+            auto_ban_exempt: None,
         }
     }
 }
@@ -242,6 +293,8 @@ impl CelesteEventListener {
             crash_watch: celeste_core::crash_watch::CrashWatch::new(),
             seen_moderation_shapes: std::collections::HashSet::new(),
             watched_group_profiles: std::collections::HashMap::new(),
+            auto_ban_attempted: HashSet::new(),
+            auto_ban_preflight: None,
             live_avatar_switches_without_api_log: 0,
             warned_missing_api_logging: false,
             // Java: `new Pacer(500L)`.
@@ -481,6 +534,7 @@ impl CelesteEventListener {
         self.user_id_to_joined.clear();
         self.user_ids_join_order.clear();
         self.left_user_ids.clear();
+        self.auto_ban_attempted.clear();
 
         self.deps.ui.set_instance(Some(InstanceState {
             location: location.clone(),
@@ -501,6 +555,7 @@ impl CelesteEventListener {
         self.is_in_group_instance = false;
         self.roster.clear_pending();
         self.deferred_checks.clear();
+        self.auto_ban_attempted.clear();
         // The avatar state belongs to people who are no longer around. The
         // next instance's `Switching` lines rebuild it.
         self.display_name_to_avatar_name.clear();
@@ -567,6 +622,13 @@ impl CelesteEventListener {
                 // it was inserted and stays there.
                 ui.fire_sort();
             });
+            self.enforce_auto_ban(
+                &display_name,
+                &user_id,
+                &outcome.auto_ban_matches,
+                outcome.auto_ban_exempt.as_deref(),
+            )
+            .await;
         }
 
         if Some(&user_id) == self.client_user_id.as_ref() {
@@ -708,7 +770,7 @@ impl CelesteEventListener {
                     VRCHAT_API_LOGGING_FLAGS,
                     VRCHAT_API_LOGGING_LEVELS
                 );
-                self.deps.ui.append_cli_output(&celeste_core::i18n::tr("adv.avatarFallbackMsg", &[]));
+                self.deps.ui.append_cli_output("VRChat was launched without API logging; statuses use avatar-database lookups and may miss private avatars. See log for the launch options that enable full data.");
             }
         }
 
@@ -823,7 +885,11 @@ impl CelesteEventListener {
 
         let mut watched: Vec<_> = potential_ids
             .iter()
-            .filter_map(|id| self.deps.watched_avatars.get_watched_entity(id))
+            .filter_map(|id| {
+                let entity = self.deps.watched_avatars.get_watched_entity(id)?;
+                self.deps.watched_avatars.record_seen_name(id, avatar_display_name);
+                Some(entity)
+            })
             .filter(|entity| !entity.silent)
             .collect();
         // Java sorts by the entity's natural order and takes the first.
@@ -849,9 +915,9 @@ impl CelesteEventListener {
 
         if tts_wanted {
             if let Some(entity) = &watched_avatar {
-                let mut line = celeste_core::i18n::tr(
-                    "adv.ttsWatchedAvatar",
-                    &[&celeste_core::names::sanitize_name_for_speech(display_name)],
+                let mut line = format!(
+                    "{} may be wearing a watched avatar.",
+                    celeste_core::names::sanitize_name_for_speech(display_name)
                 );
                 if let Some(message) = &entity.message {
                     line.push(' ');
@@ -908,6 +974,25 @@ impl CelesteEventListener {
     /// Runs the join checks queued during catch-up, for the players who are
     /// still present (see the module docs).
     async fn run_deferred_checks(&mut self) {
+        // Celeste is often started while VRChat is already running. The log
+        // is already written, so catch-up finishes before the unattended
+        // VRChat login does, and running the checks now would fill the table
+        // with Unknown ranks, blank ages and -- worse -- no watched-entity
+        // or auto-ban flags at all. Because the queue was consumed either
+        // way, those rows stayed wrong until each player happened to rejoin.
+        //
+        // Hold the queue instead and let `run` come back to it. Players who
+        // have since left are dropped here, so a signed-out Celeste stops
+        // retrying once the instance has turned over.
+        if self.vrchat().await.is_none() {
+            let queued = std::mem::take(&mut self.deferred_checks);
+            let still_present: Vec<(String, String)> = queued
+                .into_iter()
+                .filter(|(user_id, _)| self.is_player_present(user_id))
+                .collect();
+            self.deferred_checks = still_present;
+            return;
+        }
         let queued = std::mem::take(&mut self.deferred_checks);
         for (user_id, display_name) in queued {
             if !self.is_player_present(&user_id) {
@@ -932,6 +1017,20 @@ impl CelesteEventListener {
                 player.age_verification_status = age_verification.clone();
             });
         }
+    }
+
+    /// Whether any catch-up check is still waiting for a VRChat client.
+    pub fn has_pending_checks(&self) -> bool {
+        !self.deferred_checks.is_empty()
+    }
+
+    /// Re-attempts the queued catch-up checks, now that a client may exist.
+    /// A no-op that costs one lock read when it still does not.
+    pub async fn retry_pending_checks(&mut self) {
+        if self.deferred_checks.is_empty() {
+            return;
+        }
+        self.run_deferred_checks().await;
     }
 
     /// Port of `checkPlayer`: every join check, the advisory they build and
@@ -962,7 +1061,7 @@ impl CelesteEventListener {
         {
             let wanted = self.deps.settings.advisory_show_mixed_character_names.get();
             if wanted {
-                add_advisory(&mut advisories, Some(&celeste_core::i18n::tr("adv.mixedCharName", &[])));
+                add_advisory(&mut advisories, Some("Mixed-character name"));
             }
             if !preamble && wanted && self.deps.settings.announce_mixed_character_names.get() {
                 self.deps.tts.speak_mixed_character_name_alert(&marker("mix"));
@@ -971,6 +1070,7 @@ impl CelesteEventListener {
 
         // check user
         if let Some(watched_user) = self.deps.watched_users.get_watched_entity(user_id) {
+            self.deps.watched_users.record_seen_name(user_id, display_name);
             if !watched_user.silent {
                 let wanted = self.deps.settings.advisory_show_watched_users.get();
                 if wanted {
@@ -1043,16 +1143,24 @@ impl CelesteEventListener {
         };
 
         // check groups
-        let checked_groups = self.watched_groups_of(user_id, false).await;
-        let mut watched_groups = checked_groups.clone().unwrap_or_default();
+        let checked_groups = self.group_checks_of(user_id, false).await;
+        let mut watched_groups = checked_groups
+            .as_ref()
+            .map(|checked| checked.watched.clone())
+            .unwrap_or_default();
+        let mut auto_ban_matches = checked_groups
+            .as_ref()
+            .map(|checked| checked.auto_ban.clone())
+            .unwrap_or_default();
         // Group membership is cached indefinitely, so a user who left a
         // watched group would keep getting flagged on every rejoin. Re-check
         // against fresh membership for an actual rejoin of an
         // already-flagged user.
         let mut checked_groups = checked_groups;
         if !preamble && rejoined_instance && watched_groups.iter().any(|hit| !hit.group.silent) {
-            if let Some(fresh) = self.watched_groups_of(user_id, true).await {
-                watched_groups = fresh.clone();
+            if let Some(fresh) = self.group_checks_of(user_id, true).await {
+                watched_groups = fresh.watched.clone();
+                auto_ban_matches = fresh.auto_ban.clone();
                 checked_groups = Some(fresh);
             }
         }
@@ -1064,6 +1172,7 @@ impl CelesteEventListener {
         // by type; the advisory string can only ever show the first few.
         if let Some(checked) = &checked_groups {
             let memberships: Vec<celeste_core::watched_membership::WatchedMembership> = checked
+                .watched
                 .iter()
                 .map(|hit| celeste_core::watched_membership::WatchedMembership {
                     group_id: hit.group.id.clone(),
@@ -1090,7 +1199,7 @@ impl CelesteEventListener {
             self.watched_group_profiles.insert(
                 user_id.to_string(),
                 celeste_core::crash_watch::WatchedGroupProfile::from_types(
-                    checked.iter().map(|hit| hit.group.r#type.as_str()),
+                    checked.watched.iter().map(|hit| hit.group.r#type.as_str()),
                 ),
             );
         } else {
@@ -1110,9 +1219,9 @@ impl CelesteEventListener {
                         .filter(|message| !message.trim().is_empty())
                         .collect();
                     let clause = match messages.len() {
-                        0 => celeste_core::i18n::tr("adv.inWatchedGroup", &[]),
-                        1 => celeste_core::i18n::tr("adv.watchedGroupOne", &[&messages[0]]),
-                        _ => celeste_core::i18n::tr("adv.watchedGroupMany", &[&messages.join(", ")]),
+                        0 => "in a watched group".to_string(),
+                        1 => format!("Watched group: {}", messages[0]),
+                        _ => format!("Watched groups: {}", messages.join(", ")),
                     };
                     tts_parts.push(end_dot(&clause));
                 }
@@ -1124,6 +1233,31 @@ impl CelesteEventListener {
                 }
             }
             outcome.text_color = watched_groups.iter().find_map(|hit| hit.group.r#type.text_color());
+        }
+
+        if !auto_ban_matches.is_empty() {
+            let labels = auto_ban_matches
+                .iter()
+                .map(|group| group.last_seen_name.as_deref().unwrap_or(&group.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            // A moderator is exempt from the ban but not from the callout:
+            // whoever runs Celeste should still see which lists the account
+            // is in, and the row stays red at the top either way so it
+            // cannot be missed.
+            let staff_group = checked_groups
+                .as_ref()
+                .and_then(|checked| checked.staff_group.clone());
+            let exemption = self.auto_ban_exemption(user_id, staff_group).await;
+            let advisory = match &exemption {
+                Some(reason) => format!("AUTO-BAN GROUP: {labels} - NOT BANNED, {reason}"),
+                None => format!("AUTO-BAN GROUP: {labels}"),
+            };
+            add_advisory(&mut advisories, Some(&advisory));
+            outcome.text_color = Some((235, 95, 95));
+            outcome.priority = i32::MAX;
+            outcome.auto_ban_exempt = exemption;
+            outcome.auto_ban_matches = auto_ban_matches;
         }
 
         if let Some(user) = &user {
@@ -1142,15 +1276,15 @@ impl CelesteEventListener {
                     && account_age_days <= self.deps.settings.announce_players_newer_than_days.get() as i64
                 {
                     let days = account_age_days.to_string();
-                    let unit = celeste_core::i18n::tr(if account_age_days == 1 { "adv.day" } else { "adv.days" }, &[]);
+                    let unit = if account_age_days == 1 { "day" } else { "days" };
                     if show_new {
                         add_advisory(
                             &mut advisories,
-                            Some(&celeste_core::i18n::tr("adv.newAccountDays", &[&days, &unit])),
+                            Some(&format!("New account: {days} {unit}")),
                         );
                     }
                     if !preamble && announce_new {
-                        tts_parts.push(celeste_core::i18n::tr("adv.ttsNewDays", &[&days, &unit]));
+                        tts_parts.push(format!("New, {days} {unit}."));
                     }
                 }
             }
@@ -1167,11 +1301,11 @@ impl CelesteEventListener {
                     if wanted {
                         add_advisory(
                             &mut advisories,
-                            Some(&celeste_core::i18n::tr("adv.suspiciousPronounsWarn", &[])),
+                            Some("\u{26a0} Suspicious pronouns"),
                         );
                     }
                     if !preamble && wanted && self.deps.settings.announce_suspicious_pronouns.get() {
-                        let label = celeste_core::i18n::tr("adv.suspiciousPronounsLabel", &[]);
+                        let label = "Suspicious pronouns";
                         tts_parts.push(format!("{label}: {}", end_dot(user.pronouns.as_deref().unwrap_or(""))));
                     }
                 }
@@ -1182,20 +1316,20 @@ impl CelesteEventListener {
             match outcome.trust_rank {
                 TrustRank::Nuisance => {
                     if self.deps.settings.advisory_flag_nuisance_rank.get() {
-                        add_advisory(&mut advisories, Some(&celeste_core::i18n::tr("adv.nuisanceRank", &[])));
+                        add_advisory(&mut advisories, Some("\u{26a0} Nuisance rank"));
                         outcome.priority = outcome.priority.max(1000);
                     }
                     if !preamble && self.deps.settings.announce_nuisance_rank.get() {
-                        tts_parts.push(celeste_core::i18n::tr("adv.ttsNuisanceRank", &[]));
+                        tts_parts.push("Nuisance rank".to_string());
                         nuisance_chime = true;
                     }
                 }
                 TrustRank::Visitor => {
                     if self.deps.settings.advisory_flag_visitor_rank.get() {
-                        add_advisory(&mut advisories, Some(&celeste_core::i18n::tr("adv.visitorRank", &[])));
+                        add_advisory(&mut advisories, Some("Visitor"));
                     }
                     if !preamble && self.deps.settings.announce_visitor_rank.get() {
-                        tts_parts.push(celeste_core::i18n::tr("adv.ttsVisitorRank", &[]));
+                        tts_parts.push("Visitor".to_string());
                     }
                 }
                 _ => {}
@@ -1205,9 +1339,9 @@ impl CelesteEventListener {
         // One combined callout, e.g. "Vex joined the lobby. Watched groups:
         // Raiders, Trolls. New, 5 days."
         if !preamble && !tts_parts.is_empty() {
-            let mut line = celeste_core::i18n::tr(
-                "adv.joinedLobbyFmt",
-                &[&celeste_core::names::sanitize_name_for_speech(display_name)],
+            let mut line = format!(
+                "{} joined the lobby.",
+                celeste_core::names::sanitize_name_for_speech(display_name)
             );
             for part in &tts_parts {
                 line.push(' ');
@@ -1238,11 +1372,11 @@ impl CelesteEventListener {
     /// VRChat account, so a membership hidden from the main account can
     /// still be seen. Alt accounts aren't ported (see PORTING.md), so this
     /// is the primary account's view only.
-    async fn watched_groups_of(
+    async fn group_checks_of(
         &self,
         user_id: &str,
         force_fresh: bool,
-    ) -> Option<Vec<WatchedGroupHit>> {
+    ) -> Option<GroupChecks> {
         let _ = force_fresh; // no membership cache here yet; every call is fresh
         // `None` means Celeste could not look, which is not the same as
         // looking and finding nothing. Returning an empty list for both
@@ -1261,9 +1395,29 @@ impl CelesteEventListener {
             }
         };
         let mut watched: Vec<WatchedGroupHit> = Vec::new();
+        let mut auto_ban = Vec::new();
+        let mut staff_group = None;
         for membership in groups {
             let Some(group_id) = membership.group_id.clone() else { continue };
+
+            if let Some(mut group) = self.deps.auto_ban_groups.get(&group_id) {
+                if let Some(name) = membership.name.as_deref() {
+                    self.deps.auto_ban_groups.record_seen_name(&group_id, name);
+                    group.last_seen_name = Some(name.to_string());
+                }
+                auto_ban.push(group);
+            }
+
             let Some(group) = self.deps.watched_groups.get_watched_group(&group_id) else { continue };
+
+            if group.r#type == celeste_core::watched_groups::WatchedGroupType::Staff {
+                staff_group = Some(
+                    group
+                        .last_seen_name
+                        .clone()
+                        .unwrap_or_else(|| group.id.clone()),
+                );
+            }
 
             // Learn the current name from the response we already have. A
             // watched entry is keyed by id and holds no name, so without
@@ -1298,7 +1452,230 @@ impl CelesteEventListener {
                 .then_with(|| a.group.critical.cmp(&b.group.critical))
                 .then_with(|| a.group.silent.cmp(&b.group.silent))
         });
-        Some(watched)
+        auto_ban.sort_by(|left, right| left.id.cmp(&right.id));
+        Some(GroupChecks {
+            watched,
+            auto_ban,
+            staff_group,
+        })
+    }
+
+    /// Whether Celeste has been told where moderators come from, which is
+    /// the precondition for banning anyone automatically.
+    ///
+    /// One source is enough: an owner who keeps a real staff list should not
+    /// also have to tag a group, and an owner who runs staff through a
+    /// moderation group should not have to maintain a list.
+    fn auto_ban_configured(&self) -> bool {
+        !self.deps.staff_list.get_ids().is_empty()
+            || self.deps.watched_groups.has_staff_group()
+    }
+
+    /// Why this account must not be auto-banned, if it must not be.
+    ///
+    /// The staff list is free to consult, so it goes first. The group role
+    /// check is there because some groups grant moderation through a role
+    /// rather than through Celeste's staff list, and an owner who never
+    /// filled that list in would otherwise have Celeste ban their own
+    /// moderators.
+    ///
+    /// The secret staff list is deliberately *not* consulted. Despite the
+    /// name it is not a second staff roster: it governs who may read whose
+    /// moderation history (`should_redact`), not who holds authority, and
+    /// nothing in the live player list consults it today.
+    async fn auto_ban_exemption(
+        &self,
+        user_id: &str,
+        staff_group: Option<String>,
+    ) -> Option<String> {
+        // Asked first so the row never claims a ban the gate forbids. The
+        // enforcer repeats the check to name the commands that fix it; the
+        // condition itself lives in one place.
+        if !self.auto_ban_configured() {
+            return Some("automatic ban is not configured".to_string());
+        }
+        if self.deps.staff_list.is_id(user_id) {
+            return Some("on the staff list".to_string());
+        }
+        if let Some(group) = staff_group {
+            return Some(format!("in the staff group {group}"));
+        }
+        let group_id = self.group_id()?;
+        let client = self.vrchat().await?;
+        match client
+            .user_has_any_group_permission(&group_id, user_id, MODERATOR_PERMISSIONS)
+            .await
+        {
+            Ok(true) => Some("holds moderator permissions in the group".to_string()),
+            Ok(false) => None,
+            Err(error) => {
+                // "Could not check" is not "no". Erring towards the ban here
+                // would ban a moderator because a lookup failed, and a ban is
+                // the harder thing to undo, so a failure exempts and says so
+                // on the row.
+                tracing::warn!(
+                    %user_id,
+                    %error,
+                    "Could not check group permissions for an automatic-ban match; not banning"
+                );
+                Some("group permissions could not be checked".to_string())
+            }
+        }
+    }
+
+    /// Which account Celeste is signed in as, and whether it may manage
+    /// bans in `group_id`.
+    ///
+    /// This answers a question about the group, not about whoever just
+    /// joined, but the two API calls behind it were being paid per join --
+    /// during the raid this feature exists for, which is when the client
+    /// can least afford them. Resolved once per group and reused; a role
+    /// change mid-run is picked up on the next start.
+    async fn auto_ban_preflight(
+        &mut self,
+        client: &VrChatClient,
+        group_id: &str,
+    ) -> Result<AutoBanPreflight, String> {
+        if let Some(preflight) = self
+            .auto_ban_preflight
+            .as_ref()
+            .filter(|preflight| preflight.group_id == group_id)
+        {
+            return Ok(preflight.clone());
+        }
+        let current_user = client
+            .get_current_user()
+            .await
+            .map_err(|error| format!("Celeste's VRChat account could not be verified ({error})"))?;
+        let authorized = client
+            .self_has_group_permission(group_id, &current_user.id, PERMISSION_GROUP_BANS_MANAGE)
+            .await
+            .map_err(|error| {
+                format!("Celeste's permissions in {group_id} could not be checked ({error})")
+            })?;
+        let preflight = AutoBanPreflight {
+            group_id: group_id.to_string(),
+            actor_id: current_user.id,
+            actor_name: current_user.display_name,
+            authorized,
+        };
+        self.auto_ban_preflight = Some(preflight.clone());
+        Ok(preflight)
+    }
+
+    /// Applies the deliberately opt-in automatic group ban for a live join.
+    ///
+    /// VRChat's supported group API can ban a user from a group, which also
+    /// prevents them re-entering its group instances. It does not expose the
+    /// in-client `Kick User` action. Do not substitute `kick_group_member`
+    /// here: that endpoint removes group membership and is not an instance
+    /// kick.
+    async fn enforce_auto_ban(
+        &mut self,
+        display_name: &str,
+        user_id: &str,
+        matches: &[AutoBanGroup],
+        exempt: Option<&str>,
+    ) {
+        if matches.is_empty() || !self.is_in_group_instance {
+            return;
+        }
+        if !self.auto_ban_attempted.insert(user_id.to_string()) {
+            return;
+        }
+        // The feature stays inert until Celeste has been told where
+        // moderators come from, so a half-configured install cannot ban the
+        // group's own staff. Phrased like the other setup refusals: say what
+        // is missing and the command that fixes it.
+        if !self.auto_ban_configured() {
+            let message = format!(
+                "Automatic ban is disabled for {display_name} ({user_id}): Celeste does not know who your staff are, so it will not ban anyone. Add them with `/staff-list add`, or mark your moderation group with `/watched-group set-type` as STAFF."
+            );
+            tracing::warn!("{message}");
+            self.deps.ui.append_cli_output(&message);
+            return;
+        }
+
+        let Some(group_id) = self.group_id() else { return };
+        let matched_labels = matches
+            .iter()
+            .map(|group| group.last_seen_name.as_deref().unwrap_or(&group.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if let Some(reason) = exempt {
+            let message = format!("Automatic ban skipped for {display_name} ({user_id}): {reason}. Matched: {matched_labels}.");
+            tracing::warn!("{message}");
+            self.deps.ui.append_cli_output(&message);
+            return;
+        }
+        let Some(client) = self.vrchat().await else {
+            let message = format!("Automatic ban could not run for {display_name} ({user_id}): Celeste is not signed into VRChat. Matched: {matched_labels}.");
+            tracing::warn!("{message}");
+            self.deps.ui.append_cli_output(&message);
+            return;
+        };
+        let preflight = match self.auto_ban_preflight(&client, &group_id).await {
+            Ok(preflight) => preflight,
+            Err(reason) => {
+                let message = format!("Automatic ban could not run for {display_name} ({user_id}): {reason}");
+                tracing::warn!("{message}");
+                self.deps.ui.append_cli_output(&message);
+                return;
+            }
+        };
+        if preflight.actor_id == user_id {
+            let message = format!("Automatic ban skipped for {display_name} ({user_id}): this is the VRChat account signed into Celeste.");
+            tracing::warn!("{message}");
+            self.deps.ui.append_cli_output(&message);
+            return;
+        }
+        if !preflight.authorized {
+            let account = preflight.actor_label();
+            let message = format!("Automatic ban could not run for {display_name} ({user_id}): {account} does not have permission to manage bans in {group_id}.");
+            tracing::warn!("{message}");
+            self.deps.ui.append_cli_output(&message);
+            return;
+        }
+
+        match client.ban_from_group(&group_id, user_id).await {
+            Ok(_) => {
+                let message = format!("Automatic group ban applied to {display_name} ({user_id}) in {group_id}; matched: {matched_labels}. VRChat will prevent re-entry. If the user remains in the current lobby, use VRChat's in-client Kick User action.");
+                tracing::warn!("{message}");
+                self.deps.ui.append_cli_output(&message);
+                let spoken_name = celeste_core::names::sanitize_name_for_speech(display_name);
+                self.deps.tts.speak(
+                    &marker("auto-ban"),
+                    &format!("Automatic group ban applied to {spoken_name}. If they remain in the lobby, use Kick User."),
+                );
+                self.deps.emitter.audit_entry_expected();
+            }
+            Err(error) => {
+                // A ban that cleared the preflight and then failed anyway is
+                // most often a role that changed underneath Celeste, so the
+                // cached answer is discarded and the permission re-checked
+                // live rather than trusted. Having lost ban permission
+                // mid-session is the case a moderator must not miss, so it
+                // carries the nuisance alarm tone rather than a log line.
+                self.auto_ban_preflight = None;
+                let lost_permission = match self.auto_ban_preflight(&client, &group_id).await {
+                    Ok(preflight) => !preflight.authorized,
+                    Err(_) => false,
+                };
+                if lost_permission {
+                    let message = format!("Automatic group ban failed for {display_name} ({user_id}): the VRChat account signed into Celeste can no longer manage bans in {group_id}. Matched: {matched_labels}.");
+                    tracing::error!("{message}");
+                    self.deps.ui.append_cli_output(&message);
+                    self.deps.tts.speak_after_nuisance_alert(
+                        &marker("auto-ban"),
+                        "Automatic ban failed. Celeste no longer has permission to ban in this group.",
+                    );
+                } else {
+                    let message = format!("Automatic group ban failed for {display_name} ({user_id}) in {group_id}; matched: {matched_labels}. VRChat reported: {error}");
+                    tracing::error!("{message}");
+                    self.deps.ui.append_cli_output(&message);
+                }
+            }
+        }
     }
 
     /// A kick that took effect in this instance.
@@ -1415,11 +1792,11 @@ impl CelesteEventListener {
         if self.deps.settings.announce_votes_to_kick.get() {
             let target = celeste_core::names::sanitize_name_for_speech(&target_display_name);
             let line = match &actor_display_name {
-                Some(actor) if actor_id.is_some() => celeste_core::i18n::tr(
-                    "adv.vtkAgainstBy",
-                    &[&target, &celeste_core::names::sanitize_name_for_speech(actor)],
+                Some(actor) if actor_id.is_some() => format!(
+                    "Vote to kick against {target}, by {}.",
+                    celeste_core::names::sanitize_name_for_speech(actor)
                 ),
-                _ => celeste_core::i18n::tr("adv.vtkAgainst", &[&target]),
+                _ => format!("Vote to kick against {target}."),
             };
             self.deps.tts.speak(&marker("vtk"), &line);
         }
@@ -1780,8 +2157,8 @@ impl CelesteEventListener {
         // Java only treats a name match as identification when few enough
         // avatars share the name; more than five is a guess, not a match.
         if candidates.len() > 5 {
-            let note = celeste_core::i18n::tr("adv.reasonTooMany", &[avatar_display_name]);
-            let note = celeste_core::i18n::tr("adv.avatarUnavailableNote", &[display_name, &note]);
+            let note = format!("too many avatars share the name \"{avatar_display_name}\" to identify which one is worn");
+            let note = format!("Avatar data is unavailable for {display_name}: {note}.");
             self.set_avatar_note(user_id, note);
             return;
         }
@@ -1846,8 +2223,8 @@ impl CelesteEventListener {
 
         // Nothing resolvable: say why, honestly, rather than leaving the
         // column blank (Java's `adv.reasonPrivate` wording).
-        let reason = celeste_core::i18n::tr("adv.reasonPrivate", &[avatar_display_name]);
-        let note = celeste_core::i18n::tr("adv.avatarUnavailableNote", &[display_name, &reason]);
+        let reason = format!("\"{avatar_display_name}\" appears to be a private avatar and no avatar database has its stats");
+        let note = format!("Avatar data is unavailable for {display_name}: {reason}.");
         self.set_avatar_note(user_id, note);
     }
 
@@ -1907,8 +2284,26 @@ pub async fn run(
     mut listener: CelesteEventListener,
     mut events: tokio::sync::mpsc::UnboundedReceiver<TailerEvent>,
 ) {
-    while let Some(event) = events.recv().await {
-        listener.handle(event).await;
+    // While catch-up checks are still waiting on a VRChat sign-in, the loop
+    // cannot rely on the log to wake it: a quiet instance writes nothing,
+    // and `WentSilent` is a one-shot edge rather than a tick. Wake on a
+    // timer for exactly as long as something is pending.
+    const PENDING_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+    loop {
+        if listener.has_pending_checks() {
+            tokio::select! {
+                event = events.recv() => match event {
+                    Some(event) => listener.handle(event).await,
+                    None => return,
+                },
+                _ = tokio::time::sleep(PENDING_RETRY) => listener.retry_pending_checks().await,
+            }
+        } else {
+            match events.recv().await {
+                Some(event) => listener.handle(event).await,
+                None => return,
+            }
+        }
     }
 }
 
@@ -2033,8 +2428,8 @@ fn format_advisories(advisories: &[String]) -> Option<String> {
 /// Port of `watchedAvatarAdvisory`.
 fn watched_avatar_advisory(message: Option<&str>) -> String {
     match message.map(str::trim).filter(|m| !m.is_empty()) {
-        Some(message) => celeste_core::i18n::tr("adv.watchedAvatarMsg", &[message]),
-        None => celeste_core::i18n::tr("adv.watchedAvatar", &[]),
+        Some(message) => format!("Watched avatar: {message}"),
+        None => "Watched avatar".to_string(),
     }
 }
 
@@ -2071,7 +2466,7 @@ mod tests {
     use super::*;
     use crate::tests_support::{RecordingEmitter, RecordingTts, RecordingUi};
     use celeste_vrchat::log_tail::{LogEvent, LogEventKind, TailerEvent};
-    use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+    use wiremock::{matchers::{body_json, method, path}, Mock, MockServer, ResponseTemplate};
 
     const GROUP_ID: &str = "grp_11111111-1111-1111-1111-111111111111";
     const GROUP_LOCATION: &str =
@@ -2122,6 +2517,7 @@ mod tests {
                 celeste_core::watched_entities::is_valid_avatar_id,
             )),
             watched_groups: Arc::new(WatchedGroups::open(dir.path(), "watched_groups.json")),
+            auto_ban_groups: Arc::new(AutoBanGroups::open(dir.path())),
             pronoun_lists: Arc::new(PronounLists::open(dir.path())),
             tts: Arc::new(tts.clone()),
             avatar_search,
@@ -2278,6 +2674,53 @@ mod tests {
         assert!(h.emitter.events().is_empty());
     }
 
+    /// Celeste restarted while VRChat is already running: catch-up beats the
+    /// VRChat sign-in, so the checks must wait rather than burn themselves
+    /// on a client that does not exist yet.
+    #[tokio::test]
+    async fn catch_up_checks_wait_for_a_vrchat_client_and_then_fill_in() {
+        const EARLY: &str = "usr_77777777-7777-7777-7777-777777777777";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/users/{EARLY}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": EARLY,
+                "displayName": "Early",
+                "tags": ["system_trust_basic"],
+                "date_joined": "2020-01-01"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/users/{EARLY}/groups")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let mut h = harness(true);
+        h.listener.handle(TailerEvent::Init { file: std::path::PathBuf::from("output_log_x.txt") }).await;
+        h.listener.handle(entry(true, 100, joined(GROUP_LOCATION))).await;
+        h.listener.handle(entry(true, 101, player_joined("Early", EARLY))).await;
+        // Signed out, exactly as during a restart-while-running.
+        h.listener.handle(TailerEvent::CatchUp { file: Some(std::path::PathBuf::from("output_log_x.txt")) }).await;
+
+        assert!(h.ui.player(EARLY).is_some(), "the row still appears from the log");
+        assert!(
+            h.listener.has_pending_checks(),
+            "the check is held, not spent on a client that does not exist"
+        );
+
+        *h.listener.deps.vrchat.write().await = Some(Arc::new(
+            VrChatClient::with_base_url(&server.uri()).unwrap(),
+        ));
+        h.listener.retry_pending_checks().await;
+
+        assert!(!h.listener.has_pending_checks(), "the queue drains once it can");
+        let row = h.ui.player(EARLY).expect("row");
+        assert_ne!(row.trust_rank, TrustRank::Unknown, "rank filled in without a rejoin");
+        assert!(row.account_age.is_some(), "account age filled in too");
+    }
+
     /// A join and a leave for the same player during catch-up must flush in
     /// order — the inversion that used to leave departed players marked
     /// present and inflate the count.
@@ -2325,7 +2768,7 @@ mod tests {
         h.listener.handle(entry(false, 101, player_joined("Вlakе", "usr_spoof"))).await;
 
         let advisory = h.ui.player("usr_spoof").unwrap().advisory.unwrap();
-        assert_eq!(advisory, celeste_core::i18n::tr("adv.mixedCharName", &[]));
+        assert_eq!(advisory, "Mixed-character name");
         assert_eq!(h.tts.spoken(), vec!["[mixed-name alert]".to_string()]);
     }
 
@@ -2378,6 +2821,7 @@ mod tests {
                 celeste_core::watched_entities::is_valid_avatar_id,
             )),
             watched_groups: Arc::new(WatchedGroups::open(h_dir.path(), "watched_groups.json")),
+            auto_ban_groups: Arc::new(AutoBanGroups::open(h_dir.path())),
             pronoun_lists: Arc::new(PronounLists::open(h_dir.path())),
             tts: Arc::new(tts.clone()),
             avatar_search: Arc::new(crate::NoAvatarSearch),
@@ -2706,6 +3150,7 @@ mod tests {
                 celeste_core::watched_entities::is_valid_avatar_id,
             )),
             watched_groups,
+            auto_ban_groups: Arc::new(AutoBanGroups::open(h_dir.path())),
             pronoun_lists: Arc::new(PronounLists::open(h_dir.path())),
             tts: Arc::new(RecordingTts::default()),
             avatar_search: Arc::new(crate::NoAvatarSearch),
@@ -2728,6 +3173,185 @@ mod tests {
         // The advisory and the column are fed from the same check, so the
         // column must never be empty while the advisory names a group.
         assert!(row.advisory.as_deref().unwrap_or_default().contains("Kick on sight"));
+    }
+
+    #[tokio::test]
+    async fn a_live_auto_ban_match_bans_once_and_marks_the_row() {
+        const MEMBER: &str = "usr_33333333-3333-3333-3333-333333333333";
+        const MATCHED_GROUP: &str = "grp_99999999-9999-9999-9999-999999999999";
+        const BOT: &str = "usr_44444444-4444-4444-4444-444444444444";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/users/{MEMBER}/groups")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "groupId": MATCHED_GROUP,
+                "name": "Known Crashers",
+                "memberVisibility": "visible"
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/auth/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": BOT,
+                "displayName": "Celeste Bot"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/groups/{GROUP_ID}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": GROUP_ID,
+                "name": "Test Group",
+                "ownerId": BOT,
+                "memberCount": 1,
+                "roles": []
+            })))
+            .mount(&server)
+            .await;
+        // The exemption check asks whether the joining account holds a
+        // moderating role here. No roles, so it does not.
+        Mock::given(method("GET"))
+            .and(path(format!("/groups/{GROUP_ID}/members/{MEMBER}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "groupId": GROUP_ID,
+                "userId": MEMBER,
+                "roleIds": []
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/groups/{GROUP_ID}/bans")))
+            .and(body_json(serde_json::json!({"userId": MEMBER})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "groupId": GROUP_ID,
+                "userId": MEMBER
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut h = harness(true);
+        h.listener.deps.auto_ban_groups.add(MATCHED_GROUP).unwrap();
+        // The gate: Celeste bans nobody until it knows who the staff are.
+        h.listener.deps.staff_list.add_id(BOT);
+        *h.listener.deps.vrchat.write().await = Some(Arc::new(
+            VrChatClient::with_base_url(&server.uri()).unwrap(),
+        ));
+        h.listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        h.listener.handle(entry(false, 101, player_joined("Target", MEMBER))).await;
+
+        let row = h.ui.player(MEMBER).expect("the join created a row");
+        assert_eq!(row.advisory.as_deref(), Some("AUTO-BAN GROUP: Known Crashers"));
+        assert!(h.ui.calls().cli.iter().any(|line| {
+            line.contains("Automatic group ban applied") && line.contains("Known Crashers")
+        }));
+
+        // A duplicate log line must not issue a second external action.
+        h.listener.handle(entry(false, 102, player_joined("Target", MEMBER))).await;
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_install_calls_out_a_match_but_bans_nobody() {
+        const MEMBER: &str = "usr_66666666-6666-6666-6666-666666666666";
+        const MATCHED_GROUP: &str = "grp_99999999-9999-9999-9999-999999999999";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/users/{MEMBER}/groups")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "groupId": MATCHED_GROUP,
+                "name": "Known Crashers",
+                "memberVisibility": "visible"
+            }])))
+            .mount(&server)
+            .await;
+        // No staff list, no STAFF group: nothing may be banned, so no ban
+        // request may be sent and no account lookup is even needed.
+        Mock::given(method("POST"))
+            .and(path(format!("/groups/{GROUP_ID}/bans")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let mut h = harness(true);
+        h.listener.deps.auto_ban_groups.add(MATCHED_GROUP).unwrap();
+        *h.listener.deps.vrchat.write().await = Some(Arc::new(
+            VrChatClient::with_base_url(&server.uri()).unwrap(),
+        ));
+        h.listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        h.listener.handle(entry(false, 101, player_joined("Target", MEMBER))).await;
+
+        let row = h.ui.player(MEMBER).expect("the join created a row");
+        let advisory = row.advisory.as_deref().unwrap_or_default();
+        assert!(advisory.contains("AUTO-BAN GROUP: Known Crashers"), "still called out: {advisory}");
+        assert!(advisory.contains("not configured"), "and says why not: {advisory}");
+        assert!(h.ui.calls().cli.iter().any(|line| {
+            line.contains("Automatic ban is disabled") && line.contains("/staff-list add")
+        }));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn a_staff_member_in_an_auto_ban_group_is_called_out_but_never_banned() {
+        const MOD: &str = "usr_55555555-5555-5555-5555-555555555555";
+        const MATCHED_GROUP: &str = "grp_99999999-9999-9999-9999-999999999999";
+        const BOT: &str = "usr_44444444-4444-4444-4444-444444444444";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/users/{MOD}/groups")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "groupId": MATCHED_GROUP,
+                "name": "Known Crashers",
+                "memberVisibility": "visible"
+            }])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/auth/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": BOT,
+                "displayName": "Celeste Bot"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/groups/{GROUP_ID}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": GROUP_ID,
+                "name": "Test Group",
+                "ownerId": BOT,
+                "memberCount": 1,
+                "roles": []
+            })))
+            .mount(&server)
+            .await;
+        // The whole point: no ban request is ever sent for a moderator.
+        Mock::given(method("POST"))
+            .and(path(format!("/groups/{GROUP_ID}/bans")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let mut h = harness(true);
+        h.listener.deps.auto_ban_groups.add(MATCHED_GROUP).unwrap();
+        h.listener.deps.staff_list.add_id(MOD);
+        *h.listener.deps.vrchat.write().await = Some(Arc::new(
+            VrChatClient::with_base_url(&server.uri()).unwrap(),
+        ));
+        h.listener.handle(entry(false, 100, joined(GROUP_LOCATION))).await;
+        h.listener.handle(entry(false, 101, player_joined("Mod", MOD))).await;
+
+        let row = h.ui.player(MOD).expect("the join created a row");
+        let advisory = row.advisory.as_deref().unwrap_or_default();
+        assert!(advisory.contains("AUTO-BAN GROUP: Known Crashers"), "still called out: {advisory}");
+        assert!(advisory.contains("NOT BANNED, on the staff list"), "and marked exempt: {advisory}");
+        assert!(h.ui.calls().cli.iter().any(|line| {
+            line.contains("Automatic ban skipped") && line.contains("on the staff list")
+        }));
+        server.verify().await;
     }
 
     #[test]

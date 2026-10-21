@@ -527,14 +527,14 @@ mod tests {
     #[test]
     fn string_choice_rejects_invalid_values() {
         let (_dir, reg) = registry();
-        let setting = reg.string_choice("ui_language", "Language", SettingCategory::General, "system", || {
-            vec!["system".to_string(), "en".to_string(), "ru".to_string()]
+        let setting = reg.string_choice("graphics_renderer", "Renderer", SettingCategory::General, "auto", || {
+            vec!["auto".to_string(), "glow".to_string(), "wgpu".to_string()]
         });
-        assert!(setting.set(Some("en".to_string()), "test"));
-        assert_eq!(setting.get(), "en");
+        assert!(setting.set(Some("glow".to_string()), "test"));
+        assert_eq!(setting.get(), "glow");
         assert!(!setting.set(Some("klingon".to_string()), "test"));
         // invalid set leaves the previous cached value in place
-        assert_eq!(setting.get(), "en");
+        assert_eq!(setting.get(), "glow");
     }
 
     #[test]

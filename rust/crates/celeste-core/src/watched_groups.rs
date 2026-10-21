@@ -35,17 +35,27 @@ pub enum WatchedGroupType {
     Community,
     #[serde(rename = "AFFILIATED")]
     Affiliated,
+    /// Celeste's own moderators: a group whose members hold authority here,
+    /// so they are exempt from the automatic group ban and the automatic-ban
+    /// list stays inert until at least one of these exists.
+    ///
+    /// Not a Java type. A `watched_groups.json` containing `STAFF` entries
+    /// is readable by Celeste only -- the Java build treats an unknown enum
+    /// name as a hard read error, so this file no longer round-trips to it.
+    #[serde(rename = "STAFF")]
+    Staff,
     #[serde(rename = "OTHER")]
     Other,
 }
 
 impl WatchedGroupType {
-    pub const ALL: [WatchedGroupType; 6] = [
+    pub const ALL: [WatchedGroupType; 7] = [
         WatchedGroupType::Unknown,
         WatchedGroupType::Malicious,
         WatchedGroupType::Nuisance,
         WatchedGroupType::Community,
         WatchedGroupType::Affiliated,
+        WatchedGroupType::Staff,
         WatchedGroupType::Other,
     ];
 
@@ -58,6 +68,7 @@ impl WatchedGroupType {
             WatchedGroupType::Nuisance => "NUISANCE",
             WatchedGroupType::Community => "COMMUNITY",
             WatchedGroupType::Affiliated => "AFFILIATED",
+            WatchedGroupType::Staff => "STAFF",
             WatchedGroupType::Other => "OTHER",
         }
     }
@@ -71,7 +82,11 @@ impl WatchedGroupType {
             WatchedGroupType::Nuisance => Some((235, 165, 65)),
             WatchedGroupType::Community => Some((95, 200, 120)),
             WatchedGroupType::Affiliated => Some((95, 165, 235)),
-            WatchedGroupType::Unknown | WatchedGroupType::Other => None,
+            // Staff carry no row colour of their own: they are already
+            // badged, and a moderator's row should not look like a hit.
+            WatchedGroupType::Unknown
+            | WatchedGroupType::Staff
+            | WatchedGroupType::Other => None,
         }
     }
 
@@ -201,6 +216,19 @@ impl WatchedGroups {
 
     pub fn get_watched_group(&self, group_id: &str) -> Option<WatchedGroup> {
         self.groups.lock().unwrap_or_else(|e| e.into_inner()).get(group_id).cloned()
+    }
+
+    /// Whether any entry is typed `STAFF`.
+    ///
+    /// This is what the automatic-ban gate asks: Celeste refuses to ban
+    /// anyone until it has been told where moderators come from, so that a
+    /// half-configured install cannot produce false positives.
+    pub fn has_staff_group(&self) -> bool {
+        self.groups
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|group| group.r#type == WatchedGroupType::Staff)
     }
 
     pub fn get_all(&self) -> Vec<WatchedGroup> {

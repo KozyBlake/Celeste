@@ -71,6 +71,14 @@ impl TypeMapKey for WatchedGroupsKey {
     type Value = Arc<celeste_core::watched_groups::WatchedGroups>;
 }
 
+/// Groups whose members are automatically banned on a live group-instance
+/// join (`auto_ban_groups.json`). Kept separate from watched groups because
+/// this list authorizes an external moderation action.
+pub struct AutoBanGroupsKey;
+impl TypeMapKey for AutoBanGroupsKey {
+    type Value = Arc<celeste_core::auto_ban_groups::AutoBanGroups>;
+}
+
 /// Port of `Scarlet.watchedUsers` (`watched_users.json`).
 pub struct WatchedUsersKey;
 impl TypeMapKey for WatchedUsersKey {
@@ -458,6 +466,7 @@ pub struct SharedState {
     pub secret_staff_list: Arc<celeste_core::staff_list::StaffList>,
     pub moderation_tags: Arc<celeste_core::moderation_tags::ModerationTags>,
     pub watched_groups: Arc<celeste_core::watched_groups::WatchedGroups>,
+    pub auto_ban_groups: Arc<celeste_core::auto_ban_groups::AutoBanGroups>,
     pub watched_users: Arc<celeste_core::watched_entities::WatchedEntities>,
     pub watched_avatars: Arc<celeste_core::watched_entities::WatchedEntities>,
 }
@@ -493,6 +502,7 @@ impl SharedState {
         data.insert::<SecretStaffListKey>(self.secret_staff_list.clone());
         data.insert::<ModerationTagsKey>(self.moderation_tags.clone());
         data.insert::<WatchedGroupsKey>(self.watched_groups.clone());
+        data.insert::<AutoBanGroupsKey>(self.auto_ban_groups.clone());
         data.insert::<WatchedUsersKey>(self.watched_users.clone());
         data.insert::<WatchedAvatarsKey>(self.watched_avatars.clone());
         data.insert::<InstanceCreationsKey>(Arc::new(RwLock::new(HashMap::new())));

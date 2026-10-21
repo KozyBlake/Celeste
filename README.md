@@ -27,7 +27,7 @@ Celeste is self-hosted, meaning you have complete control of your group's data.
 Your VRChat and Discord credentials are held only on your own machine — they are never sent to a third party, and no Celeste-operated service ever receives them.
 Since there is no automatic synchronization of data between groups running Celeste, you don't have to worry about other groups seeing who your group has moderated or what groups you are tracking.
 
-Celeste talks to VRChat and Discord because that is the job. Beyond those, the only outbound connections come from **optional** features that are off by default: avatar-database search (to whichever VRCX-compatible providers you enable) and the mobile companion. The companion's off-network relay ships pointing at a maintainer-run host and is not contacted until you have paired a phone and accepted an on-screen notice naming that host and what it receives; you can decline and keep using the companion over your own network, or point it at a server you run.
+Celeste talks to VRChat and Discord because that is the job. Beyond those, the only outbound connections come from **optional** features that are off by default: avatar-database search (to whichever VRCX-compatible providers you enable).
 
 **There is no update check and no telemetry.** Celeste never phones home. If a build behaves differently from that claim, treat the claim as the thing to check the build against.
 
@@ -41,6 +41,7 @@ Celeste talks to VRChat and Discord because that is the job. Beyond those, the o
 - **Live instance monitoring.** When VRChat runs on the same machine, Celeste reads the client log and keeps a live player list — joins, leaves, avatar changes, staff and watched-entity badges — in its own Discord thread.
 - **A searchable roster.** Ctrl+F narrows a packed instance to the person you are looking for, matching display name, user ID or worn avatar. Decorative fonts, other writing systems and look-alike letters are all searched, so the letters on the nameplate are the letters you type.
 - **Watched users, groups and avatars**, each with priority, tags, notes, a custom advisory message, and silent/critical modes.
+- **Opt-in automatic group bans.** A separate `auto_ban_groups.json` list can ban a live join whose visible memberships match, using the VRChat account signed into Celeste.
 - **Text-to-speech callouts**, locally or into a Discord voice channel.
 - **Crash-safe data files** with dated backups beside each one.
 
@@ -132,9 +133,8 @@ remove-menu    set-message    set-silent       remove-tag
 ```
 /settings edit                     /set-tts-voice
 /config-info                       /set-voice-channel
-/celeste-version                   /set-training-channel
-/server-restart restart-now        /set-ops-alert-channel
-                                   /set-discord-account-age-alert
+/celeste-version                   /set-ops-alert-channel
+/server-restart restart-now        /set-discord-account-age-alert
 /celeste-discord-permissions list  /set-verification-auto-invite
 /celeste-discord-permissions set   /set-ticket-age-verify-message
                                    /set-ticket-tool-auto-response
@@ -199,9 +199,7 @@ The CLI tab (View → CLI, or `Settings → Appearance`) accepts:
 | `logout` | end the VRChat session |
 | `explore` | open the data folder |
 | `importgroups`, `importgroupsjson` | bulk-import watched groups |
-| `simulate` | fire a training event (requires training mode) |
 | `restore-advisories`, `translate-advisories` | advisory maintenance |
-| `langlint` | validate community translation files |
 | `popup-test`, `vrchatapi-test` | diagnostics |
 | `repair-secure-store` | rebuild the encrypted credential store |
 | `clear` | clear the console |
@@ -216,22 +214,6 @@ It can also generate a link that pre-fills the VRChat Help Desk report form from
 
 ---
 
-### Localization
-
-- The desktop UI and the spoken TTS callouts are translated into **German, English, Spanish, Indonesian, Japanese and Russian**. All five non-English bundles are substantially complete; anything untranslated falls back to English rather than showing a raw key.
-- Pick a language in **Settings → Appearance** (a dropdown of native names). It defaults to your operating system language and applies on restart. The Discord bot renders each reply in the invoking user's own Discord language.
-- **Community translations without a rebuild:** drop a `messages_<lang>.properties` file into the `lang/` folder in Celeste's data directory and restart — new languages are auto-discovered, and Celeste writes an up-to-date English `messages.template.properties` there as a starting point. The `langlint` CLI command (and a startup check) validates community files, flagging missing keys and broken `{0}` placeholders.
-
----
-
-### Training mode
-
-- Enable **Settings → Training** to unlock an event simulator (Edit → *Simulate event (training)…*, or the `simulate` CLI command) that fires realistic events on demand — so new moderators can learn on a screenshare instead of a live incident, and nobody has to actually join a bad group.
-- The simulator can fire **moderator warn / kick / ban** events. Each produces a genuine moderation post and thread with the real **Edit tags**, **Edit description**, **Ban / Unban** and **Timed ban** buttons (and `/tag` works in its thread), so a trainer can exercise the whole tagging workflow from a moderator's account without banning anyone. These posts go **only** to the channel set with `/set-training-channel` — nothing is posted if none is set. Ban / Unban / Timed ban on a training user run the real permission checks and then reply with a simulated result without calling VRChat, and drills never appear in moderation summaries, which are counted from VRChat's own audit log.
-- While training, Celeste behaves as a **separate client**: the real instance is parked and kept updated in the background, actions on training players show real success feedback but make no VRChat call, and turning training off restores the live instance instantly. Everything training-related is marked `[TRAINING]`, so a drill can never be mistaken for a real record.
-
----
-
 ### Reliability and health monitoring
 
 - A background watchdog turns silent failure modes into loud, recoverable ones: if the VRChat log goes quiet while the game is running, or the VRChat session expires mid-run, Celeste raises a popup, attempts unattended re-login, and (with `/set-ops-alert-channel`) posts a Discord health alert. A healthy session is never torn down just because it is old.
@@ -241,10 +223,9 @@ It can also generate a link that pre-fills the VRChat Help Desk report form from
 
 ---
 
-### Desktop and mobile notifications
+### Desktop notifications
 
 - Advisories can raise native desktop notifications (Windows Action Center, Linux `notify-send`, macOS `osascript` — PowerShell is never invoked), configured per category in **Settings → Desktop Notifications**.
-- A mobile companion can push the same alerts to a phone; pair it from **Settings → Mobile Companion**.
 
 ---
 
@@ -309,7 +290,9 @@ The VRChat account Celeste uses must have at least these group permissions:
 - `View Audit log`
 - `View All Members`
 
-Celeste does not enforce moderation actions against users on its own. Kicks, bans and the rest are performed by a human — Celeste provides the Discord commands, buttons and records around them.
+Most moderation remains human-directed through Celeste's Discord commands and buttons. The one explicit exception is the optional automatic-ban list under **Tools → Automatic ban groups**. If enabled, the signed-in VRChat account also needs `Manage Group Bans`. Celeste checks only live joins to the configured group's own instance, only memberships visible to that account, and writes the opt-in list separately to `auto_ban_groups.json`.
+
+VRChat's group API can apply the group ban and prevent re-entry, but it does not expose the in-client **Kick User** action. Celeste therefore reports a successful automatic ban and tells the moderator to use that action if the user remains in the current lobby.
 
 ---
 
@@ -394,6 +377,8 @@ By default Celeste stores everything under:
 | Windows | `%LOCALAPPDATA%\KozyBlake\Celeste` |
 
 **Upgrading from Scarlet:** discovery also looks under the old `KozyBlake/Scarlet` locations and the other legacy layouts, so an existing install is found and adopted rather than starting empty. Data files are byte-compatible in both directions — the same `settings.json`, `watched_*.json`, `discord_bot.json` and so on.
+
+`auto_ban_groups.json` is deliberately separate from `watched_groups.json`: watching is informational, while placing a group on the automatic-ban list authorizes a real external moderation action.
 
 Credentials are the exception. The encrypted credential store is not readable by Celeste, so you will sign in to VRChat and re-enter the Discord bot token once. **If VRChat two-factor is enabled on the account, confirm you still have your authenticator before you remove Scarlet.**
 

@@ -34,6 +34,7 @@ rust/staff_list.json
 rust/secret_staff_list.json
 rust/watched_*.json
 rust/moderation_tags.json
+rust/auto_ban_groups.json
 rust/pending_moderation_actions.json
 rust/good_pronoun.json
 rust/bad_pronoun.json
@@ -79,6 +80,7 @@ home/
 /staff_list.json
 /secret_staff_list.json
 /moderation_tags.json
+/auto_ban_groups.json
 /good_pronoun.json
 /bad_pronoun.json
 /watched_*.json

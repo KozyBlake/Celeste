@@ -108,7 +108,6 @@ pub struct Settings {
     pub show_ui_during_load: Arc<FileValued<bool>>,
     pub show_cli_tab: Arc<FileValued<bool>>,
     pub ui_accent_headers: Arc<FileValued<bool>>,
-    pub ui_language: Arc<FileValued<String>>,
     pub graphics_renderer: Arc<FileValued<String>>,
     pub ui_left_player_dim_percent: Arc<FileValued<i32>>,
 
@@ -176,6 +175,7 @@ pub struct Settings {
 
     // --- ScarletEventListener.java: Notifications (TTS + advisory) ---
     pub tts_voice_name: Arc<FileValued<String>>,
+    pub tts_volume_percent: Arc<FileValued<i32>>,
     pub tts_use_default_audio_device: Arc<FileValued<bool>>,
     pub announce_watched_users: Arc<FileValued<bool>>,
     pub announce_watched_groups: Arc<FileValued<bool>>,
@@ -308,15 +308,6 @@ impl Settings {
                 "Colour section headers with accent",
                 SettingCategory::General,
                 false,
-            ),
-            ui_language: registry.string_choice(
-                "ui_language",
-                "Desktop UI language (restart to apply)",
-                SettingCategory::General,
-                "system",
-                || {
-                    ["system", "en", "de", "es", "id", "ja", "ru"].into_iter().map(str::to_string).collect()
-                },
             ),
             graphics_renderer: registry.string_choice(
                 "graphics_renderer",
@@ -683,6 +674,14 @@ impl Settings {
                 SettingCategory::Notifications,
                 "",
                 installed_tts_voices,
+            ),
+            tts_volume_percent: registry.int_range(
+                "tts_volume_percent",
+                "TTS: Volume",
+                SettingCategory::Notifications,
+                100,
+                0,
+                100,
             ),
             tts_use_default_audio_device: registry.boolean(
                 "tts_use_default_audio_device",

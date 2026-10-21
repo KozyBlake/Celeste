@@ -70,6 +70,10 @@ pub struct WatchedEntity {
     pub notes_original: Option<String>,
     #[serde(rename = "translatedLang", default)]
     pub translated_lang: Option<String>,
+    /// Latest name Celeste observed for this user or avatar. Additive so
+    /// older Celeste/Scarlet builds safely ignore it.
+    #[serde(rename = "lastSeenName", default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_name: Option<String>,
 }
 
 impl WatchedEntity {
@@ -86,6 +90,7 @@ impl WatchedEntity {
             message_original: None,
             notes_original: None,
             translated_lang: None,
+            last_seen_name: None,
         }
     }
 }
@@ -246,6 +251,28 @@ impl WatchedEntities {
         removed
     }
 
+    /// Records a name already present in a live player/avatar event. This
+    /// avoids issuing hundreds of API requests merely to decorate the list.
+    pub fn record_seen_name(&self, id: &str, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut entities = self.entities.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entity) = entities.get_mut(id) else { return };
+            if entity.last_seen_name.as_deref() == Some(name) {
+                false
+            } else {
+                entity.last_seen_name = Some(name.to_string());
+                true
+            }
+        };
+        if changed {
+            self.save();
+        }
+    }
+
     pub fn update(&self, id: &str, f: impl FnOnce(&mut WatchedEntity)) -> Option<WatchedEntity> {
         let updated = {
             let mut entities = self.entities.lock().unwrap_or_else(|e| e.into_inner());
@@ -349,6 +376,27 @@ mod tests {
         assert_eq!(
             reopened.get_watched_entity("abcdefghij").unwrap().priority,
             3
+        );
+    }
+
+    #[test]
+    fn learned_display_name_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let entities =
+                WatchedEntities::open(dir.path(), "watched_users.json", is_valid_user_id);
+            entities.add_watched_entity(WatchedEntity::new("abcdefghij"));
+            entities.record_seen_name("abcdefghij", "Example User");
+        }
+
+        let reopened = WatchedEntities::open(dir.path(), "watched_users.json", is_valid_user_id);
+        assert_eq!(
+            reopened
+                .get_watched_entity("abcdefghij")
+                .unwrap()
+                .last_seen_name
+                .as_deref(),
+            Some("Example User")
         );
     }
 
