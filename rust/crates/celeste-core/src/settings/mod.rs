@@ -105,6 +105,11 @@ pub struct Settings {
 
     // --- Scarlet.java: General/UI ---
     pub confirm_group_invite: Arc<FileValued<bool>>,
+    /// Whether to ask GitHub for the latest release tag at launch.
+    /// One request, and the only one Celeste makes to anywhere that
+    /// is not VRChat or Discord, so it is worth being able to say no
+    /// to.
+    pub update_check_on_launch: Arc<FileValued<bool>>,
     pub show_ui_during_load: Arc<FileValued<bool>>,
     pub show_cli_tab: Arc<FileValued<bool>>,
     pub ui_accent_headers: Arc<FileValued<bool>>,
@@ -299,6 +304,12 @@ impl Settings {
                 "Confirmation dialog for group invites",
                 SettingCategory::General,
                 false,
+            ),
+            update_check_on_launch: registry.boolean(
+                "update_check_on_launch",
+                "Check for a new Celeste release at launch",
+                SettingCategory::System,
+                true,
             ),
             show_ui_during_load: registry.boolean(
                 "ui_show_during_load",

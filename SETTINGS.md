@@ -157,9 +157,10 @@ or from Discord with `/settings edit`.
 | Discord setup wizard has run | `discord_setup_prompted` | boolean (default `false`) | Remembers that you have been offered Discord setup. |
 | Initial setup type has been selected | `setup_profile_prompted` | boolean (default `false`) | Remembers that you selected an initial setup type. |
 | Furthest guided-tour step reached (-1 = not started) | `tutorial_progress_step` | integer `-1`–`512` (default `-1`) | Remembers how far you got in the guided tour so Help can offer to resume it. |
+| Check for a new Celeste release at launch | `update_check_on_launch` | boolean (default `true`) | Asks GitHub once at startup whether a newer Celeste has been released, and shows a note in the status bar if so. Nothing is downloaded or installed. Turn it off to make no request outside VRChat and Discord. |
 | Acknowledged the "vibe-coded project" notice | `vibecoded_notice_acknowledged` | boolean (default `false`) | Remembers that you have read the first-run notice. |
 | VRChat setup wizard has run | `vrchat_setup_prompted` | boolean (default `false`) | Remembers that you have been offered VRChat setup. |
 
 ---
 
-105 settings in 6 categories.
+106 settings in 6 categories.

@@ -35,6 +35,7 @@ pub mod report_evidence;
 pub mod tts_voices;
 pub mod ui;
 pub mod unique_strings;
+pub mod update_check;
 pub mod versioned_file;
 pub mod watched_entities;
 pub mod watched_groups;

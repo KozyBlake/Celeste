@@ -29,6 +29,7 @@ pub mod splash;
 pub mod state;
 pub mod theme;
 pub mod tts;
+pub mod update_check;
 
 pub use app::{run, CelesteAppContext};
 pub use celeste_core::ui::{ConnectedPlayer, InstanceState, PlayerJoin};

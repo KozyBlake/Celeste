@@ -1979,6 +1979,11 @@ pub struct CelesteApp {
     /// cursor's own timestamp cannot tell you that: a legitimate catch-up
     /// after downtime leaves it hours behind while advancing perfectly.
     audit_cursor_seen: Option<(chrono::DateTime<chrono::Utc>, std::time::Instant)>,
+    /// A release newer than this build, once the launch check has answered.
+    update_available: Option<crate::update_check::NewRelease>,
+    /// Drained once in `update`. `None` when the check is disabled, has
+    /// already answered, or found nothing.
+    update_check_rx: Option<std::sync::mpsc::Receiver<crate::update_check::NewRelease>>,
     /// The Instance tab's roster filter: whatever is typed in the search
     /// box above the player table. Empty means every row is shown, which is
     /// why this is a filter applied at render time rather than anything
@@ -2193,6 +2198,24 @@ impl CelesteApp {
             _ => true,
         };
 
+        // One request, at launch, and only when the setting allows it. The
+        // result arrives on a channel so a slow or unreachable GitHub can
+        // never hold up the window.
+        let update_check_rx = settings
+            .as_ref()
+            .is_none_or(|settings| settings.update_check_on_launch.get())
+            .then(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                runtime_handle.spawn(async move {
+                    if let Some(release) =
+                        crate::update_check::check(celeste_core::identity::VERSION).await
+                    {
+                        let _ = tx.send(release);
+                    }
+                });
+                rx
+            });
+
         let (column_order, column_widths) = load_column_layout(settings.as_deref());
         let installed_tutorial_voices = celeste_core::tts_voices::installed();
         let tutorial_voice = settings
@@ -2263,6 +2286,8 @@ impl CelesteApp {
             column_widths,
             table_sort: None,
             audit_cursor_seen: None,
+            update_available: None,
+            update_check_rx,
             player_search: String::new(),
             player_search_instance: None,
             last_window_bounds,
@@ -9652,9 +9677,22 @@ impl eframe::App for CelesteApp {
                 self.toolbar(ui);
             });
 
+        if let Some(rx) = &self.update_check_rx {
+            match rx.try_recv() {
+                Ok(release) => {
+                    self.update_available = Some(release);
+                    self.update_check_rx = None;
+                }
+                // The task ended without finding anything newer.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.update_check_rx = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
         let status_state = self.tutorial_state();
         // Computed out here: the panel's closure cannot borrow `self`.
         let audit_stall = self.audit_polling_stalled_for();
+        let update_available = self.update_available.clone();
         let status_bar = egui::TopBottomPanel::bottom("status_bar")
             .frame(
                 egui::Frame::NONE
@@ -9711,6 +9749,25 @@ impl eframe::App for CelesteApp {
                                     "Celeste has not completed a group audit poll for {}, so moderation events are not reaching Discord.\n\n                                     Common causes: the VRChat session expired, the bot lost the group-audit-view permission, or VRChat changed its API.\n\n                                     Nothing is lost — the audit cursor has not advanced, so Celeste catches up from where it stopped once this clears.",
                                     format_stall(stuck)
                                 ));
+                        }
+                        if let Some(release) = &update_available {
+                            // Informational, not a warning: nothing is
+                            // wrong, there is simply a newer build.
+                            let response = ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(format!("Update {} available", release.tag))
+                                            .color(crate::theme::INFO),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(
+                                    "A newer Celeste has been released. Click to open its release page.\n\n                                     Celeste does not download or install anything by itself.",
+                                );
+                            if response.clicked() {
+                                ui.ctx().open_url(egui::OpenUrl::same_tab(release.url.clone()));
+                            }
                         }
                         if let Some(problem) = status_state.tts_status() {
                             ui.colored_label(crate::theme::WARN, "Voice warning")

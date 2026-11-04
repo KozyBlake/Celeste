@@ -77,6 +77,7 @@ pub fn describe(id: &str) -> Option<&'static str> {
         "moderation_summary_only_activity" => "Limits the moderation summary to periods that actually had activity.",
         "timed_bans_enabled" => "Shows the timed-ban buttons on moderation threads, which ban for a fixed period and lift automatically.",
         "audit_polling_interval" => "How often to poll VRChat for new group audit events, in seconds.",
+        "update_check_on_launch" => "Asks GitHub once at startup whether a newer Celeste has been released, and shows a note in the status bar if so. Nothing is downloaded or installed. Turn it off to make no request outside VRChat and Discord.",
         "audit_catchup_max_days" => "How much backlog to work through on startup, in days, after Celeste has been closed for a while.",
         "attempt_avatar_image_match" => "Identifies a player's avatar by matching its image when the name alone is ambiguous. Costs extra API calls.",
         "training_mode_enabled" => "Routes simulated moderation events to the training channel instead of the real log.",

@@ -21,6 +21,9 @@ egui = "0.31"
 egui_extras = "0.31"
 image.workspace = true
 open = "5"
+# The launch update check (`crate::update_check`) asks GitHub for the
+# latest release tag.
+reqwest.workspace = true
 # Native file/message dialogs: the data-folder question has to be asked
 # before the egui event loop exists, and the import buttons need a real
 # file picker.
@@ -46,4 +49,3 @@ wgpu = { version = "24", features = ["dx12"], default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
-reqwest.workspace = true
