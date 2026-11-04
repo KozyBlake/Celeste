@@ -4,6 +4,7 @@
 //! as `LinuxCommandTtsProvider`; macOS uses `say`, and Windows uses SAPI via
 //! PowerShell.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
@@ -70,6 +71,8 @@ enum Engine {
     /// has to be speakable too — offering a voice that cannot be spoken is
     /// worse than not offering it.
     Pico(PathBuf),
+    Festival(PathBuf),
+    RhVoice(PathBuf),
     MacSay(PathBuf),
     PowerShell(PathBuf),
 }
@@ -88,6 +91,8 @@ impl Engine {
             "espeak-ng" | "espeak" => find_on_path(&engine).map(Self::Espeak),
             "flite" => find_on_path("flite").map(Self::Flite),
             "pico2wave" => find_on_path("pico2wave").map(Self::Pico),
+            "festival" => find_on_path("festival").map(Self::Festival),
+            "rhvoice" => celeste_core::tts_voices::find_rhvoice().map(Self::RhVoice),
             "say" => find_on_path("say").map(Self::MacSay),
             "sapi" => find_on_path("powershell")
                 .or_else(|| find_on_path("pwsh"))
@@ -104,6 +109,8 @@ impl Engine {
                 .map(Self::Espeak)
                 .or_else(|| find_on_path("spd-say").map(Self::SpdSay))
                 .or_else(|| find_on_path("flite").map(Self::Flite))
+                .or_else(|| find_on_path("festival").map(Self::Festival))
+                .or_else(|| celeste_core::tts_voices::find_rhvoice().map(Self::RhVoice))
         } else if cfg!(target_os = "macos") {
             find_on_path("say").map(Self::MacSay)
         } else if cfg!(target_os = "windows") {
@@ -119,6 +126,8 @@ impl Engine {
         match self {
             Self::Espeak(_) => "eSpeak",
             Self::Pico(_) => "Pico",
+            Self::Festival(_) => "Festival",
+            Self::RhVoice(_) => "RHVoice",
             Self::SpdSay(_) => "Speech Dispatcher",
             Self::Flite(_) => "Flite",
             Self::MacSay(_) => "macOS say",
@@ -281,6 +290,28 @@ impl Engine {
                 command.args(["-w", "/dev/null"]).arg(text);
                 command
             }
+            Self::Festival(path) => {
+                // Festival's `--tts -` reads from stdin. This avoids Scheme
+                // escaping and preserves quotes and Unicode in callouts.
+                let mut command = Command::new(path);
+                if !voice.is_empty() {
+                    command.args(["-b", &format!("({voice})")]);
+                }
+                command.args(["--tts", "-"]);
+                command
+            }
+            Self::RhVoice(path) => {
+                // RHVoice-test reads UTF-8 text from stdin. Keeping it out
+                // of command arguments preserves names and punctuation.
+                let mut command = Command::new(path);
+                if !voice.is_empty() {
+                    command.args(["-p", voice]);
+                }
+                if volume < 100 {
+                    command.args(["-v", &volume.to_string()]);
+                }
+                command
+            }
             Self::MacSay(path) => {
                 let mut command = Command::new(path);
                 if !voice.is_empty() {
@@ -333,15 +364,22 @@ impl Engine {
                 command
             }
         };
-        command
-            .stdin(Stdio::null())
+        let stdin_text = matches!(self, Self::Festival(_) | Self::RhVoice(_));
+        let mut child = command
+            .stdin(if stdin_text { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::null())
             // Kept, not discarded: the Windows script writes the SAPI
             // exception here, and a GUI process has no console for it to
             // land in. Without this a failing voice is silent in every
             // sense - no audio and no reason.
             .stderr(Stdio::piped())
-            .spawn()
+            .spawn()?;
+        if stdin_text {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(text.as_bytes())?;
+            }
+        }
+        Ok(child)
     }
 }
 
@@ -1113,6 +1151,10 @@ mod tests {
             "espeak",
             "spd-say",
             "flite",
+            "festival",
+            "RHVoice-test",
+            "rhvoice-test",
+            "rhvoice.test",
             "say",
             "pwsh",
             "powershell",

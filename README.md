@@ -396,6 +396,8 @@ On Linux it enumerates every engine it finds, in this order, and offers all of t
 |---|---|---|
 | Flite | `flite` | `flite` |
 | Pico | `svox-pico-bin` (AUR) | `libttspico-utils` |
+| Festival | `festival` | `festival` (add `festvox-*` packages for more voices) |
+| RHVoice | `rhvoice` and a voice package | `rhvoice` and `rhvoice-*` voice packages |
 | eSpeak NG | `espeak-ng` | `espeak-ng` |
 | eSpeak | `espeak` | `espeak` |
 

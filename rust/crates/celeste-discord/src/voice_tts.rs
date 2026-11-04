@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use serenity::model::id::{ChannelId, GuildId};
 use songbird::{Event, EventContext, EventHandler, TrackEvent};
+use tokio::io::AsyncWriteExt;
 
 #[derive(Clone)]
 pub struct DiscordVoiceTts {
@@ -273,6 +274,47 @@ impl EventHandler for DeleteAudioFile {
 }
 
 async fn synthesize_wav(output: &Path, text: &str, voice: &str) -> anyhow::Result<()> {
+    let parsed_voice = celeste_core::tts_voices::VoiceId::parse(voice);
+    if parsed_voice.engine == "rhvoice" {
+        let executable = celeste_core::tts_voices::find_rhvoice().ok_or_else(|| {
+            anyhow::anyhow!("RHVoice voice selected, but RHVoice-test was not found on PATH")
+        })?;
+        let mut child = tokio::process::Command::new(executable)
+            .arg("-p")
+            .arg(&parsed_voice.voice)
+            .arg("-o")
+            .arg(output)
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes()).await?;
+        }
+        let status = child.wait().await?;
+        anyhow::ensure!(status.success(), "RHVoice-test exited with {status}");
+        return Ok(());
+    }
+    if parsed_voice.engine == "festival" {
+        let text2wave = find_on_path("text2wave").ok_or_else(|| {
+            anyhow::anyhow!("Festival voice selected, but `text2wave` was not found on PATH")
+        })?;
+        // `text2wave` takes source text from a file. Keeping it beside the
+        // final WAV avoids shell interpolation, and cleanup prevents one
+        // stray file per Discord announcement.
+        let input = output.with_extension("txt");
+        tokio::fs::write(&input, text).await?;
+        let result = tokio::process::Command::new(text2wave)
+            .arg("-o")
+            .arg(output)
+            .arg("-eval")
+            .arg(format!("({})", parsed_voice.voice))
+            .arg(&input)
+            .status()
+            .await;
+        let _ = tokio::fs::remove_file(&input).await;
+        let status = result?;
+        anyhow::ensure!(status.success(), "text2wave exited with {status}");
+        return Ok(());
+    }
     // One renderer, shared with the desktop path. These two had drifted:
     // this one was eSpeak-only and simply stripped the engine prefix off
     // the voice id, so a Flite voice became `espeak -v slt`, which fails

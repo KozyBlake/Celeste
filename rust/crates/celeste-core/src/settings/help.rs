@@ -46,6 +46,7 @@ pub fn describe(id: &str) -> Option<&'static str> {
         "tts_flag_suspicious_pronouns" => "Reads the pronoun itself aloud as part of the warning, rather than only saying one was flagged.",
         "tts_volume_percent" => "How loud spoken callouts and the alert chime play through this computer, as a percentage of the engine's own level. Takes effect on the next announcement. Does not affect Discord voice, where the level belongs to the channel rather than to this machine.",
         "tts_voice_name" => "Which installed system voice to speak with. Leave empty for the default.",
+        "tts_hidden_voices" => "Hides whole speech engines or individual installed voices from Celeste's desktop voice pickers. It does not uninstall a voice or stop a currently selected voice from speaking.",
         "tts_use_default_audio_device" => "Speaks through this computer's audio output. Turn off to speak into the configured Discord voice channel instead.",
 
         // ── Desktop notifications ────────────────────────────────────────

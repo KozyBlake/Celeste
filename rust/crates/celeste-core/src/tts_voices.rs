@@ -75,6 +75,28 @@ pub fn installed() -> Vec<String> {
     VOICES.get_or_init(detect).clone()
 }
 
+/// Whether a voice should be omitted from a picker according to the user's
+/// saved visibility rules.
+///
+/// A rule can name one voice exactly (`rhvoice/alan`) or every voice from one
+/// engine (`espeak-ng/*`). This deliberately affects only presentation: a
+/// hidden voice remains installed and a voice that is already selected keeps
+/// working.
+pub fn voice_is_hidden(id: &str, rules: &[String]) -> bool {
+    let id = id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    let engine = VoiceId::parse(id).engine;
+    rules.iter().any(|rule| {
+        let rule = rule.trim();
+        rule == id
+            || rule
+                .strip_suffix("/*")
+                .is_some_and(|rule_engine| !rule_engine.is_empty() && rule_engine == engine)
+    })
+}
+
 #[cfg(target_os = "linux")]
 fn detect() -> Vec<String> {
     let mut voices = Vec::new();
@@ -83,6 +105,8 @@ fn detect() -> Vec<String> {
     // Java would have picked.
     push_flite(&mut voices, "flite");
     push_pico(&mut voices);
+    push_festival(&mut voices);
+    push_rhvoice(&mut voices);
     push_espeak(&mut voices, "espeak-ng");
     push_espeak(&mut voices, "espeak");
     voices
@@ -146,6 +170,70 @@ fn push_pico(out: &mut Vec<String>) {
         .map(|name| name.to_string())
         .collect();
     add(out, "pico2wave", &names);
+}
+
+/// Festival prints the procedure names returned by `(voice.list)`. Those
+/// names (such as `voice_kal_diphone`) are also what `text2wave -eval`
+/// accepts when rendering a WAV. Require both programs so every discovered
+/// voice works for local and Discord TTS.
+#[cfg(target_os = "linux")]
+fn push_festival(out: &mut Vec<String>) {
+    if find_executable("text2wave").is_none() {
+        return;
+    }
+    let Some(text) = run("festival", &["-b", "(voice.list)"]) else {
+        return;
+    };
+    let mut names: Vec<String> = text
+        .split_whitespace()
+        .map(|token| token.trim_matches(|c: char| matches!(c, '(' | ')')))
+        .filter(|token| token.starts_with("voice_") && is_simple_voice_token(token))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    add(out, "festival", &names);
+}
+
+/// RHVoice-test accepts a profile name and can write a WAV, but has no
+/// portable voice-list option. Its installed voices are directories in the
+/// engine's shared-data folder, so inspect the locations used by packaged,
+/// locally-built, and Snap installations.
+#[cfg(target_os = "linux")]
+fn push_rhvoice(out: &mut Vec<String>) {
+    if find_rhvoice().is_none() {
+        return;
+    }
+    let roots = [
+        "/usr/share/RHVoice/voices",
+        "/usr/local/share/RHVoice/voices",
+        "/snap/rhvoice/current/usr/share/RHVoice/voices",
+    ];
+    let mut names: Vec<String> = roots
+        .iter()
+        .filter_map(|root| std::fs::read_dir(root).ok())
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter_map(|entry| entry.file_type().ok().filter(|kind| kind.is_dir()).map(|_| entry))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| is_simple_voice_token(name))
+        .collect();
+    names.sort();
+    names.dedup();
+    add(out, "rhvoice", &names);
+}
+
+/// Executable names differ between upstream builds, distribution packages,
+/// and the official Snap wrapper.
+#[cfg(target_os = "linux")]
+pub fn find_rhvoice() -> Option<std::path::PathBuf> {
+    ["RHVoice-test", "rhvoice-test", "rhvoice.test"]
+        .iter()
+        .find_map(|command| find_executable(command))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn find_rhvoice() -> Option<std::path::PathBuf> {
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -345,6 +433,17 @@ mod tests {
         assert_eq!(resolve_legacy("", &installed), None);
     }
 
+    #[test]
+    fn hidden_voice_rules_support_individual_voices_and_whole_engines() {
+        let rules = vec!["rhvoice/alan".to_string(), "espeak-ng/*".to_string()];
+
+        assert!(voice_is_hidden("rhvoice/alan", &rules));
+        assert!(!voice_is_hidden("rhvoice/bdl", &rules));
+        assert!(voice_is_hidden("espeak-ng/en-us", &rules));
+        assert!(!voice_is_hidden("espeak/en-us", &rules));
+        assert!(!voice_is_hidden("", &rules));
+    }
+
     /// The bug: the old enumerator returned on the first engine that
     /// answered, so only one synthesizer's voices were ever offered.
     #[test]
@@ -353,10 +452,12 @@ mod tests {
         add(&mut out, "flite", &["slt".to_string(), "kal".to_string()]);
         add(&mut out, "espeak-ng", &["en-us".to_string()]);
         add(&mut out, "pico2wave", &["en-US".to_string()]);
-        assert_eq!(out.len(), 4);
+        add(&mut out, "festival", &["voice_kal_diphone".to_string()]);
+        assert_eq!(out.len(), 5);
         assert!(out.contains(&"flite/slt".to_string()));
         assert!(out.contains(&"espeak-ng/en-us".to_string()));
         assert!(out.contains(&"pico2wave/en-US".to_string()));
+        assert!(out.contains(&"festival/voice_kal_diphone".to_string()));
     }
 
     /// Two engines may each offer a voice called the same thing; keying on
@@ -439,6 +540,9 @@ pub fn render_command(
             args.extend([arg("-w"), out, arg(text)]);
             (program, args)
         }
+        // Festival takes source text from a file. Its renderer is assembled
+        // by the Discord path, which owns and cleans up that temporary file.
+        "festival" => return None,
         "say" => {
             let program = find_executable("say")?;
             let mut args = vec![arg("--data-format=LEI16@22050"), arg("-o"), out];

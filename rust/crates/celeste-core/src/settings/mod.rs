@@ -175,6 +175,10 @@ pub struct Settings {
 
     // --- ScarletEventListener.java: Notifications (TTS + advisory) ---
     pub tts_voice_name: Arc<FileValued<String>>,
+    /// Voices hidden from the desktop voice pickers. Entries are either an
+    /// exact `engine/voice` id or an `engine/*` rule for a whole engine.
+    /// They do not disable a voice that has already been selected.
+    pub tts_hidden_voices: Arc<FileValued<Vec<String>>>,
     pub tts_volume_percent: Arc<FileValued<i32>>,
     pub tts_use_default_audio_device: Arc<FileValued<bool>>,
     pub announce_watched_users: Arc<FileValued<bool>>,
@@ -674,6 +678,14 @@ impl Settings {
                 SettingCategory::Notifications,
                 "",
                 installed_tts_voices,
+            ),
+            tts_hidden_voices: registry.string_array_pattern(
+                "tts_hidden_voices",
+                "TTS: Hide voices from picker",
+                SettingCategory::Notifications,
+                Vec::new(),
+                None,
+                false,
             ),
             tts_volume_percent: registry.int_range(
                 "tts_volume_percent",

@@ -349,12 +349,22 @@ impl SettingsRegistry {
         let valid_values = Arc::new(valid_values);
         let vv = valid_values.clone();
         let default_owned = default.to_string();
+        let default_for_validation = default_owned.clone();
         let fv = FileValued::new(
             self,
             id,
             name,
             category,
-            move |v| if vv().contains(&v) { Some(v) } else { None },
+            // A default can be a sentinel rather than one of the runtime
+            // choices. TTS uses an empty string for "System default"; it
+            // must remain selectable even though no engine reports it.
+            move |v| {
+                if v == default_for_validation || vv().contains(&v) {
+                    Some(v)
+                } else {
+                    None
+                }
+            },
             move || default_owned.clone(),
             SettingKind::StringChoice { valid_values: valid_values as Arc<dyn Fn() -> Vec<String> + Send + Sync> },
         );
@@ -535,6 +545,21 @@ mod tests {
         assert!(!setting.set(Some("klingon".to_string()), "test"));
         // invalid set leaves the previous cached value in place
         assert_eq!(setting.get(), "glow");
+    }
+
+    #[test]
+    fn string_choice_accepts_a_default_that_is_not_a_runtime_choice() {
+        let (_dir, reg) = registry();
+        let setting = reg.string_choice(
+            "tts_voice_name",
+            "TTS voice",
+            SettingCategory::Notifications,
+            "",
+            || vec!["rhvoice/alan".to_string()],
+        );
+        assert!(setting.set(Some("rhvoice/alan".to_string()), "test"));
+        assert!(setting.set(Some(String::new()), "test"));
+        assert_eq!(setting.get(), "");
     }
 
     #[test]

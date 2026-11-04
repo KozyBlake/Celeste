@@ -1903,6 +1903,9 @@ pub struct CelesteApp {
     /// tour speech is opt-in, always local, and never sent to Discord.
     tutorial_narration: bool,
     tutorial_voice: String,
+    /// Filter text for the tour's voice picker. It is intentionally not a
+    /// setting: each popup starts useful instead of reviving an old search.
+    tutorial_voice_search: String,
     tutorial_narrated_step: Option<usize>,
     tutorial_scenario_phase: Option<(usize, TutorialScenarioPhase)>,
     /// The live roster example normally collapses the guide so it cannot
@@ -1992,6 +1995,10 @@ pub struct CelesteApp {
     /// The "Import Groups (URL)" prompt — Java asks for the URL with a
     /// modal input box; this is the same question as an egui window.
     settings_search: String,
+    /// Filters the desktop TTS picker without affecting the saved voice.
+    tts_voice_search: String,
+    /// Filters the visibility manager's per-engine/per-voice checklist.
+    tts_hidden_voice_search: String,
     /// The player whose avatar stats are being shown (port of
     /// `ScarletUI.infoStats`), and the pending Ban confirmation (port of the
     /// row's Ban action, which Java also confirms before acting).
@@ -2212,6 +2219,7 @@ impl CelesteApp {
             tutorial_demo: None,
             tutorial_narration: false,
             tutorial_voice,
+            tutorial_voice_search: String::new(),
             tutorial_narrated_step: None,
             tutorial_scenario_phase: None,
             tutorial_revealed_example_guide: None,
@@ -2253,6 +2261,8 @@ impl CelesteApp {
             last_window_bounds,
             settings_category: SettingCategory::General,
             settings_search: String::new(),
+            tts_voice_search: String::new(),
+            tts_hidden_voice_search: String::new(),
             avatar_stats_open: None,
             watched_groups_open: None,
             watch_list_open: None,
@@ -7181,8 +7191,12 @@ impl CelesteApp {
         let mut replay_step = false;
         let mut hide_example_guide = false;
         let tts_available = self.tts.engine_name().is_some();
-        let mut voices = celeste_core::tts_voices::installed();
-        voices.insert(0, String::new());
+        let voices = celeste_core::tts_voices::installed();
+        let hidden_tts_voices = self
+            .settings
+            .as_ref()
+            .map(|settings| settings.tts_hidden_voices.get())
+            .unwrap_or_default();
         let (discord_configured, vrchat_configured, setup_label) = self.integration_setup_status();
         let chapter = step.chapter;
         let ends_essentials = self.tutorial_ends_essentials(index);
@@ -7298,18 +7312,16 @@ impl CelesteApp {
                     ui.checkbox(&mut narration_enabled, "Read each tour step aloud");
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Voice:");
-                        egui::ComboBox::from_id_salt("guided-tour-voice")
-                            .selected_text(Self::tutorial_voice_label(&selected_voice))
-                            .width(190.0)
-                            .show_ui(ui, |ui| {
-                                for voice in &voices {
-                                    ui.selectable_value(
-                                        &mut selected_voice,
-                                        voice.clone(),
-                                        Self::tutorial_voice_label(voice),
-                                    );
-                                }
-                            });
+                        Self::render_tts_voice_picker(
+                            ui,
+                            egui::Id::new("guided-tour-voice"),
+                            &mut selected_voice,
+                            &voices,
+                            &hidden_tts_voices,
+                            &mut self.tutorial_voice_search,
+                            190.0,
+                            Self::tutorial_voice_label,
+                        );
                         test_voice = ui.button("Test voice").clicked();
                         replay_step = ui
                             .add_enabled(narration_enabled, egui::Button::new("Replay step"))
@@ -8627,6 +8639,26 @@ impl CelesteApp {
             SettingKind::StringChoice { valid_values } => {
                 let mut current = descriptor.get_as_string();
                 let values = valid_values();
+                if descriptor.id() == "tts_voice_name" {
+                    let hidden = self
+                        .settings
+                        .as_ref()
+                        .map(|settings| settings.tts_hidden_voices.get())
+                        .unwrap_or_default();
+                    if Self::render_tts_voice_picker(
+                        ui,
+                        egui::Id::new(descriptor.id()),
+                        &mut current,
+                        &values,
+                        &hidden,
+                        &mut self.tts_voice_search,
+                        CONTROL_WIDTH - 24.0,
+                        |voice| voice.to_string(),
+                    ) {
+                        descriptor.set_from_string(&current, "ui");
+                    }
+                    return;
+                }
                 let selected = if current.is_empty() {
                     "System default".to_string()
                 } else {
@@ -8636,31 +8668,31 @@ impl CelesteApp {
                     .selected_text(selected)
                     .width(CONTROL_WIDTH - 24.0)
                     .show_ui(ui, |ui| {
-                        // Short-circuits, so the row is not drawn at all for
-                        // the renderer setting, which has no "system default".
-                        if descriptor.id() != "graphics_renderer"
-                            && ui
-                                .selectable_value(&mut current, String::new(), "System default")
-                                .changed()
+                    // Short-circuits, so the row is not drawn at all for
+                    // the renderer setting, which has no "system default".
+                    if descriptor.id() != "graphics_renderer"
+                        && ui
+                            .selectable_value(&mut current, String::new(), "System default")
+                            .changed()
+                    {
+                        descriptor.set_from_string("", "ui");
+                    }
+                    if values.is_empty() {
+                        ui.weak("(nothing installed)");
+                    }
+                    for value in values {
+                        if ui
+                            .selectable_value(
+                                &mut current,
+                                value.clone(),
+                                string_choice_label(descriptor.id(), &value),
+                            )
+                            .changed()
                         {
-                            descriptor.set_from_string("", "ui");
+                            descriptor.set_from_string(&value, "ui");
                         }
-                        if values.is_empty() {
-                            ui.weak("(nothing installed)");
-                        }
-                        for value in values {
-                            if ui
-                                .selectable_value(
-                                    &mut current,
-                                    value.clone(),
-                                    string_choice_label(descriptor.id(), &value),
-                                )
-                                .changed()
-                            {
-                                descriptor.set_from_string(&value, "ui");
-                            }
-                        }
-                    });
+                    }
+                });
             }
             SettingKind::Void { task } => {
                 if ui.button("Run").clicked() {
@@ -8673,6 +8705,10 @@ impl CelesteApp {
             // field too narrow to read, and a multi-entry list could not be
             // edited in the window.
             SettingKind::StringArrayPattern { .. } => {
+                if descriptor.id() == "tts_hidden_voices" {
+                    self.render_tts_hidden_voices_control(ui, descriptor);
+                    return;
+                }
                 let current: Vec<String> = descriptor
                     .get_as_string()
                     .lines()
@@ -8785,6 +8821,246 @@ impl CelesteApp {
                     }
                 }
             }
+        }
+    }
+
+    /// A searchable picker shared by Settings and guided-tour narration.
+    ///
+    /// Voice discovery can return hundreds of eSpeak entries. A normal
+    /// ComboBox only reveals a few tall rows at a time, which makes a voice
+    /// from a later engine look as if it was never detected. The search and
+    /// visibility filter live here so both entry points behave identically.
+    fn render_tts_voice_picker(
+        ui: &mut egui::Ui,
+        id: egui::Id,
+        current: &mut String,
+        voices: &[String],
+        hidden: &[String],
+        search: &mut String,
+        width: f32,
+        label: impl Fn(&str) -> String,
+    ) -> bool {
+        let current_value = current.clone();
+        let current_is_hidden = celeste_core::tts_voices::voice_is_hidden(&current_value, hidden);
+        let selected_text = if current_value.is_empty() {
+            "System default".to_string()
+        } else {
+            let label = label(&current_value);
+            if current_is_hidden {
+                format!("{label} (hidden from picker)")
+            } else {
+                label
+            }
+        };
+        let search_id = id.with("search");
+        let mut chosen: Option<String> = None;
+
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(selected_text)
+            .width(width)
+            // The popup contains a text field and, in Settings, can be
+            // opened immediately before the visibility manager. The default
+            // CloseOnClick would close it before either control could work.
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .height(420.0)
+            .show_ui(ui, |ui| {
+                ui.set_min_width(width);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(search)
+                            .id(search_id)
+                            .desired_width((width - 58.0).max(140.0))
+                            .hint_text("Search voices…"),
+                    );
+                    if !search.is_empty() && ui.small_button("Clear").clicked() {
+                        search.clear();
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
+                    }
+                });
+                ui.add_space(3.0);
+                ui.separator();
+
+                if ui
+                    .selectable_label(current_value.is_empty(), "System default")
+                    .clicked()
+                {
+                    chosen = Some(String::new());
+                }
+
+                if current_is_hidden {
+                    ui.label(
+                        egui::RichText::new(
+                            "The selected voice is hidden from this picker; manage visible voices below.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+
+                let query = search.trim().to_string();
+                let mut matches = 0usize;
+                for voice in voices {
+                    if celeste_core::tts_voices::voice_is_hidden(voice, hidden)
+                        || !voice_matches_query(voice, &query)
+                    {
+                        continue;
+                    }
+                    matches += 1;
+                    if ui
+                        .selectable_label(current_value == *voice, label(voice))
+                        .clicked()
+                    {
+                        chosen = Some(voice.clone());
+                    }
+                }
+                if voices.is_empty() {
+                    ui.weak("(nothing installed)");
+                } else if matches == 0 {
+                    ui.weak("No visible voices match this search.");
+                }
+            });
+
+        let Some(chosen) = chosen else {
+            return false;
+        };
+        let changed = *current != chosen;
+        *current = chosen;
+        // A search is a one-pick action. Clearing it makes the next opening
+        // start from the full, curated list instead of a stale narrow slice.
+        search.clear();
+        ui.memory_mut(|memory| memory.close_popup());
+        changed
+    }
+
+    /// Edits `tts_hidden_voices` as a friendly visibility manager rather
+    /// than making someone type implementation-shaped `engine/*` rules.
+    fn render_tts_hidden_voices_control(
+        &mut self,
+        ui: &mut egui::Ui,
+        descriptor: &std::sync::Arc<dyn SettingDescriptor>,
+    ) {
+        let voices = celeste_core::tts_voices::installed();
+        let mut rules = normalized_voice_visibility_rules(&descriptor.get_as_string());
+        let hidden_count = voices
+            .iter()
+            .filter(|voice| celeste_core::tts_voices::voice_is_hidden(voice, &rules))
+            .count();
+        let summary = if voices.is_empty() {
+            "No voices installed".to_string()
+        } else {
+            format!(
+                "{} shown · {hidden_count} hidden",
+                voices.len().saturating_sub(hidden_count)
+            )
+        };
+        let groups = grouped_tts_voices(&voices);
+        let mut rules_changed = false;
+
+        egui::ComboBox::from_id_salt(descriptor.id())
+            .selected_text(summary)
+            .width(CONTROL_WIDTH - 24.0)
+            .height(460.0)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show_ui(ui, |ui| {
+                ui.set_min_width(390.0);
+                ui.label("Hide entries from Celeste's voice pickers. This does not uninstall or disable speech.");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.tts_hidden_voice_search)
+                            .id(egui::Id::new("tts-hidden-voice-search"))
+                            .desired_width(260.0)
+                            .hint_text("Find an engine or voice…"),
+                    );
+                    if !self.tts_hidden_voice_search.is_empty()
+                        && ui.small_button("Clear").clicked()
+                    {
+                        self.tts_hidden_voice_search.clear();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if !rules.is_empty() && ui.small_button("Show every voice").clicked() {
+                        rules.clear();
+                        rules_changed = true;
+                    }
+                    ui.weak("Whole-engine choices keep the long eSpeak lists out of both pickers.");
+                });
+                ui.add_space(3.0);
+                ui.separator();
+
+                let query = self.tts_hidden_voice_search.trim().to_string();
+                let mut any_group = false;
+                for (engine, engine_voices) in &groups {
+                    let engine_matches = voice_matches_query(engine, &query);
+                    let matching_voices: Vec<&String> = engine_voices
+                        .iter()
+                        .filter(|voice| voice_matches_query(voice, &query))
+                        .collect();
+                    if !query.is_empty() && !engine_matches && matching_voices.is_empty() {
+                        continue;
+                    }
+                    any_group = true;
+                    let shown_voices: Vec<&String> = if engine_matches {
+                        engine_voices.iter().collect()
+                    } else {
+                        matching_voices
+                    };
+                    let engine_rule = format!("{engine}/*");
+                    let group_label = format!(
+                        "{} ({} voice{})",
+                        tts_engine_label(engine),
+                        engine_voices.len(),
+                        if engine_voices.len() == 1 { "" } else { "s" }
+                    );
+                    egui::CollapsingHeader::new(group_label)
+                        .id_salt(("tts-hidden-voice-engine", engine))
+                        .open((!query.is_empty()).then_some(true))
+                        .show(ui, |ui| {
+                            let mut hide_engine = has_voice_visibility_rule(&rules, &engine_rule);
+                            if ui
+                                .checkbox(
+                                    &mut hide_engine,
+                                    format!("Hide all {} voices", tts_engine_label(engine)),
+                                )
+                                .changed()
+                            {
+                                if hide_engine {
+                                    if !has_voice_visibility_rule(&rules, &engine_rule) {
+                                        rules.push(engine_rule.clone());
+                                    }
+                                } else {
+                                    rules.retain(|rule| rule.trim() != engine_rule);
+                                }
+                                rules_changed = true;
+                            }
+                            if hide_engine {
+                                ui.weak(
+                                    "All voices from this engine are hidden. Show the engine to manage individual voices.",
+                                );
+                            } else {
+                                for voice in shown_voices {
+                                    let mut hide_voice = has_voice_visibility_rule(&rules, voice);
+                                    if ui.checkbox(&mut hide_voice, voice).changed() {
+                                        if hide_voice {
+                                            if !has_voice_visibility_rule(&rules, voice) {
+                                                rules.push(voice.clone());
+                                            }
+                                        } else {
+                                            rules.retain(|rule| rule.trim() != voice);
+                                        }
+                                        rules_changed = true;
+                                    }
+                                }
+                            }
+                        });
+                }
+                if !any_group {
+                    ui.weak("No installed voices match this search.");
+                }
+            });
+
+        if rules_changed {
+            normalize_voice_visibility_rules(&mut rules);
+            descriptor.set_from_string(&rules.join("\n"), "ui");
         }
     }
 
@@ -9569,6 +9845,77 @@ fn string_choice_label<'a>(id: &str, value: &'a str) -> &'a str {
     }
 }
 
+/// A query can use either punctuation in an engine id (`espeak-ng`) or
+/// ordinary words (`eSpeak NG English`). Every word has to match, which is
+/// narrow enough for large catalogues without making people type the exact
+/// stored `engine/voice` spelling.
+fn voice_matches_query(voice: &str, query: &str) -> bool {
+    let voice = voice.to_lowercase();
+    query
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(str::to_lowercase)
+        .all(|part| voice.contains(&part))
+}
+
+fn normalized_voice_visibility_rules(value: &str) -> Vec<String> {
+    let mut rules: Vec<String> = value
+        .lines()
+        .map(str::trim)
+        .filter(|rule| !rule.is_empty())
+        .map(str::to_string)
+        .collect();
+    normalize_voice_visibility_rules(&mut rules);
+    rules
+}
+
+fn normalize_voice_visibility_rules(rules: &mut Vec<String>) {
+    for rule in rules.iter_mut() {
+        *rule = rule.trim().to_string();
+    }
+    rules.retain(|rule| !rule.is_empty());
+    rules.sort_unstable();
+    rules.dedup();
+}
+
+fn has_voice_visibility_rule(rules: &[String], wanted: &str) -> bool {
+    rules.iter().any(|rule| rule.trim() == wanted)
+}
+
+/// Groups voices in discovery order so the engine-level switches appear in
+/// the same useful order as the main picker (compact engines before eSpeak).
+fn grouped_tts_voices(voices: &[String]) -> Vec<(String, Vec<String>)> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for voice in voices {
+        let engine = voice
+            .split_once('/')
+            .map(|(engine, _)| engine)
+            .filter(|engine| !engine.is_empty())
+            .unwrap_or("other");
+        if let Some((_, entries)) = groups.iter_mut().find(|(known, _)| known == engine) {
+            entries.push(voice.clone());
+        } else {
+            groups.push((engine.to_string(), vec![voice.clone()]));
+        }
+    }
+    groups
+}
+
+fn tts_engine_label(engine: &str) -> &str {
+    match engine {
+        "espeak-ng" => "eSpeak NG",
+        "espeak" => "eSpeak",
+        "pico2wave" => "Pico",
+        "rhvoice" => "RHVoice",
+        "flite" => "Flite",
+        "festival" => "Festival",
+        "say" => "macOS Speech",
+        "sapi" => "Windows Speech",
+        "other" => "Other",
+        _ => engine,
+    }
+}
+
 const BUNDLED_WINDOW_ICON: &[u8] = include_bytes!("../../../assets/icons/celeste-256.png");
 
 fn base_system_font_paths() -> Vec<PathBuf> {
@@ -10109,6 +10456,40 @@ mod tests {
     #[test]
     fn the_two_search_fields_have_ids_of_their_own() {
         assert_ne!(player_search_id(), settings_search_id());
+    }
+
+    #[test]
+    fn tts_voice_search_matches_engine_and_voice_words() {
+        assert!(voice_matches_query("rhvoice/alan", "rhvoice"));
+        assert!(voice_matches_query("rhvoice/alan", "RHVoice Alan"));
+        assert!(voice_matches_query("espeak-ng/en-us", "espeak ng"));
+        assert!(!voice_matches_query("rhvoice/alan", "espeak"));
+        assert!(voice_matches_query("rhvoice/alan", "---"));
+    }
+
+    #[test]
+    fn tts_voice_groups_keep_discovery_order() {
+        let voices = vec![
+            "flite/slt".to_string(),
+            "rhvoice/alan".to_string(),
+            "rhvoice/bdl".to_string(),
+            "espeak-ng/en-us".to_string(),
+        ];
+        let groups = grouped_tts_voices(&voices);
+        assert_eq!(
+            groups,
+            vec![
+                ("flite".to_string(), vec!["flite/slt".to_string()]),
+                (
+                    "rhvoice".to_string(),
+                    vec!["rhvoice/alan".to_string(), "rhvoice/bdl".to_string()],
+                ),
+                (
+                    "espeak-ng".to_string(),
+                    vec!["espeak-ng/en-us".to_string()],
+                ),
+            ]
+        );
     }
 
     #[test]
