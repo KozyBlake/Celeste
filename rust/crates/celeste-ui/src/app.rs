@@ -1973,6 +1973,12 @@ pub struct CelesteApp {
     /// Active JTable-style header sort. `None` uses Java's default player
     /// order (present, advisory priority, join time).
     table_sort: Option<TableSort>,
+    /// The audit cursor last read from settings, and when this window first
+    /// saw that value. A successful poll always advances the cursor, so a
+    /// cursor that stops changing means polling has stopped working. The
+    /// cursor's own timestamp cannot tell you that: a legitimate catch-up
+    /// after downtime leaves it hours behind while advancing perfectly.
+    audit_cursor_seen: Option<(chrono::DateTime<chrono::Utc>, std::time::Instant)>,
     /// The Instance tab's roster filter: whatever is typed in the search
     /// box above the player table. Empty means every row is shown, which is
     /// why this is a filter applied at render time rather than anything
@@ -2256,6 +2262,7 @@ impl CelesteApp {
             column_order,
             column_widths,
             table_sort: None,
+            audit_cursor_seen: None,
             player_search: String::new(),
             player_search_instance: None,
             last_window_bounds,
@@ -5323,6 +5330,42 @@ impl CelesteApp {
         if let Some(id) = remove {
             if let Err(error) = self.managed_clients.remove(&id) {
                 self.managed_client_error = Some(error.to_string());
+            }
+        }
+    }
+
+    /// How long group audit polling has been stuck, when it is stuck.
+    ///
+    /// `None` while polling is working *and* while it is not expected to
+    /// run at all — no VRChat sign-in, or no group configured. A log-only
+    /// install is a supported way to run Celeste, and warning one that its
+    /// moderation posts have stalled would teach everybody to ignore this
+    /// indicator within a day.
+    fn audit_polling_stalled_for(&mut self) -> Option<std::time::Duration> {
+        let settings = self.settings.as_ref()?;
+        let group = settings
+            .store
+            .get_string(celeste_vrchat::client::GROUP_ID_KEY)
+            .unwrap_or_default();
+        if group.trim().is_empty() {
+            return None;
+        }
+        if !self.state.connection_status().contains("signed in as") {
+            return None;
+        }
+        let cursor = settings.last_audit_query.get_or_supply()?;
+        let interval = settings.audit_polling_interval.get().clamp(10, 300) as u64;
+        let now = std::time::Instant::now();
+        match self.audit_cursor_seen {
+            // Same cursor as last frame: measure how long it has sat there.
+            Some((seen, since)) if seen == cursor => {
+                let stuck = now.duration_since(since);
+                (stuck >= audit_stall_threshold(interval)).then_some(stuck)
+            }
+            // Moved (or first sight): polling is alive, restart the clock.
+            _ => {
+                self.audit_cursor_seen = Some((cursor, now));
+                None
             }
         }
     }
@@ -9610,6 +9653,8 @@ impl eframe::App for CelesteApp {
             });
 
         let status_state = self.tutorial_state();
+        // Computed out here: the panel's closure cannot borrow `self`.
+        let audit_stall = self.audit_polling_stalled_for();
         let status_bar = egui::TopBottomPanel::bottom("status_bar")
             .frame(
                 egui::Frame::NONE
@@ -9657,6 +9702,16 @@ impl eframe::App for CelesteApp {
                     // A dropped TTS announcement is otherwise silent in every
                     // sense: nothing plays and nothing is shown.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Celeste going quiet looks exactly like a quiet
+                        // night, so the one thing that distinguishes them
+                        // belongs on screen rather than in a log file.
+                        if let Some(stuck) = audit_stall {
+                            ui.colored_label(crate::theme::WARN, "Moderation posts stalled")
+                                .on_hover_text(format!(
+                                    "Celeste has not completed a group audit poll for {}, so moderation events are not reaching Discord.\n\n                                     Common causes: the VRChat session expired, the bot lost the group-audit-view permission, or VRChat changed its API.\n\n                                     Nothing is lost — the audit cursor has not advanced, so Celeste catches up from where it stopped once this clears.",
+                                    format_stall(stuck)
+                                ));
+                        }
                         if let Some(problem) = status_state.tts_status() {
                             ui.colored_label(crate::theme::WARN, "Voice warning")
                                 .on_hover_text(&problem);
@@ -10089,6 +10144,25 @@ fn load_window_icon(data_dir: &std::path::Path) -> Option<egui::IconData> {
     }
 }
 
+/// How long a motionless audit cursor is tolerated before it counts as a
+/// stall: three polling intervals, and never less than three minutes, so a
+/// short interval cannot make the indicator jumpy.
+fn audit_stall_threshold(interval_seconds: u64) -> std::time::Duration {
+    std::time::Duration::from_secs((interval_seconds.saturating_mul(3)).max(180))
+}
+
+/// A stall duration in the roundest words that are still true.
+fn format_stall(stuck: std::time::Duration) -> String {
+    let seconds = stuck.as_secs();
+    if seconds < 120 {
+        format!("{seconds} seconds")
+    } else if seconds < 7_200 {
+        format!("{} minutes", seconds / 60)
+    } else {
+        format!("{} hours", seconds / 3_600)
+    }
+}
+
 fn settings_search_id() -> egui::Id {
     egui::Id::new("settings-search")
 }
@@ -10449,6 +10523,25 @@ mod tests {
         let mut players = roster();
         assert!(filter_roster(&mut players, "nobody-by-that-name"));
         assert!(players.is_empty());
+    }
+
+    /// A short polling interval must not make the indicator jumpy: the
+    /// floor is three minutes however often Celeste polls.
+    #[test]
+    fn the_stall_threshold_is_three_intervals_with_a_floor() {
+        use std::time::Duration;
+        assert_eq!(audit_stall_threshold(10), Duration::from_secs(180));
+        assert_eq!(audit_stall_threshold(60), Duration::from_secs(180));
+        assert_eq!(audit_stall_threshold(120), Duration::from_secs(360));
+        assert_eq!(audit_stall_threshold(300), Duration::from_secs(900));
+    }
+
+    #[test]
+    fn a_stall_is_described_in_round_units() {
+        use std::time::Duration;
+        assert_eq!(format_stall(Duration::from_secs(45)), "45 seconds");
+        assert_eq!(format_stall(Duration::from_secs(600)), "10 minutes");
+        assert_eq!(format_stall(Duration::from_secs(10_800)), "3 hours");
     }
 
     /// The search field and the settings field must not share an id, or
