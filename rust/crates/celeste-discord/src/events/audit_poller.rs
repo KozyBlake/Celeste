@@ -46,6 +46,11 @@ pub struct AuditPoller {
     secret_staff: Arc<StaffList>,
     moderation_tags: Arc<ModerationTags>,
     watched_users: Arc<WatchedEntities>,
+    /// Reports a sustained polling outage to the configured ops channel.
+    /// Without this a broken poll is a line in a log file nobody reads,
+    /// and the window carries on looking healthy while no moderation
+    /// reaches Discord — which is indistinguishable from a quiet night.
+    health: Arc<crate::health::OpsHealthReporter>,
 }
 
 impl AuditPoller {
@@ -62,6 +67,7 @@ impl AuditPoller {
             secret_staff: shared.secret_staff_list.clone(),
             moderation_tags: shared.moderation_tags.clone(),
             watched_users: shared.watched_users.clone(),
+            health: shared.health_reporter.clone(),
         }
     }
 
@@ -603,10 +609,54 @@ pub(crate) fn moderation_aux_content(
     content.trim_start().to_string()
 }
 
+/// Consecutive failed polls before Celeste calls it an outage rather than a
+/// hiccup. One failure is usually a transient network blip and alerting on
+/// it turns the ops channel into a retry log; three in a row is, at the
+/// default interval, three minutes in which no moderation reached Discord.
+const FAILURES_BEFORE_ALERT: u32 = 3;
+
+/// Whether this many consecutive failures is an outage worth telling an
+/// operator about, rather than a blip to ride out.
+fn is_outage(consecutive_failures: u32) -> bool {
+    consecutive_failures >= FAILURES_BEFORE_ALERT
+}
+
 pub async fn run(poller: AuditPoller) {
+    let mut consecutive_failures: u32 = 0;
     loop {
-        if let Err(err) = poller.poll_once().await {
-            tracing::warn!("VRChat audit poll failed; the cursor was not advanced: {err}");
+        match poller.poll_once().await {
+            Ok(()) => {
+                consecutive_failures = 0;
+                // Deliberately silent when no incident is open, so a
+                // healthy poll posts nothing.
+                poller
+                    .health
+                    .recovered(
+                        "VRChat audit polling",
+                        "The group audit log is readable again; moderation events are reaching Discord.",
+                    )
+                    .await;
+            }
+            Err(err) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                tracing::warn!("VRChat audit poll failed; the cursor was not advanced: {err}");
+                if is_outage(consecutive_failures) {
+                    // The reporter itself de-duplicates, so this fires once
+                    // per outage however long it runs.
+                    poller
+                        .health
+                        .incident(
+                            "VRChat audit polling",
+                            format!(
+                                "Celeste has failed to read the group audit log {consecutive_failures} times in a row, \
+                                 so moderation events are not reaching Discord. Common causes are an expired VRChat \
+                                 session, the bot losing group-audit-view, or a VRChat API change. The cursor has not \
+                                 advanced, so nothing is lost once this clears. Last error: {err}"
+                            ),
+                        )
+                        .await;
+                }
+            }
         }
         poller.process_timed_bans().await;
         let seconds = poller.settings.audit_polling_interval.get().clamp(10, 300) as u64;
@@ -1153,5 +1203,23 @@ mod tests {
         for (event_type, title) in expected {
             assert_eq!(event_title(event_type), title, "wrong title for {event_type}");
         }
+    }
+
+    /// One failed poll is a blip. Alerting on it would turn the ops channel
+    /// into a retry log, which is the thing the health reporter exists to
+    /// avoid.
+    #[test]
+    fn a_single_failed_poll_is_not_an_outage() {
+        assert!(!is_outage(0));
+        assert!(!is_outage(1));
+        assert!(!is_outage(2));
+    }
+
+    /// Three in a row is, at the default 60-second interval, three minutes
+    /// in which no moderation reached Discord.
+    #[test]
+    fn a_sustained_run_of_failures_is_an_outage() {
+        assert!(is_outage(FAILURES_BEFORE_ALERT));
+        assert!(is_outage(FAILURES_BEFORE_ALERT + 10));
     }
 }
