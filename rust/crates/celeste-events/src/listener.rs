@@ -2589,6 +2589,171 @@ mod tests {
         );
     }
 
+    /// One manual, offline scenario: a mass of player joins followed by a
+    /// local kick line. It times the path to the request that wakes the
+    /// audit poller, using the real listener and rate limiter against a
+    /// local Wiremock server. It cannot touch a VRChat account or become
+    /// release behaviour.
+    ///
+    /// Run only when investigating a delay:
+    ///
+    /// ```text
+    /// cargo test -p celeste-events join_backlog_doorbell_probe -- --ignored --nocapture --test-threads=1
+    /// ```
+    ///
+    /// `CELESTE_MASS_JOIN_PROBE_JOINS` selects 1--100 joins (40 by default).
+    /// `CELESTE_MASS_JOIN_PROBE_RESPONSE_MS` adds 0--250ms to every mocked
+    /// profile and group response (0 by default). Comparing a zero-delay run
+    /// with a delayed run explores Celeste's serial work and its configured
+    /// *client-side* limiter against ordinary response latency. The mock
+    /// accepts every request: this cannot measure VRChat's audit-entry
+    /// availability, a real account's rate limit, or Discord delivery. It
+    /// also deliberately excludes audit enrichment, asset events, and ban
+    /// workflows; those need separate scenarios rather than a made-up mix.
+    #[tokio::test]
+    #[ignore = "manual offline latency probe; run with --ignored --nocapture"]
+    async fn join_backlog_doorbell_probe() {
+        fn bounded_env_usize(
+            name: &str,
+            default: usize,
+            range: std::ops::RangeInclusive<usize>,
+        ) -> usize {
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| range.contains(value))
+                .unwrap_or(default)
+        }
+
+        let joins = bounded_env_usize("CELESTE_MASS_JOIN_PROBE_JOINS", 40, 1..=100);
+        let response_delay_ms =
+            bounded_env_usize("CELESTE_MASS_JOIN_PROBE_RESPONSE_MS", 0, 0..=250);
+        let response_delay = std::time::Duration::from_millis(response_delay_ms as u64);
+        let server = MockServer::start().await;
+        let users: Vec<(String, String)> = (0..joins)
+            .map(|index| (format!("usr_probe_{index:04}"), format!("Probe {index:02}")))
+            .collect();
+
+        // The listener fetches exactly these two shapes for each ordinary
+        // live join. Individual mocks keep the request count honest: a new
+        // lookup, retry, or unexpected endpoint makes the probe fail loudly.
+        for (user_id, display_name) in &users {
+            Mock::given(method("GET"))
+                .and(path(format!("/users/{user_id}")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(response_delay)
+                        .set_body_json(serde_json::json!({
+                            "id": user_id,
+                            "displayName": display_name,
+                            "tags": ["system_trust_basic"],
+                            "date_joined": "2020-01-01"
+                        })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/users/{user_id}/groups")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(response_delay)
+                        .set_body_json(serde_json::json!([])),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let h = harness(true);
+        *h.listener.deps.vrchat.write().await = Some(Arc::new(
+            VrChatClient::with_base_url(&server.uri()).expect("local probe client"),
+        ));
+        let emitter = h.emitter.clone();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let worker = tokio::spawn(run(h.listener, receiver));
+
+        let batch_queued_at = std::time::Instant::now();
+        sender
+            .send(entry(false, 1, joined(GROUP_LOCATION)))
+            .expect("listener is running");
+        for (index, (user_id, display_name)) in users.iter().enumerate() {
+            sender
+                .send(entry(
+                    false,
+                    index as i64 + 2,
+                    player_joined(display_name, user_id),
+                ))
+                .expect("listener is running");
+        }
+        let kick_queued_at = std::time::Instant::now();
+        sender
+            .send(entry(
+                false,
+                joins as i64 + 2,
+                LogEventKind::PlayerKicked {
+                    display_name: users.last().expect("at least one probe user").1.clone(),
+                },
+            ))
+            .expect("listener is running");
+        drop(sender);
+
+        // `RecordingEmitter` is intentionally the same lightweight emitter
+        // as the normal listener tests. Polling it at 1ms resolution keeps
+        // this probe confined to test code while timing the real doorbell.
+        let kick_to_doorbell = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+            loop {
+                if emitter
+                    .events()
+                    .iter()
+                    .any(|event| event == "audit-refresh-requested")
+                {
+                    break kick_queued_at.elapsed();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the queued kick should reach the audit-poll doorbell");
+        worker.await.expect("listener task should finish cleanly");
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("Wiremock request recording is enabled");
+        let expected_requests = joins * 2;
+        assert_eq!(
+            requests.len(),
+            expected_requests,
+            "each live join should issue exactly one profile and one group lookup"
+        );
+
+        println!(
+            "\nOffline join-backlog doorbell probe (one scenario)\n\
+             \x20 joins queued before kick: {joins}\n\
+             \x20 local API delay per response: {response_delay_ms}ms\n\
+             \x20 Celeste client limiter exercised: {} permits/s, burst {}\n\
+             \x20 profile/group requests observed: {}/{}\n\
+             \x20 queueing the batch took: {:?}\n\
+             \x20 kick queued → audit-poll doorbell: {:?}\n\
+             \x20 entire listener drain: {:?}\n\n\
+             This exercises Celeste's local policy only; the fake server has no\n\
+             rate limit, so these values are not a claim about VRChat. It does\n\
+             not query VRChat's audit log, establish when an audit entry becomes\n\
+             visible, or post to Discord, and it excludes asset and ban workflows.\n\
+             Re-run with\n\
+             CELESTE_MASS_JOIN_PROBE_RESPONSE_MS=100 to compare response time\n\
+             with the zero-delay baseline.",
+            celeste_vrchat::rate_limit::PERMITS_PER_SECOND,
+            celeste_vrchat::rate_limit::BURST,
+            requests.len(),
+            expected_requests,
+            kick_queued_at.duration_since(batch_queued_at),
+            kick_to_doorbell,
+            batch_queued_at.elapsed(),
+        );
+    }
+
     /// Replaying an old log at startup must not wake the poller: those
     /// actions are long since in the audit log and already processed.
     #[tokio::test]
