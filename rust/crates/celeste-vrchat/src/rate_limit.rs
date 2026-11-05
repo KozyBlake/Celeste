@@ -84,9 +84,9 @@ impl VrcRateLimiter {
                 let now = now_ms();
                 let until = bucket.backoff_until_ms;
                 if until > now {
-                    Some(Duration::from_millis((until - now).min(
-                        MAX_SLEEP_CHUNK.as_millis() as i64,
-                    ) as u64))
+                    Some(Duration::from_millis(
+                        (until - now).min(MAX_SLEEP_CHUNK.as_millis() as i64) as u64,
+                    ))
                 } else {
                     let elapsed = (now - bucket.last_refill_ms) as f64;
                     if elapsed > 0.0 {
@@ -153,17 +153,22 @@ pub fn parse_retry_after(header: Option<&str>) -> Duration {
     let raw = header.map(str::trim).filter(|value| !value.is_empty());
     let parsed = raw.and_then(|value| {
         if let Ok(seconds) = value.parse::<i64>() {
-            return Some(Duration::from_millis((seconds * 1000).max(0) as u64));
+            return Some(Duration::from_millis(
+                seconds.saturating_mul(1000).max(0) as u64
+            ));
         }
         // An HTTP-date: how long until then.
-        chrono::DateTime::parse_from_rfc2822(value).ok().map(|when| {
-            let millis = when.timestamp_millis() - now_ms();
-            Duration::from_millis(millis.max(0) as u64)
-        })
+        chrono::DateTime::parse_from_rfc2822(value)
+            .ok()
+            .map(|when| {
+                let millis = when.timestamp_millis() - now_ms();
+                Duration::from_millis(millis.max(0) as u64)
+            })
     });
-    parsed.unwrap_or(DEFAULT_BACKOFF).clamp(MIN_BACKOFF, MAX_BACKOFF)
+    parsed
+        .unwrap_or(DEFAULT_BACKOFF)
+        .clamp(MIN_BACKOFF, MAX_BACKOFF)
 }
-
 
 /// Sends a request through a limiter.
 ///
@@ -183,15 +188,15 @@ pub trait SendLimited {
 }
 
 impl SendLimited for reqwest::RequestBuilder {
-    async fn send_limited(
-        self,
-        limiter: &VrcRateLimiter,
-    ) -> reqwest::Result<reqwest::Response> {
+    async fn send_limited(self, limiter: &VrcRateLimiter) -> reqwest::Result<reqwest::Response> {
         limiter.acquire().await;
         let response = self.send().await?;
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let backoff = parse_retry_after(
-                response.headers().get("retry-after").and_then(|value| value.to_str().ok()),
+                response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok()),
             );
             tracing::warn!(
                 "VRChat rate-limited this client (HTTP 429); backing every request off for {backoff:?}"
@@ -221,6 +226,7 @@ mod tests {
         assert_eq!(parse_retry_after(Some("0")), MIN_BACKOFF);
         assert_eq!(parse_retry_after(Some("99999")), MAX_BACKOFF);
         assert_eq!(parse_retry_after(Some("-5")), MIN_BACKOFF);
+        assert_eq!(parse_retry_after(Some(&i64::MAX.to_string())), MAX_BACKOFF);
     }
 
     #[tokio::test]

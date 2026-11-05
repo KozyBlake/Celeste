@@ -321,7 +321,7 @@ impl VrChatClient {
             .http
             .get(self.url("/auth/user"))
             .header("Authorization", basic_auth_header(username, password))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         self.parse_login_response(response).await
     }
@@ -419,7 +419,7 @@ impl VrChatClient {
             .http
             .post(self.url("/auth/twofactorauth/totp/verify"))
             .json(&serde_json::json!({ "code": code }))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_two_factor_response(response).await
     }
@@ -432,7 +432,7 @@ impl VrChatClient {
             .http
             .post(self.url("/auth/twofactorauth/emailotp/verify"))
             .json(&serde_json::json!({ "code": code }))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_two_factor_response(response).await
     }
@@ -494,7 +494,7 @@ impl VrChatClient {
             .http
             .get(self.url(&format!("/groups/{group_id}/auditLogs")))
             .query(&query)
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -544,7 +544,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/auditLogTypes")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -645,9 +645,9 @@ impl VrChatClient {
         let result = async {
             let response = self
                 .http
-                .get(self.url(&format!("/users/{user_id}/profile")))
+                .get(self.url(&format!("/profile/{user_id}")))
                 .query(&[("asSelf", "false"), ("withGroupsAndWorlds", "false")])
-                .send()
+                .send_limited(&self.limiter)
                 .await?;
             Self::parse_response(response).await
         }
@@ -844,7 +844,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/roles")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -861,7 +861,7 @@ impl VrChatClient {
             .http
             .get(self.url(&format!("/groups/{group_id}/bans")))
             .query(&[("n", n.to_string()), ("offset", offset.to_string())])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -881,7 +881,7 @@ impl VrChatClient {
             .http
             .get(self.url(&format!("/groups/{group_id}/invites")))
             .query(&[("n", n.to_string()), ("offset", offset.to_string())])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -900,7 +900,7 @@ impl VrChatClient {
                 "userId": user_id,
                 "confirmOverrideBlock": confirm_override_block
             }))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -927,7 +927,7 @@ impl VrChatClient {
                 ("offset", offset.to_string()),
                 ("blocked", blocked.to_string()),
             ])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -949,7 +949,7 @@ impl VrChatClient {
             .http
             .put(self.url(&format!("/groups/{group_id}/requests/{user_id}")))
             .json(&body)
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -1032,7 +1032,7 @@ impl VrChatClient {
             .http
             .put(self.url(&format!("/groups/{group_id}/members/{user_id}")))
             .json(&serde_json::json!({ "managerNotes": manager_notes }))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1057,7 +1057,7 @@ impl VrChatClient {
                 ("n", &n.to_string()),
                 ("offset", &offset.to_string()),
             ])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1072,7 +1072,7 @@ impl VrChatClient {
         let response = self
             .http
             .delete(self.url(&format!("/groups/{group_id}/members/{user_id}")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -1096,7 +1096,7 @@ impl VrChatClient {
             .put(self.url(&format!(
                 "/groups/{group_id}/members/{user_id}/roles/{role_id}"
             )))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1114,7 +1114,7 @@ impl VrChatClient {
             .delete(self.url(&format!(
                 "/groups/{group_id}/members/{user_id}/roles/{role_id}"
             )))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1130,7 +1130,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/announcement")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1154,7 +1154,7 @@ impl VrChatClient {
             .http
             .post(self.url(&format!("/groups/{group_id}/announcement")))
             .json(&body)
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1164,7 +1164,7 @@ impl VrChatClient {
         let response = self
             .http
             .delete(self.url(&format!("/groups/{group_id}/announcement")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -1175,7 +1175,7 @@ impl VrChatClient {
     }
 
     /// Port of `getGroupPosts(String groupId, boolean publicOnly, int
-    /// limit)`: `GET /groups/{groupId}/posts?number=...&offset=...&publicOnly=...`.
+    /// limit)`: `GET /groups/{groupId}/posts?n=...&offset=...&publicOnly=...`.
     /// The response wraps results as `{posts, total}` rather than a bare
     /// array (confirmed against
     /// `components/responses/groups/GroupPostsResponse.yaml`) -- unlike
@@ -1193,11 +1193,11 @@ impl VrChatClient {
             .http
             .get(self.url(&format!("/groups/{group_id}/posts")))
             .query(&[
-                ("number", n.to_string()),
+                ("n", n.to_string()),
                 ("offset", offset.to_string()),
                 ("publicOnly", public_only.to_string()),
             ])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let wrapper: crate::models::GroupPostsResponse = Self::parse_response(response).await?;
         Ok(wrapper.posts)
@@ -1226,7 +1226,7 @@ impl VrChatClient {
             .http
             .post(self.url(&format!("/groups/{group_id}/posts")))
             .json(&body)
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1240,7 +1240,7 @@ impl VrChatClient {
         let response = self
             .http
             .delete(self.url(&format!("/groups/{group_id}/posts/{post_id}")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -1263,7 +1263,7 @@ impl VrChatClient {
             .http
             .get(self.url(&format!("/groups/{group_id}/transfer")))
             .query(&[("transferTargetId", target_user_id)])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1282,7 +1282,7 @@ impl VrChatClient {
             .http
             .post(self.url(&format!("/groups/{group_id}/transfer")))
             .json(&serde_json::json!({ "transferTargetId": target_user_id }))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -1297,7 +1297,7 @@ impl VrChatClient {
         let response = self
             .http
             .delete(self.url(&format!("/groups/{group_id}/transfer")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let status = response.status();
         let body = response.text().await?;
@@ -1320,7 +1320,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/groups/{group_id}/instances")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1357,7 +1357,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/user/{user_id}/inventory/{inventory_item_id}")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1429,11 +1429,8 @@ impl VrChatClient {
     }
 
     /// Port of `VrchatSearch.world` / `WorldsApi.searchWorlds`: `GET
-    /// /worlds?search=...&n=...&offset=...`. Confirmed against the spec --
-    /// the shared `number` parameter's actual wire name is `n`, not
-    /// `number` (unlike `getGroupPosts`'s own locally-defined `number`
-    /// param -- VRChat's API is inconsistent about this between endpoints,
-    /// not a typo here).
+    /// /worlds?search=...&n=...&offset=...`. The shared `number` parameter
+    /// is named `n` on the wire, as specified by VRChat's API.
     pub async fn search_worlds(
         &self,
         query: &str,
@@ -1448,7 +1445,7 @@ impl VrChatClient {
                 ("n", &n.to_string()),
                 ("offset", &offset.to_string()),
             ])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1471,7 +1468,7 @@ impl VrChatClient {
                 ("n", &n.to_string()),
                 ("offset", &offset.to_string()),
             ])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1495,7 +1492,7 @@ impl VrChatClient {
                 ("n", &n.to_string()),
                 ("offset", &offset.to_string()),
             ])
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1510,7 +1507,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/instances/{world_id}:{instance_id}")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -1526,7 +1523,7 @@ impl VrChatClient {
         let response = self
             .http
             .get(self.url(&format!("/instances/{world_id}:{instance_id}/shortName")))
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         let value: crate::models::InstanceShortNameResponse =
             Self::parse_response(response).await?;
@@ -1546,7 +1543,7 @@ impl VrChatClient {
             .http
             .post(self.url("/instances"))
             .json(request)
-            .send()
+            .send_limited(&self.limiter)
             .await?;
         Self::parse_response(response).await
     }
@@ -3118,7 +3115,7 @@ mod tests {
     async fn public_profile_and_group_invite_use_current_shapes() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/users/usr_1/profile"))
+            .and(path("/profile/usr_1"))
             .and(query_param("asSelf", "false"))
             .and(query_param("withGroupsAndWorlds", "false"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -3188,6 +3185,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/groups/grp_1/posts"))
+            .and(query_param("n", "25"))
             .and(query_param("publicOnly", "true"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "posts": [{"id": "not_1", "title": "Hello", "text": "World"}],
@@ -3464,5 +3462,59 @@ mod tests {
         let client = VrChatClient::with_base_url(&server.uri()).unwrap();
         let instance = client.create_instance(&request).await.unwrap();
         assert_eq!(instance.instance_id.as_deref(), Some("12345~group(grp_1)"));
+    }
+
+    #[tokio::test]
+    async fn audit_rate_limit_pauses_every_following_vrchat_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups/grp_1/auditLogs"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "1")
+                    .set_body_json(serde_json::json!({})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/auth/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "usr_1"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VrChatClient::with_base_url(&server.uri()).unwrap();
+        let error = client
+            .get_group_audit_logs("grp_1", 1, 0)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            VrChatError::Api {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                ..
+            }
+        ));
+        assert!(client.limiter.is_backing_off());
+
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            client.get_current_user(),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "the next request must share audit's backoff"
+        );
+    }
+
+    #[test]
+    fn every_client_request_uses_the_global_limiter() {
+        let raw_send = [".", "send", "()"].concat();
+        assert!(
+            !include_str!("client.rs").contains(&raw_send),
+            "raw HTTP sends must live only inside SendLimited"
+        );
     }
 }
