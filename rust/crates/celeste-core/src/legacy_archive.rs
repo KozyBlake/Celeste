@@ -225,6 +225,7 @@ fn list_entries(path: &Path, kind: Kind) -> Result<Vec<Entry>> {
     match kind {
         Kind::Zip => {
             let mut archive = zip::ZipArchive::new(File::open(path)?)?;
+            archive.validate_header_consistency()?;
             anyhow::ensure!(
                 archive.len() <= MAX_ENTRIES,
                 "archive contains too many entries"
@@ -232,23 +233,23 @@ fn list_entries(path: &Path, kind: Kind) -> Result<Vec<Entry>> {
             for index in 0..archive.len() {
                 let file = archive.by_index(index)?;
                 if file.is_file() {
-                    push_entry(&mut entries, file.name(), file.size())?;
+                    let name = file.name()?.into_owned();
+                    push_entry(&mut entries, &name, file.size())?;
                 }
             }
         }
         Kind::SevenZip => {
-            sevenz_rust::decompress_file_with_extract_fn(
-                path,
-                std::env::temp_dir(),
-                |entry, _reader, _| {
+            let mut archive = sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty())
+                .map_err(|error| anyhow::anyhow!("could not read 7Z archive: {error}"))?;
+            archive
+                .for_each_entries(|entry, _reader| {
                     if !entry.is_directory() {
                         push_entry(&mut entries, entry.name(), entry.size())
                             .map_err(sevenz_rust::Error::io)?;
                     }
                     Ok(true)
-                },
-            )
-            .map_err(|error| anyhow::anyhow!("could not read 7Z archive: {error}"))?;
+                })
+                .map_err(|error| anyhow::anyhow!("could not read 7Z archive: {error}"))?;
         }
         _ => {
             let reader = tar_reader(path, kind)?;
@@ -292,23 +293,28 @@ fn extract_entries(
     match kind {
         Kind::Zip => {
             let mut archive = zip::ZipArchive::new(File::open(path)?)?;
+            archive.validate_header_consistency()?;
             for index in 0..archive.len() {
                 let mut source = archive.by_index(index)?;
-                if let Some(relative) = selected.get(source.name()) {
+                let name = source.name()?.into_owned();
+                if let Some(relative) = selected.get(&name) {
                     let size = source.size();
                     write_limited(&mut source, &destination.join(relative), size)?;
                 }
             }
         }
         Kind::SevenZip => {
-            sevenz_rust::decompress_file_with_extract_fn(path, destination, |entry, reader, _| {
-                if let Some(relative) = selected.get(entry.name()) {
-                    write_limited(reader, &destination.join(relative), entry.size())
-                        .map_err(sevenz_rust::Error::io)?;
-                }
-                Ok(true)
-            })
-            .map_err(|error| anyhow::anyhow!("could not extract 7Z archive: {error}"))?;
+            let mut archive = sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty())
+                .map_err(|error| anyhow::anyhow!("could not extract 7Z archive: {error}"))?;
+            archive
+                .for_each_entries(|entry, reader| {
+                    if let Some(relative) = selected.get(entry.name()) {
+                        write_limited(reader, &destination.join(relative), entry.size())
+                            .map_err(sevenz_rust::Error::io)?;
+                    }
+                    Ok(true)
+                })
+                .map_err(|error| anyhow::anyhow!("could not extract 7Z archive: {error}"))?;
         }
         _ => {
             let reader = tar_reader(path, kind)?;
@@ -455,5 +461,35 @@ mod tests {
         assert!(staged.join("settings.json").is_file());
         assert!(staged.join("staff_list.json").is_file());
         assert!(!workspace.path().join("escaped.json").exists());
+    }
+
+    #[test]
+    fn zip_archive_rejects_mismatched_local_and_central_header_names() {
+        let workspace = tempfile::tempdir().unwrap();
+        let archive_path = workspace.path().join("scarlet.zip");
+        let mut writer = zip::ZipWriter::new(File::create(&archive_path).unwrap());
+        writer
+            .start_file(
+                "Scarlet/settings.json",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(br#"{"legacy":true}"#).unwrap();
+        writer.finish().unwrap();
+
+        let original = b"Scarlet/settings.json";
+        let replacement = b"Archive/settings.json";
+        let mut bytes = std::fs::read(&archive_path).unwrap();
+        let offset = bytes
+            .windows(original.len())
+            .position(|window| window == original)
+            .unwrap();
+        bytes[offset..offset + original.len()].copy_from_slice(replacement);
+        std::fs::write(&archive_path, bytes).unwrap();
+
+        let destination = workspace.path().join("celeste");
+        let error = prepare(&archive_path, &destination).unwrap_err();
+        assert!(error.to_string().contains("header inconsistency"));
+        assert!(!destination.exists());
     }
 }
