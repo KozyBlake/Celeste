@@ -106,6 +106,9 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
 }
 
 fn is_public_v6(ip: Ipv6Addr) -> bool {
+    if let Some(ip) = ip.to_ipv4_mapped() {
+        return is_public_v4(ip);
+    }
     let segments = ip.segments();
     !(ip.is_loopback()
         || ip.is_unspecified()
@@ -114,7 +117,6 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
         || (segments[0] & 0xffc0) == 0xfe80
         || (segments[0] == 0x2001 && segments[1] == 0x0db8))
 }
-
 
 /// Convenience for callers that want text (the CSV/JSON watched-group
 /// import), with the same guarantees as [`download_public`].
@@ -136,6 +138,8 @@ mod tests {
             "169.254.1.1",
             "100.64.0.1",
             "::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
             "fc00::1",
             "fe80::1",
         ] {
