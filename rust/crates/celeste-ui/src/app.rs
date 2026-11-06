@@ -1983,7 +1983,9 @@ pub struct CelesteApp {
     /// cursor that stops changing means polling has stopped working. The
     /// cursor's own timestamp cannot tell you that: a legitimate catch-up
     /// after downtime leaves it hours behind while advancing perfectly.
-    audit_cursor_seen: Option<(chrono::DateTime<chrono::Utc>, std::time::Instant)>,
+    /// When this window first expected audit polling to be running, used
+    /// only until the first successful poll gives a real measurement.
+    audit_watch_started: Option<std::time::Instant>,
     /// A release newer than this build, once the launch check has answered.
     update_available: Option<crate::update_check::NewRelease>,
     /// Drained once in `update`. `None` when the check is disabled, has
@@ -2290,7 +2292,7 @@ impl CelesteApp {
             column_order,
             column_widths,
             table_sort: None,
-            audit_cursor_seen: None,
+            audit_watch_started: None,
             update_available: None,
             update_check_rx,
             player_search: String::new(),
@@ -5371,6 +5373,16 @@ impl CelesteApp {
     /// install is a supported way to run Celeste, and warning one that its
     /// moderation posts have stalled would teach everybody to ignore this
     /// indicator within a day.
+    /// How long moderation has not been reaching Discord, if that is
+    /// happening at all.
+    ///
+    /// Measured as time since the last **successful poll**, not since the
+    /// audit cursor last moved. The cursor only advances when VRChat
+    /// returns new entries, so keying off it meant any group that went a
+    /// few minutes without a kick, warn or ban -- which is most groups,
+    /// most of the time -- was told its moderation had stalled. An
+    /// indicator that cries wolf on a quiet evening is worse than none at
+    /// all, because it teaches people to ignore the real one.
     fn audit_polling_stalled_for(&mut self) -> Option<std::time::Duration> {
         let settings = self.settings.as_ref()?;
         let group = settings
@@ -5381,23 +5393,21 @@ impl CelesteApp {
             return None;
         }
         if !self.state.connection_status().contains("signed in as") {
+            self.audit_watch_started = None;
             return None;
         }
-        let cursor = settings.last_audit_query.get_or_supply()?;
         let interval = settings.audit_polling_interval.get().clamp(10, 300) as u64;
-        let now = std::time::Instant::now();
-        match self.audit_cursor_seen {
-            // Same cursor as last frame: measure how long it has sat there.
-            Some((seen, since)) if seen == cursor => {
-                let stuck = now.duration_since(since);
-                (stuck >= audit_stall_threshold(interval)).then_some(stuck)
-            }
-            // Moved (or first sight): polling is alive, restart the clock.
-            _ => {
-                self.audit_cursor_seen = Some((cursor, now));
-                None
-            }
-        }
+        let waited = match self.celeste_data.since_audit_poll_succeeded() {
+            Some(since_last) => since_last,
+            // Nothing has polled yet in this run. Measure from when
+            // polling was first expected, so a poller that never starts at
+            // all is still reported rather than excused forever.
+            None => self
+                .audit_watch_started
+                .get_or_insert_with(std::time::Instant::now)
+                .elapsed(),
+        };
+        (waited >= audit_stall_threshold(interval)).then_some(waited)
     }
 
     fn settings_tab(&mut self, ui: &mut egui::Ui) {

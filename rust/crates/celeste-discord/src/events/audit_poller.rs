@@ -651,6 +651,10 @@ pub async fn run(poller: AuditPoller) {
         match poller.poll_once().await {
             Ok(()) => {
                 consecutive_failures = 0;
+                // Including polls that find nothing: a quiet group still
+                // proves polling is alive, and the window has no other way
+                // to tell quiet from stopped.
+                poller.data.note_audit_poll_succeeded();
                 // Deliberately silent when no incident is open, so a
                 // healthy poll posts nothing.
                 poller

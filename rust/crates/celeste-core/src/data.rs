@@ -229,9 +229,45 @@ pub struct CelesteData {
     pub users: SubData<UserMetadata>,
     pub audit_entries: SubData<AuditEntryMetadata>,
     pub custom_events: SubData<CustomEvent>,
+    /// When the audit poller last finished a poll without error, as
+    /// milliseconds since the epoch, or 0 before the first one.
+    ///
+    /// In memory, because it describes this run rather than anything worth
+    /// keeping, and a file write a minute to record "still fine" would be
+    /// absurd. It lives here because this is the one thing the poller and
+    /// the window already share.
+    ///
+    /// The window needs it and cannot infer it: a poll that finds nothing
+    /// changes no file, moves no cursor and leaves no trace, which is
+    /// indistinguishable from a poller that has stopped running.
+    audit_poll_ok_at_ms: std::sync::atomic::AtomicI64,
 }
 
 impl CelesteData {
+    /// Records that a group audit poll just completed without error.
+    ///
+    /// Called for every successful poll, including the ones that find
+    /// nothing: "nothing happened" and "nothing is running" are the two
+    /// states this exists to tell apart.
+    pub fn note_audit_poll_succeeded(&self) {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.audit_poll_ok_at_ms
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How long since the last successful audit poll, or `None` if none
+    /// has completed in this run yet.
+    pub fn since_audit_poll_succeeded(&self) -> Option<std::time::Duration> {
+        let at = self
+            .audit_poll_ok_at_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if at == 0 {
+            return None;
+        }
+        let elapsed_ms = chrono::Utc::now().timestamp_millis().saturating_sub(at);
+        Some(std::time::Duration::from_millis(elapsed_ms.max(0) as u64))
+    }
+
     pub fn open(dir: &Path) -> Self {
         CelesteData {
             dir: dir.to_path_buf(),
@@ -240,6 +276,7 @@ impl CelesteData {
             users: SubData::new(dir, "usr"),
             audit_entries: SubData::new(dir, "gaud"),
             custom_events: SubData::new(dir, "ex"),
+            audit_poll_ok_at_ms: std::sync::atomic::AtomicI64::new(0),
         }
     }
 
@@ -776,6 +813,20 @@ pub struct CustomEvent {
 
 #[cfg(test)]
 mod tests {
+    /// The distinction the window depends on: a poll that found nothing
+    /// still counts as the poller being alive. Keying this off anything
+    /// the poll *changed* makes a quiet group look like a dead poller.
+    #[test]
+    fn a_poll_that_found_nothing_still_counts_as_a_successful_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = CelesteData::open(dir.path());
+        assert_eq!(data.since_audit_poll_succeeded(), None, "nothing has polled yet");
+
+        data.note_audit_poll_succeeded();
+        let age = data.since_audit_poll_succeeded().expect("a poll was recorded");
+        assert!(age < std::time::Duration::from_secs(5), "just-polled reads as recent, got {age:?}");
+    }
+
     /// Pins the on-disk key names to Java's. Java's Gson has no
     /// `FieldNamingPolicy`, so each key is the Java field name verbatim;
     /// these structs briefly serialised Rust's snake_case names instead,
