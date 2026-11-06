@@ -340,7 +340,7 @@ impl CelesteEventListener {
     /// who was loading at the time, while the frozen window is still in
     /// front of them.
     fn log_went_silent(&mut self) {
-        tracing::debug!("VRChat log stalled; {}", self.crash_watch.summary());
+        tracing::debug!("VRChat's log stopped while Celeste was watching: {}", self.crash_watch.summary());
         if let Some(report) = self.crash_watch.finish() {
             self.announce_crash(&report);
             self.deps.ui.report_vrchat_crash(report);
@@ -378,7 +378,7 @@ impl CelesteEventListener {
         // did not end on purpose.
         // Narrate the decision either way: under test, "nothing happened"
         // needs to be distinguishable from "the check did not run".
-        tracing::debug!("Previous VRChat session ended; {}", self.crash_watch.summary());
+        tracing::debug!("A previous VRChat session had ended: {}", self.crash_watch.summary());
         if let Some(report) = self.crash_watch.finish() {
             self.announce_crash(&report);
             self.deps.ui.report_vrchat_crash(report);
@@ -389,7 +389,7 @@ impl CelesteEventListener {
         // session was launched with API debug logging.
         self.seen_api_log_lines = false;
         self.live_avatar_switches_without_api_log = 0;
-        tracing::debug!("Tailer init on {}", file.display());
+        tracing::debug!("Started reading VRChat's log at {}", file.display());
     }
 
     /// Port of `log_catchUp`.

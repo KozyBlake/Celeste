@@ -193,20 +193,22 @@ impl CrashWatch {
     /// [`finish`]: CrashWatch::finish
     pub fn summary(&self) -> String {
         if self.reported {
-            return "not reported again: already reported for this session".to_string();
+            return "it was already reported for this session".to_string();
         }
         if !self.watched_live {
-            return "not reported: Celeste never watched this session live".to_string();
+            return "Celeste was not watching that session live, so nothing is reported".to_string();
         }
         if self.saw_clean_quit {
-            return "not reported: VRChat wrote its clean-exit marker".to_string();
+            return "VRChat wrote its clean-exit marker, so it closed normally".to_string();
         }
         match &self.last_avatar_load {
             Some(load) => format!(
-                "crash: no clean-exit marker; last avatar load was {} at {}",
+                "there is no clean-exit marker, so it most likely crashed — the last avatar it \
+                 loaded was {} at {}",
                 load.display_name, load.at
             ),
-            None => "crash: no clean-exit marker, and no avatar load was seen".to_string(),
+            None => "there is no clean-exit marker, so it most likely crashed, and no avatar had loaded yet"
+                .to_string(),
         }
     }
 
@@ -370,7 +372,7 @@ mod summary_tests {
     #[test]
     fn each_outcome_explains_itself() {
         let fresh = CrashWatch::new();
-        assert!(fresh.summary().contains("never watched this session live"));
+        assert!(fresh.summary().contains("not watching that session live"));
 
         let mut clean = CrashWatch::new();
         clean.went_live();
@@ -379,7 +381,7 @@ mod summary_tests {
 
         let mut crashed = CrashWatch::new();
         crashed.went_live();
-        assert!(crashed.summary().starts_with("crash:"));
+        assert!(crashed.summary().contains("most likely crashed"));
     }
 
     /// The summary must agree with the decision, or the log explains one
@@ -394,7 +396,7 @@ mod summary_tests {
             if clean {
                 watch.saw_clean_quit();
             }
-            let says_crash = watch.summary().starts_with("crash:");
+            let says_crash = watch.summary().contains("most likely crashed");
             assert_eq!(says_crash, watch.finish().is_some(), "watched={watched} clean={clean}");
         }
     }

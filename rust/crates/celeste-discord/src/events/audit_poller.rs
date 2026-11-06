@@ -90,19 +90,43 @@ impl AuditPoller {
             self.settings.last_audit_query.set(Some(cursor));
         }
         let (from, to, mut next_cursor) = query_window(cursor, now);
+        let started = std::time::Instant::now();
         let entries = client
             .query_group_audit_logs(&group_id, &GroupAuditLogFilter::between(from, to))
             .await?;
+        let fetched = entries.len();
+        let mut handled = 0usize;
         for entry in entries {
             next_cursor = next_cursor.max(entry.created_at);
             if self.data.audit_entry_metadata_exists(&entry.id) {
                 continue;
             }
+            handled += 1;
             if let Err(err) = self.process_entry(entry).await {
                 tracing::error!("Failed to process VRChat audit entry: {err}");
             }
         }
         self.settings.last_audit_query.set(Some(next_cursor));
+        // Every poll says what it found and whether the cursor moved. A
+        // cursor that stops moving is the signature of moderation silently
+        // not reaching Discord, and this is where somebody reading the log
+        // after the fact can see when it stopped.
+        let moved = if next_cursor > cursor {
+            format!("caught up to {}", clock(next_cursor))
+        } else {
+            format!("still at {}", clock(cursor))
+        };
+        let found = match (fetched, handled) {
+            (0, _) => "nothing new".to_string(),
+            (total, 0) => format!("{total} entries, all of them already handled"),
+            (total, new) if total == new => format!("{new} new entries"),
+            (total, new) => format!("{new} new entries out of {total}"),
+        };
+        tracing::debug!(
+            "Checked the group audit log for {}: {found} — took {}ms, {moved}",
+            window_label(from, to),
+            started.elapsed().as_millis()
+        );
         Ok(())
     }
 
@@ -661,9 +685,40 @@ pub async fn run(poller: AuditPoller) {
         poller.process_timed_bans().await;
         let seconds = poller.settings.audit_polling_interval.get().clamp(10, 300) as u64;
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {}
-            _ = POLL_SOON.notified() => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {
+                tracing::trace!("The {seconds}s wait between audit checks elapsed; checking again");
+            }
+            _ = POLL_SOON.notified() => {
+                // The doorbell: the local VRChat log saw a moderation
+                // action, so the next check runs now instead of waiting out
+                // the timer. This line is why a kick can reach Discord in a
+                // second when the interval is a minute.
+                tracing::debug!(
+                    "Something happened in the instance, so the audit check is running now rather than waiting up to {seconds}s"
+                );
+            }
         }
+    }
+}
+
+/// A timestamp as a clock time, for a log line somebody reads to work out
+/// when something stopped. The date is already on every log line.
+fn clock(at: DateTime<Utc>) -> String {
+    at.format("%H:%M:%S UTC").to_string()
+}
+
+/// The window a poll asked VRChat about, said the way a person would.
+fn window_label(from: DateTime<Utc>, to: DateTime<Utc>) -> String {
+    if from.date_naive() == to.date_naive() {
+        format!("{} to {}", clock(from), clock(to))
+    } else {
+        // A catch-up after downtime can span days, and "21:04 to 09:12"
+        // would read as twelve hours rather than three days.
+        format!(
+            "{} to {}",
+            from.format("%Y-%m-%d %H:%M:%S UTC"),
+            to.format("%Y-%m-%d %H:%M:%S UTC")
+        )
     }
 }
 

@@ -106,7 +106,17 @@ fn run() -> anyhow::Result<()> {
     }
 
     tracing::info!("App: {} {}", celeste_core::identity::APP_NAME, celeste_core::identity::VERSION);
-    tracing::info!("Data folder resolved to: {} ({:?})", data_dir.display(), resolved.source);
+    // Say which of the five rules picked the folder. A blank-looking
+    // Celeste is nearly always this line disagreeing with what the person
+    // expected, and "Discovered" on its own does not tell them that.
+    // `{:?}` on the enum put a Rust identifier in the line. Why the folder
+    // was chosen is the thing somebody debugging a blank config needs, so
+    // it is worth a sentence rather than a debug print.
+    tracing::info!(
+        "Using the data folder {} ({})",
+        data_dir.display(),
+        describe_data_dir_source(resolved.source)
+    );
     for other in &resolved.other_candidates {
         // Java prompts when a config exists in more than one known
         // location; at minimum, say so rather than silently preferring one.
@@ -882,16 +892,36 @@ fn spawn_cache_cleanup(
                     );
                     let report = celeste_core::cache_cleanup::delete_files(&eligible);
                     settings.last_cache_cleanup.set(Some(now));
+                    let freed = report.bytes_freed as f64 / (1024.0 * 1024.0);
+                    let could_not = if report.failed > 0 {
+                        format!(", and {} could not be deleted", report.failed)
+                    } else {
+                        String::new()
+                    };
                     tracing::info!(
-                        deleted = report.deleted,
-                        failed = report.failed,
-                        bytes_freed = report.bytes_freed,
-                        retention_days = days,
-                        "Cache cleanup complete"
+                        "Cache clean-up finished: removed {} files ({freed:.1} MB) that had not been \
+                         touched in {days} days{could_not}",
+                        report.deleted
                     );
                 }
             }
             tokio::time::sleep(CHECK_INTERVAL).await;
         }
     });
+}
+
+/// Why the data folder is the one it is, in a few words.
+///
+/// The variant name alone (`Discovered`, `FirstRun`) is a Rust identifier
+/// rather than an explanation, and this line is the first thing worth
+/// reading when Celeste opens with settings somebody does not recognise.
+fn describe_data_dir_source(source: celeste_core::paths::DataDirSource) -> &'static str {
+    use celeste_core::paths::DataDirSource;
+    match source {
+        DataDirSource::Explicit => "CELESTE_HOME said so",
+        DataDirSource::Remembered => "remembered from a previous run",
+        DataDirSource::PlatformDefault => "the usual place for this system, and it has settings in it",
+        DataDirSource::Discovered => "found by looking in the other places Celeste has used",
+        DataDirSource::FirstRun => "nothing was found anywhere, so this is a first run",
+    }
 }

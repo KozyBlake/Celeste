@@ -107,7 +107,10 @@ pub async fn connect_and_serve(token: Option<String>, state: SharedState) {
                 let started = std::time::Instant::now();
                 match client.start().await {
                     Ok(()) => {
-                        tracing::warn!("Discord client stopped; reconnecting");
+                        tracing::warn!(
+                            "The connection to Discord closed on its own. Reconnecting; nothing is \
+                             sent to Discord until it comes back"
+                        );
                         state
                             .health_reporter
                             .incident(
@@ -117,7 +120,14 @@ pub async fn connect_and_serve(token: Option<String>, state: SharedState) {
                             .await;
                     }
                     Err(error) => {
-                        tracing::error!(%error, "Discord client stopped with an error; reconnecting");
+                        // Serenity logs its own failures as raw Rust debug
+                        // output -- `Tungstenite(Io(Custom { kind: ... }))`
+                        // -- which says nothing to the person whose bot has
+                        // gone quiet. Say it plainly alongside.
+                        tracing::error!(
+                            "Lost the connection to Discord and could not keep it: {error}. \
+                             Trying again shortly; nothing is sent to Discord until it comes back"
+                        );
                         state
                             .health_reporter
                             .incident(

@@ -187,10 +187,76 @@ pub trait SendLimited {
     ) -> impl std::future::Future<Output = reqwest::Result<reqwest::Response>>;
 }
 
+/// A duration as somebody reading their own log would write it.
+///
+/// Log lines are read by people trying to work out why Celeste felt slow,
+/// so `1.4s` beats `1400ms` and `243ms` beats `0.243s`.
+fn human(duration: Duration) -> String {
+    let ms = duration.as_millis();
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", duration.as_secs_f64())
+    } else {
+        format!("{}m {}s", duration.as_secs() / 60, duration.as_secs() % 60)
+    }
+}
+
 impl SendLimited for reqwest::RequestBuilder {
     async fn send_limited(self, limiter: &VrcRateLimiter) -> reqwest::Result<reqwest::Response> {
+        // Describe the request before sending, because `send` consumes the
+        // builder. The path only: a query string can carry a display name
+        // somebody searched for, which has no business in a log file.
+        let described = self
+            .try_clone()
+            .and_then(|builder| builder.build().ok())
+            .map(|request| {
+                (
+                    request.method().to_string(),
+                    request.url().path().to_string(),
+                )
+            });
+        let (method, path) = described.unwrap_or_else(|| ("?".to_string(), "?".to_string()));
+
+        let backoff_before = limiter.backoff_remaining();
+        if !backoff_before.is_zero() {
+            tracing::info!(
+                "Holding {method} {path} for up to {} — VRChat asked this client to slow down and it is still waiting that out",
+                human(backoff_before)
+            );
+        }
+
+        let queued_at = std::time::Instant::now();
         limiter.acquire().await;
-        let response = self.send().await?;
+        let waited = queued_at.elapsed();
+
+        let sent_at = std::time::Instant::now();
+        let response = match self.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    "Could not reach VRChat for {method} {path} after {}: {error}",
+                    human(sent_at.elapsed())
+                );
+                return Err(error);
+            }
+        };
+        let took = sent_at.elapsed();
+
+        // A wait under a tenth of a second is the token bucket doing its
+        // job invisibly; saying so on every request would bury the ones
+        // that actually queued.
+        let queueing = if waited >= Duration::from_millis(100) {
+            format!(" (waited {} for the rate limit first)", human(waited))
+        } else {
+            String::new()
+        };
+        tracing::debug!(
+            "Asked VRChat: {method} {path} — {} in {}{queueing}",
+            response.status(),
+            human(took)
+        );
+
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let backoff = parse_retry_after(
                 response
@@ -198,8 +264,15 @@ impl SendLimited for reqwest::RequestBuilder {
                     .get("retry-after")
                     .and_then(|value| value.to_str().ok()),
             );
+            let told_us = if response.headers().contains_key("retry-after") {
+                "VRChat said how long to wait"
+            } else {
+                "VRChat did not say how long, so this is Celeste's own default"
+            };
             tracing::warn!(
-                "VRChat rate-limited this client (HTTP 429); backing every request off for {backoff:?}"
+                "VRChat refused {method} {path} for going too fast (HTTP 429). Every request is \
+                 held for {} — {told_us}",
+                human(backoff)
             );
             limiter.penalize(backoff);
         }

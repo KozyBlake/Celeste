@@ -99,7 +99,10 @@ pub fn delete_files(files: &[PathBuf]) -> CleanupReport {
             Ok(()) => {
                 report.deleted += 1;
                 report.bytes_freed += size;
-                tracing::debug!(path = %path.display(), "Deleted stale cached file");
+                // Trace, not debug: a clean-up routinely deletes hundreds
+                // of files, and the caller logs one line saying how many.
+                // Printing every path drowns the session that follows it.
+                tracing::trace!(path = %path.display(), "Deleted stale cached file");
             }
             Err(error) => {
                 report.failed += 1;

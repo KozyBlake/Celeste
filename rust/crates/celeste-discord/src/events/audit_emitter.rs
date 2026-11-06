@@ -132,9 +132,23 @@ impl DiscordAuditEmitter {
     ) {
         let Some(http) = self.http.read().await.clone() else {
             // Not connected to Discord; Java's `jda == null` guard.
+            //
+            // An event that goes nowhere is the hardest kind of problem to
+            // report, because nothing appears anywhere. Each dead end says
+            // which one it was.
+            tracing::debug!(
+                "Nothing sent to Discord for \"{}\" — Celeste is not connected to Discord right now",
+                Self::readable_event(audit_ex.0)
+            );
             return;
         };
-        let Some(mut channel_id) = self.configured_channel(audit_ex.0, secret) else { return };
+        let Some(mut channel_id) = self.configured_channel(audit_ex.0, secret) else {
+            tracing::debug!(
+                "Nothing sent to Discord for \"{}\" — no channel is set for it",
+                Self::readable_event(audit_ex.0)
+            );
+            return;
+        };
 
         if let Some(location) = location {
             if let Some(embed_message) = self.data.live_instances_get_location_instance_embed_message(location, false) {
@@ -158,8 +172,21 @@ impl DiscordAuditEmitter {
                     tracing::info!("{} ({}/{})", audit_ex.0.replace('.', " "), channel_id, sent.id);
                 }
             }
-            Err(err) => tracing::warn!("Failed emitting {} to {}: {}", audit_ex.0, channel_id, err),
+            Err(err) => tracing::warn!(
+                "Could not post \"{}\" to Discord channel {channel_id}: {err}",
+                Self::readable_event(audit_ex.0)
+            ),
         }
+    }
+
+    /// An event type as a person would say it: `groupex.instance.user.video`
+    /// is the name Celeste routes on, not a thing to put in a sentence.
+    fn readable_event(event_type: &str) -> String {
+        event_type
+            .strip_prefix("groupex.")
+            .or_else(|| event_type.strip_prefix("group."))
+            .unwrap_or(event_type)
+            .replace('.', " ")
     }
 
     fn base_embed(&self, audit_ex: (&str, u32)) -> CreateEmbed {

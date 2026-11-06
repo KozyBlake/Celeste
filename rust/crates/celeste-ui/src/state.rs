@@ -383,7 +383,9 @@ impl CelesteUi for UiState {
                 // `player_join`'s pending replay for updates that arrive
                 // through the owned `UiState::player_update` path.
                 let _ = initial_preamble;
-                tracing::debug!("player_update for unknown player {id}; dropped");
+                tracing::debug!(
+                    "Ignored an update about {id} — they are not in the instance list, so they had already left"
+                );
             }
         }
     }

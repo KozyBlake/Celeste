@@ -101,7 +101,7 @@ pub fn resolve(relative: &str) -> PathBuf {
 
     if cfg!(target_os = "linux") {
         if let Some(detected) = find_in_steam_libraries(&home, relative) {
-            tracing::info!("Resolved VRChat path via Steam library detection: {}", detected.display());
+            tracing::info!("Found VRChat's logs at {}", detected.display());
             return detected;
         }
         let fallback = home.join(".steam/steam").join(proton_prefix()).join(relative);
@@ -147,7 +147,7 @@ fn dirs_home() -> PathBuf {
 fn find_in_steam_libraries(home: &Path, relative: &str) -> Option<PathBuf> {
     for root in detect_steam_library_roots(home) {
         let candidate = root.join(proton_prefix()).join(relative);
-        tracing::debug!("Checking Steam library candidate: {}", candidate.display());
+        tracing::debug!("Looking for VRChat's logs in {}", candidate.display());
         if candidate.exists() {
             return Some(candidate);
         }
@@ -641,7 +641,7 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
     };
 
     'files: loop {
-        tracing::info!("Tailing {}", file_name_of(&current_path));
+        tracing::info!("Reading VRChat's log {} from where it left off", file_name_of(&current_path));
         if sender.send(TailerEvent::Init { file: current_path.clone() }).is_err() {
             return;
         }
@@ -742,7 +742,7 @@ pub async fn tail_forever(app_data_dir: PathBuf, sender: mpsc::UnboundedSender<T
             // point: from here on, anything read is live.
             if preamble {
                 preamble = false;
-                tracing::info!("Caught up with {}", file_name_of(&current_path));
+                tracing::info!("Caught up with {}; now following it live", file_name_of(&current_path));
                 if sender.send(TailerEvent::CatchUp { file: Some(current_path.clone()) }).is_err() {
                     return;
                 }
