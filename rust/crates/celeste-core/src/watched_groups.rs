@@ -134,7 +134,26 @@ pub struct WatchedGroup {
     pub last_seen_name: Option<String>,
 }
 
+/// Marks a watched group that VRChat no longer serves.
+///
+/// Applied and cleared only by the automatic re-check in the desktop app:
+/// it is deliberately *not* offered by any Discord command, because a hand
+/// applied one would silence a live group with no way to tell it apart from
+/// a genuinely dead one.
+///
+/// A tag rather than a [`WatchedGroupType`] so the group keeps whatever it
+/// was classified as -- `MALICIOUS` with the note explaining why is the part
+/// worth keeping if the group ever comes back.
+pub const REMOVED_TAG: &str = "REMOVED";
+
 impl WatchedGroup {
+    /// Whether VRChat answered 404 for this group the last time Celeste
+    /// asked. Case-insensitive, so a tag typed into a hand-edited file in
+    /// any case still counts.
+    pub fn is_removed(&self) -> bool {
+        self.tags.iter().any(|tag| tag.eq_ignore_ascii_case(REMOVED_TAG))
+    }
+
     pub fn new(id: impl Into<String>) -> Self {
         WatchedGroup {
             id: id.into(),
@@ -356,6 +375,57 @@ impl WatchedGroups {
         previous
     }
 
+    /// Records that VRChat answered 404 for this group, returning whether
+    /// that is news. Writes nothing when the group is already marked, so a
+    /// list of long-dead groups costs no disk writes at all.
+    pub fn mark_removed(&self, group_id: &str) -> bool {
+        let marked = {
+            let mut groups = self.groups.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(group) = groups.get_mut(group_id) else {
+                return false;
+            };
+            if group.is_removed() {
+                return false; // already known gone; no write
+            }
+            group.tags.add(REMOVED_TAG);
+            true
+        };
+        if marked {
+            self.save();
+        }
+        marked
+    }
+
+    /// Clears the mark after a group answers again, returning whether it
+    /// had been marked. A group that comes back is immediately a normal
+    /// watched group again -- the tag is the only thing that changes, so
+    /// its type, priority, message and notes are exactly as they were.
+    pub fn clear_removed(&self, group_id: &str) -> bool {
+        let cleared = {
+            let mut groups = self.groups.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(group) = groups.get_mut(group_id) else {
+                return false;
+            };
+            if !group.is_removed() {
+                return false; // the common case: nothing to clear, no write
+            }
+            let removed: Vec<String> = group
+                .tags
+                .iter()
+                .filter(|tag| tag.eq_ignore_ascii_case(REMOVED_TAG))
+                .cloned()
+                .collect();
+            for tag in &removed {
+                group.tags.remove(tag);
+            }
+            true
+        };
+        if cleared {
+            self.save();
+        }
+        cleared
+    }
+
     /// Mutates the watched group in place via `f`, then saves -- the shape
     /// every `set-*`/`add-tag`/`remove-tag` subcommand needs (look up,
     /// check/compare, mutate, save), matching Java's "get the reference,
@@ -389,6 +459,70 @@ fn legacy_type(value: &str) -> WatchedGroupType {
 
 #[cfg(test)]
 mod tests {
+    /// A group VRChat has deleted keeps everything that made the entry
+    /// worth having. The whole point of marking rather than deleting is
+    /// that the moderator's reason for watching it survives.
+    #[test]
+    fn a_removed_group_keeps_its_type_message_and_other_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        let mut group = WatchedGroup::new("grp_1");
+        group.r#type = WatchedGroupType::Malicious;
+        group.critical = true;
+        group.message = Some("crasher group".to_string());
+        group.tags.add("racism");
+        groups.add_watched_group(group);
+
+        assert!(groups.mark_removed("grp_1"), "marking a live entry is news");
+        assert!(!groups.mark_removed("grp_1"), "marking it again writes nothing");
+
+        let stored = groups.get_watched_group("grp_1").unwrap();
+        assert!(stored.is_removed());
+        assert_eq!(stored.r#type, WatchedGroupType::Malicious);
+        assert!(stored.critical);
+        assert_eq!(stored.message.as_deref(), Some("crasher group"));
+        assert!(stored.tags.contains("racism"), "the moderator's own tags are untouched");
+    }
+
+    /// The recovery path, which is the reason a 404 marks rather than
+    /// deletes: VRChat 404s a group for a day, or it goes private and
+    /// comes back, and the entry has to return to exactly what it was.
+    #[test]
+    fn a_group_that_answers_again_goes_straight_back_to_normal() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        let mut group = WatchedGroup::new("grp_1");
+        group.tags.add("racism");
+        groups.add_watched_group(group);
+
+        groups.mark_removed("grp_1");
+        assert!(groups.clear_removed("grp_1"), "clearing a marked entry is news");
+        assert!(!groups.clear_removed("grp_1"), "clearing an unmarked entry writes nothing");
+
+        let stored = groups.get_watched_group("grp_1").unwrap();
+        assert!(!stored.is_removed());
+        assert!(stored.tags.contains("racism"));
+    }
+
+    /// The mark has to survive a restart, or every launch re-reports the
+    /// same dead groups as news.
+    #[test]
+    fn the_mark_survives_a_reopen_and_is_read_case_insensitively() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+            groups.add_watched_group(WatchedGroup::new("grp_1"));
+            groups.mark_removed("grp_1");
+        }
+        let reopened = WatchedGroups::open(dir.path(), "watched_groups.json");
+        assert!(reopened.get_watched_group("grp_1").unwrap().is_removed());
+        assert!(!reopened.mark_removed("grp_1"), "a reopened mark is not news again");
+
+        let mut hand_edited = WatchedGroup::new("grp_2");
+        hand_edited.tags.add("removed");
+        assert!(hand_edited.is_removed(), "a hand-edited file in any case still counts");
+    }
+
     /// The confusion this guards: "Black Squad" renamed itself, the watched
     /// entry stores only a grp_ id, and a moderator checking the profile
     /// saw a different group name and concluded the flag was wrong. The

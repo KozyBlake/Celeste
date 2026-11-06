@@ -355,11 +355,26 @@ fn find_attachment<'a>(options: &'a [ResolvedOption<'a>], name: &str) -> Option<
         })
 }
 
+/// `REMOVED` is Celeste's own bookkeeping: the desktop app applies it when
+/// VRChat 404s a watched group and clears it the moment the group answers
+/// again. Discord neither offers nor accepts it, because a hand-applied one
+/// would be indistinguishable from a real finding while quietly meaning
+/// something untrue, and a hand-removed one would come straight back on the
+/// next check.
+fn is_reserved_tag(tag: &str) -> bool {
+    tag.trim().eq_ignore_ascii_case(celeste_core::watched_groups::REMOVED_TAG)
+}
+
+const RESERVED_TAG_REFUSAL: &str =
+    "`REMOVED` is set by Celeste itself when VRChat no longer has a group, and cleared when the \
+     group comes back. It can't be set or removed by hand.";
+
 fn split_tags(input: &str) -> Vec<String> {
     input
         .split(['/', ',', ';'])
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+        .filter(|s| !is_reserved_tag(s))
         .collect()
 }
 
@@ -560,7 +575,13 @@ async fn run_set_notes_modal(
 }
 
 fn tags_joined(group: &WatchedGroup) -> String {
-    group.tags.iter().cloned().collect::<Vec<_>>().join(", ")
+    group
+        .tags
+        .iter()
+        .filter(|tag| !is_reserved_tag(tag))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 async fn run_list(
@@ -910,7 +931,11 @@ async fn run_set_tags(
         Some(group_tags) => {
             let new_tags = split_tags(group_tags);
             let unchanged = {
-                let mut a: Vec<&String> = current.tags.iter().collect();
+                // Compare only the tags a moderator can see and set: the
+                // REMOVED mark is Celeste's, and leaving it in would make
+                // "set these exact tags" always look like a change.
+                let mut a: Vec<&String> =
+                    current.tags.iter().filter(|tag| !is_reserved_tag(tag)).collect();
                 let mut b: Vec<&String> = new_tags.iter().collect();
                 a.sort();
                 b.sort();
@@ -933,9 +958,16 @@ async fn run_set_tags(
         }
     };
     let new_tags: Vec<String> = group_tags.map(split_tags).unwrap_or_default();
+    // Clearing the tags must not clear Celeste's own mark: a group VRChat
+    // has deleted is still deleted after a moderator retags it, and losing
+    // the mark here would put the entry back into the nightly 404s.
+    let was_removed = current.is_removed();
     watched.update(group_id, |g| {
         g.tags.clear();
         g.tags.add_all(new_tags);
+        if was_removed {
+            g.tags.add(celeste_core::watched_groups::REMOVED_TAG);
+        }
     });
     super::reply_ephemeral(ctx, command, &reply).await
 }
@@ -958,6 +990,9 @@ async fn run_add_tag(
         .await;
     };
     let tag = tag.trim().to_string();
+    if is_reserved_tag(&tag) {
+        return super::reply_ephemeral(ctx, command, RESERVED_TAG_REFUSAL).await;
+    }
     if watched.get_watched_group(group_id).is_none() {
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     }
@@ -998,10 +1033,13 @@ async fn run_remove_tag(
         )
         .await;
     };
+    if is_reserved_tag(tag) {
+        return super::reply_ephemeral(ctx, command, RESERVED_TAG_REFUSAL).await;
+    }
     let Some(current) = watched.get_watched_group(group_id) else {
         return super::reply_ephemeral(ctx, command, "That group is not watched").await;
     };
-    if current.tags.is_empty() {
+    if tags_joined(&current).is_empty() {
         return super::reply_ephemeral(ctx, command, "That group has no tags").await;
     }
     let mut removed = false;
@@ -1026,6 +1064,26 @@ mod tests {
     #[test]
     fn split_tags_drops_empty_entries() {
         assert_eq!(split_tags("a,,b"), vec!["a", "b"]);
+    }
+
+    /// Typing the mark into `set-tags` must not apply it. Celeste decides
+    /// what is gone from VRChat; a tag typed by hand saying so would be a
+    /// claim nothing checked.
+    #[test]
+    fn split_tags_refuses_celestes_own_mark_in_any_case() {
+        assert_eq!(split_tags("racism, REMOVED, hate"), vec!["racism", "hate"]);
+        assert_eq!(split_tags("removed"), Vec::<String>::new());
+        assert_eq!(split_tags(" ReMoVeD ;hate"), vec!["hate"]);
+    }
+
+    /// Discord never shows the mark either, so nobody learns it as a tag
+    /// they could set.
+    #[test]
+    fn tags_joined_hides_celestes_own_mark() {
+        let mut group = WatchedGroup::new("grp_1");
+        group.tags.add("racism");
+        group.tags.add(celeste_core::watched_groups::REMOVED_TAG);
+        assert_eq!(tags_joined(&group), "racism");
     }
 
     #[test]

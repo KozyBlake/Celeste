@@ -1834,6 +1834,11 @@ struct NameResolution {
     target: NameResolutionTarget,
     id: String,
     result: Result<String, String>,
+    /// VRChat answered 404 rather than the request failing. Carried as a
+    /// flag because the error reaches the window as display text, and a
+    /// watched group is marked gone on the strength of this: a network
+    /// blip must never look like a deleted group.
+    not_found: bool,
 }
 
 impl WatchListKind {
@@ -7591,12 +7596,14 @@ impl CelesteApp {
                     target,
                     id: String::new(),
                     result: Err("Sign in to VRChat so Celeste can resolve saved names.".into()),
+                    not_found: false,
                 });
                 ctx.request_repaint();
                 return;
             };
 
             for id in ids {
+                let mut not_found = false;
                 let result: Result<String, String> = match target {
                     NameResolutionTarget::WatchedUsers => match client
                         .get_user_cached(
@@ -7608,7 +7615,10 @@ impl CelesteApp {
                         Ok(user) => user
                             .display_name
                             .ok_or_else(|| "VRChat returned no display name".to_string()),
-                        Err(error) => Err(error.to_string()),
+                        Err(error) => {
+                            not_found = celeste_vrchat::entity_cache::is_not_found(&error);
+                            Err(error.to_string())
+                        }
                     },
                     NameResolutionTarget::WatchedGroups
                     | NameResolutionTarget::AutoBanGroups => match client
@@ -7620,7 +7630,10 @@ impl CelesteApp {
                         .await
                     {
                         Ok(group) => Ok(group.name),
-                        Err(error) => Err(error.to_string()),
+                        Err(error) => {
+                            not_found = celeste_vrchat::entity_cache::is_not_found(&error);
+                            Err(error.to_string())
+                        }
                     },
                     NameResolutionTarget::WatchedAvatars => match client
                         .get_avatar_cached(
@@ -7630,10 +7643,13 @@ impl CelesteApp {
                         .await
                     {
                         Ok(avatar) => Ok(avatar.name),
-                        Err(error) => Err(error.to_string()),
+                        Err(error) => {
+                            not_found = celeste_vrchat::entity_cache::is_not_found(&error);
+                            Err(error.to_string())
+                        }
                     },
                 };
-                if tx.send(NameResolution { target, id, result }).is_err() {
+                if tx.send(NameResolution { target, id, result, not_found }).is_err() {
                     break;
                 }
                 ctx.request_repaint();
@@ -7685,9 +7701,34 @@ impl CelesteApp {
         }
     }
 
+    /// What a pass over the watched groups did, in one line, written for
+    /// somebody reading their own log rather than for a developer.
+    ///
+    /// Says how many groups VRChat no longer has, because that is the
+    /// number that explains a watch list quietly shrinking in usefulness,
+    /// and names the tag so the entries can be found in the file.
+    fn report_watched_group_resolution(&self, resolved: usize, total: usize, newly_marked: usize) {
+        let missing = total.saturating_sub(resolved);
+        if missing == 0 {
+            tracing::info!("Checked {total} watched group names against VRChat; all of them still exist");
+            return;
+        }
+        let newly = if newly_marked > 0 {
+            format!(", {newly_marked} of them for the first time")
+        } else {
+            String::new()
+        };
+        tracing::info!(
+            "Checked {total} watched group names against VRChat: {missing} no longer exist{newly}. \
+             They are tagged REMOVED in watched_groups.json, and Celeste stops asking VRChat about \
+             them until the next cache clean-up (every 7 days by default), when it tries once more"
+        );
+    }
+
     fn poll_name_resolution(&mut self, ctx: &egui::Context) {
         let mut results = Vec::new();
         let mut disconnected = false;
+        let mut newly_marked_removed = 0usize;
         if let Some(rx) = &self.name_resolution_rx {
             loop {
                 match rx.try_recv() {
@@ -7721,6 +7762,14 @@ impl CelesteApp {
                             self.watched_users.record_seen_name(&resolved.id, &name)
                         }
                         NameResolutionTarget::WatchedGroups => {
+                            // A group that answers again is live again, with
+                            // its type, message and notes exactly as they
+                            // were -- the mark is the only thing that goes.
+                            if self.watched_groups.clear_removed(&resolved.id) {
+                                tracing::info!(
+                                    "The watched group \"{name}\" exists on VRChat again, so it is being watched as normal once more"
+                                );
+                            }
                             self.watched_groups.record_seen_name(&resolved.id, &name);
                         }
                         NameResolutionTarget::WatchedAvatars => {
@@ -7733,7 +7782,18 @@ impl CelesteApp {
                     true
                 }
                 Err(error) => {
-                    tracing::debug!(id = %resolved.id, %error, "Could not resolve saved entity name");
+                    // One line per id put 132 near-identical entries in the
+                    // log on every launch of an install with a long watch
+                    // list, which is how a log stops being read at all. The
+                    // per-id detail stays at trace; the pass reports itself
+                    // in one line below.
+                    tracing::trace!(id = %resolved.id, %error, "Could not resolve saved entity name");
+                    if resolved.target == NameResolutionTarget::WatchedGroups
+                        && resolved.not_found
+                        && self.watched_groups.mark_removed(&resolved.id)
+                    {
+                        newly_marked_removed += 1;
+                    }
                     false
                 }
             };
@@ -7754,8 +7814,19 @@ impl CelesteApp {
                     } else {
                         format!("Resolving {completed} of {total} names…")
                     };
+                    let finished = *completed == *total;
+                    let resolved_count = *total - *failed;
+                    let total_count = *total;
                     let target = *target;
                     self.set_name_resolution_notice(target, message);
+                    if finished && target == NameResolutionTarget::WatchedGroups {
+                        self.report_watched_group_resolution(
+                            resolved_count,
+                            total_count,
+                            newly_marked_removed,
+                        );
+                        newly_marked_removed = 0;
+                    }
                 }
             }
         }

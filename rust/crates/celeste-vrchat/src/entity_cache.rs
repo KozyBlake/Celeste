@@ -159,6 +159,11 @@ pub(crate) fn record<T>(
 }
 
 /// Java matches on `apiex.getMessage().contains("HTTP response code: 404")`.
-pub(crate) fn is_not_found(error: &crate::client::VrChatError) -> bool {
+///
+/// Public because callers outside this crate have to tell "VRChat does not
+/// have this" apart from "the request failed": the two call for opposite
+/// responses, and deciding it by searching the displayed error text for
+/// "404" would key behaviour off a human-readable string.
+pub fn is_not_found(error: &crate::client::VrChatError) -> bool {
     matches!(error, crate::client::VrChatError::Api { status, .. } if status.as_u16() == 404)
 }
