@@ -172,6 +172,16 @@ impl WatchedGroup {
     }
 }
 
+/// What a marking pass did, and what the file says afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedMarkOutcome {
+    /// Entries that were not marked before and are now.
+    pub newly_marked: usize,
+    /// Entries carrying the mark in the file after the write, or `None`
+    /// when the file could not be read back.
+    pub persisted: Option<usize>,
+}
+
 pub struct WatchedGroups {
     file: PathBuf,
     groups: Mutex<HashMap<String, WatchedGroup>>,
@@ -375,25 +385,49 @@ impl WatchedGroups {
         previous
     }
 
-    /// Records that VRChat answered 404 for this group, returning whether
-    /// that is news. Writes nothing when the group is already marked, so a
-    /// list of long-dead groups costs no disk writes at all.
-    pub fn mark_removed(&self, group_id: &str) -> bool {
-        let marked = {
+    /// Marks every group VRChat answered 404 for, in one pass, and writes
+    /// the file once.
+    ///
+    /// Marking one at a time rewrote the whole file per group: a list with
+    /// 132 dead groups meant 132 serialisations of every entry, each with
+    /// two fsyncs and a backup copy, inside a single UI frame. Beyond being
+    /// wasteful, it gave a hundred and thirty-two chances for the last
+    /// write to be the one that matters.
+    ///
+    /// Returns how many entries carry the mark **after** the write, read
+    /// back from the file rather than counted from intent, so a caller
+    /// reporting this number is describing what is on disk.
+    pub fn mark_removed_all(&self, group_ids: &[String]) -> RemovedMarkOutcome {
+        let mut newly_marked = 0usize;
+        {
             let mut groups = self.groups.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(group) = groups.get_mut(group_id) else {
-                return false;
-            };
-            if group.is_removed() {
-                return false; // already known gone; no write
+            for id in group_ids {
+                let Some(group) = groups.get_mut(id) else { continue };
+                if group.is_removed() {
+                    continue;
+                }
+                group.tags.add(REMOVED_TAG);
+                newly_marked += 1;
             }
-            group.tags.add(REMOVED_TAG);
-            true
-        };
-        if marked {
+        }
+        if newly_marked > 0 {
             self.save();
         }
-        marked
+        RemovedMarkOutcome {
+            newly_marked,
+            persisted: self.persisted_removed_count(),
+        }
+    }
+
+    /// How many entries the *file* says are marked.
+    ///
+    /// Re-read rather than counted in memory: the point of this number is
+    /// to catch the case where memory and disk disagree, which counting
+    /// memory twice cannot do.
+    pub fn persisted_removed_count(&self) -> Option<usize> {
+        let raw = std::fs::read_to_string(&self.file).ok()?;
+        let parsed: Vec<WatchedGroup> = serde_json::from_str(&raw).ok()?;
+        Some(parsed.iter().filter(|group| group.is_removed()).count())
     }
 
     /// Clears the mark after a group answers again, returning whether it
@@ -459,6 +493,32 @@ fn legacy_type(value: &str) -> WatchedGroupType {
 
 #[cfg(test)]
 mod tests {
+    /// A real watch list that has been running a while hits this with over
+    /// a hundred dead groups at once. The count the pass reports has to be
+    /// the count the file ends up holding -- a summary line that overstates
+    /// what happened is worse than no summary at all.
+    #[test]
+    fn marking_a_whole_list_writes_once_and_reports_what_landed() {
+        let dir = tempfile::tempdir().unwrap();
+        let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
+        let ids: Vec<String> = (0..132).map(|i| format!("grp_{i:04}")).collect();
+        for id in &ids {
+            groups.add_watched_group(WatchedGroup::new(id.clone()));
+        }
+
+        let outcome = groups.mark_removed_all(&ids);
+        assert_eq!(outcome.newly_marked, 132);
+        assert_eq!(outcome.persisted, Some(132), "the file has to agree with the report");
+
+        let reopened = WatchedGroups::open(dir.path(), "watched_groups.json");
+        assert_eq!(reopened.get_all().iter().filter(|g| g.is_removed()).count(), 132);
+
+        // A second pass over the same ids is not news and writes nothing.
+        let again = groups.mark_removed_all(&ids);
+        assert_eq!(again.newly_marked, 0);
+        assert_eq!(again.persisted, Some(132));
+    }
+
     /// A group VRChat has deleted keeps everything that made the entry
     /// worth having. The whole point of marking rather than deleting is
     /// that the moderator's reason for watching it survives.
@@ -473,8 +533,9 @@ mod tests {
         group.tags.add("racism");
         groups.add_watched_group(group);
 
-        assert!(groups.mark_removed("grp_1"), "marking a live entry is news");
-        assert!(!groups.mark_removed("grp_1"), "marking it again writes nothing");
+        let ids = vec!["grp_1".to_string()];
+        assert_eq!(groups.mark_removed_all(&ids).newly_marked, 1, "marking a live entry is news");
+        assert_eq!(groups.mark_removed_all(&ids).newly_marked, 0, "marking it again writes nothing");
 
         let stored = groups.get_watched_group("grp_1").unwrap();
         assert!(stored.is_removed());
@@ -495,7 +556,7 @@ mod tests {
         group.tags.add("racism");
         groups.add_watched_group(group);
 
-        groups.mark_removed("grp_1");
+        groups.mark_removed_all(&["grp_1".to_string()]);
         assert!(groups.clear_removed("grp_1"), "clearing a marked entry is news");
         assert!(!groups.clear_removed("grp_1"), "clearing an unmarked entry writes nothing");
 
@@ -512,11 +573,15 @@ mod tests {
         {
             let groups = WatchedGroups::open(dir.path(), "watched_groups.json");
             groups.add_watched_group(WatchedGroup::new("grp_1"));
-            groups.mark_removed("grp_1");
+            groups.mark_removed_all(&["grp_1".to_string()]);
         }
         let reopened = WatchedGroups::open(dir.path(), "watched_groups.json");
         assert!(reopened.get_watched_group("grp_1").unwrap().is_removed());
-        assert!(!reopened.mark_removed("grp_1"), "a reopened mark is not news again");
+        assert_eq!(
+            reopened.mark_removed_all(&["grp_1".to_string()]).newly_marked,
+            0,
+            "a reopened mark is not news again"
+        );
 
         let mut hand_edited = WatchedGroup::new("grp_2");
         hand_edited.tags.add("removed");

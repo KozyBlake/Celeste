@@ -7707,14 +7707,19 @@ impl CelesteApp {
     /// Says how many groups VRChat no longer has, because that is the
     /// number that explains a watch list quietly shrinking in usefulness,
     /// and names the tag so the entries can be found in the file.
-    fn report_watched_group_resolution(&self, resolved: usize, total: usize, newly_marked: usize) {
+    fn report_watched_group_resolution(
+        &self,
+        resolved: usize,
+        total: usize,
+        outcome: celeste_core::watched_groups::RemovedMarkOutcome,
+    ) {
         let missing = total.saturating_sub(resolved);
         if missing == 0 {
             tracing::info!("Checked {total} watched group names against VRChat; all of them still exist");
             return;
         }
-        let newly = if newly_marked > 0 {
-            format!(", {newly_marked} of them for the first time")
+        let newly = if outcome.newly_marked > 0 {
+            format!(", {} of them for the first time", outcome.newly_marked)
         } else {
             String::new()
         };
@@ -7723,12 +7728,29 @@ impl CelesteApp {
              They are tagged REMOVED in watched_groups.json, and Celeste stops asking VRChat about \
              them until the next cache clean-up (every 7 days by default), when it tries once more"
         );
+        // Said separately because it is a different kind of claim: the
+        // line above is what this pass did, and this one is what the file
+        // on disk says afterwards. They disagreeing is the bug worth
+        // hearing about, and only a read-back can catch it.
+        match outcome.persisted {
+            Some(persisted) if persisted == missing => {
+                tracing::debug!("watched_groups.json now carries {persisted} REMOVED tags, as expected");
+            }
+            Some(persisted) => {
+                tracing::warn!(
+                    "watched_groups.json carries {persisted} REMOVED tags but {missing} groups are \
+                     missing from VRChat. Something else is writing that file; the rest will be \
+                     marked on the next launch"
+                );
+            }
+            None => tracing::warn!("Could not read watched_groups.json back to check the REMOVED tags"),
+        }
     }
 
     fn poll_name_resolution(&mut self, ctx: &egui::Context) {
         let mut results = Vec::new();
         let mut disconnected = false;
-        let mut newly_marked_removed = 0usize;
+        let mut gone_from_vrchat: Vec<String> = Vec::new();
         if let Some(rx) = &self.name_resolution_rx {
             loop {
                 match rx.try_recv() {
@@ -7788,11 +7810,12 @@ impl CelesteApp {
                     // per-id detail stays at trace; the pass reports itself
                     // in one line below.
                     tracing::trace!(id = %resolved.id, %error, "Could not resolve saved entity name");
-                    if resolved.target == NameResolutionTarget::WatchedGroups
-                        && resolved.not_found
-                        && self.watched_groups.mark_removed(&resolved.id)
-                    {
-                        newly_marked_removed += 1;
+                    if resolved.target == NameResolutionTarget::WatchedGroups && resolved.not_found {
+                        // Collected, not written: the file is saved once
+                        // when the pass finishes. Writing per group meant
+                        // rewriting every entry a hundred-odd times in one
+                        // frame.
+                        gone_from_vrchat.push(resolved.id.clone());
                     }
                     false
                 }
@@ -7820,12 +7843,14 @@ impl CelesteApp {
                     let target = *target;
                     self.set_name_resolution_notice(target, message);
                     if finished && target == NameResolutionTarget::WatchedGroups {
+                        let outcome =
+                            self.watched_groups.mark_removed_all(&gone_from_vrchat);
+                        gone_from_vrchat.clear();
                         self.report_watched_group_resolution(
                             resolved_count,
                             total_count,
-                            newly_marked_removed,
+                            outcome,
                         );
-                        newly_marked_removed = 0;
                     }
                 }
             }
