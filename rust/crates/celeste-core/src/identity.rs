@@ -30,14 +30,21 @@ pub const FORK_GROUP: &str = GROUP;
 pub const FORK_REPOSITORY: &str = NAME;
 pub const FORK_NOTE: &str =
     "Maintained by KozyBlake \u{2014} Based on Scarlet \u{2014} Windows & Linux";
-pub const DEV_DISCORD: &str = "Discord:@vinyarion/Vinyarion#0292/393412191547555841";
-pub const COMMUNITY_DISCORD_URL: &str = "https://discord.gg/CP3AyhypBF";
+/// Who VRChat should contact about requests this client makes. It names
+/// whoever runs this fork, not Scarlet's author -- a question about this
+/// client's traffic reaching Vinyarion would be a question he cannot
+/// answer. Credit for Scarlet lives in CREDITS.md, which is what that is
+/// for.
+pub const DEV_DISCORD: &str = "Discord:@chieriontop/656328060701900836";
+pub const COMMUNITY_DISCORD_URL: &str = "https://discord.gg/shXBVdppW";
 
-pub const FORK_GITHUB_URL: &str = "https://github.com/KozyBlake/ScarletRust";
+pub const FORK_GITHUB_URL: &str = "https://github.com/KozyBlake/Celeste";
 pub const GITHUB_URL: &str = FORK_GITHUB_URL;
 
 pub const USER_AGENT_NAME: &str = "KozyBlake-Celeste";
-pub const LICENSE_URL: &str = "https://github.com/KozyBlake/ScarletRust?tab=MIT-1-ov-file";
+/// The licence file itself rather than GitHub's licence tab: PolyForm
+/// Shield is not a licence GitHub detects, so that tab shows nothing.
+pub const LICENSE_URL: &str = "https://github.com/KozyBlake/Celeste/blob/main/LICENSE";
 pub const API_VERSION: &str = "api/1";
 pub const API_HOST_0: &str = "vrchat.com";
 pub const API_HOST_1: &str = "api.vrchat.com";
@@ -69,5 +76,22 @@ mod tests {
         let ua = user_agent();
         assert!(ua.starts_with("KozyBlake-Celeste/"));
         assert!(ua.contains(GITHUB_URL));
+    }
+
+    /// VRChat reads this header to find whoever runs the client. It spent
+    /// a release naming a repository that 404s, which is the same as
+    /// giving them nothing, and nothing noticed.
+    #[test]
+    fn the_contact_details_point_somewhere_that_exists() {
+        let ua = user_agent();
+        assert!(
+            !ua.contains("ScarletRust"),
+            "the fork's repository was renamed to Celeste; ScarletRust 404s: {ua}"
+        );
+        assert!(ua.contains("github.com/KozyBlake/Celeste"), "{ua}");
+        assert!(
+            !LICENSE_URL.contains("MIT"),
+            "Celeste is PolyForm Shield 1.0.0, not MIT: {LICENSE_URL}"
+        );
     }
 }

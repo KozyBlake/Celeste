@@ -14,8 +14,8 @@ members = [
 [workspace.package]
 version = "0.20.0"
 edition = "2021"
-license = "MIT"
-repository = "https://github.com/KozyBlake/ScarletRust"
+license = "LicenseRef-PolyForm-Shield-1.0.0"
+repository = "https://github.com/KozyBlake/Celeste"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

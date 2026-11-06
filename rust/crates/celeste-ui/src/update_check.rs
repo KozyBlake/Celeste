@@ -10,8 +10,9 @@ use std::time::Duration;
 
 /// The releases endpoint for the published repository.
 ///
-/// Hardcoded rather than built from `identity::FORK_GITHUB_URL`, which
-/// still names the old `ScarletRust` repository and would 404.
+/// Hardcoded rather than built from `identity::FORK_GITHUB_URL`: this is
+/// an api.github.com endpoint, not the repository's own address, so
+/// deriving one from the other would only couple them.
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/KozyBlake/Celeste/releases/latest";
 
 /// Where to send someone when the API answered but gave no release page.
