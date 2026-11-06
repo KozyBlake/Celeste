@@ -20,23 +20,22 @@ while no kick, warn or ban reached Discord.
 
 Two indicators now:
 
-- **In the status bar**, a warning when the audit cursor stops
-  advancing. A successful poll always moves the cursor, so a motionless
-  cursor means polling has stopped working — which the cursor's own
-  timestamp cannot show, because a legitimate catch-up after downtime
-  leaves it hours behind while advancing perfectly. The threshold is
-  three polling intervals with a three-minute floor, so a short interval
-  cannot make it jumpy. It stays silent where polling is not expected to
-  run at all — no VRChat sign-in, or no group configured — because
-  telling a log-only install that its moderation has stalled would teach
-  everyone to ignore the indicator.
+- **In the status bar**, a warning when no audit poll has completed for
+  three polling intervals, with a three-minute floor so a short interval
+  cannot make it jumpy. A poll runs on its timer whether or not anything
+  happened, so a quiet group cannot trigger it, while a poller that has
+  stopped, is failing, or never started does. It stays silent where
+  polling is not expected to run at all — no VRChat sign-in, or no group
+  configured — because telling a log-only install that its moderation
+  has stalled would teach everyone to ignore the indicator.
 - **In the ops alert channel**, three consecutive failed polls open one
   incident, and a successful poll closes it. One alert and one recovery
   rather than a retry log, and a single blip stays out of the channel
   entirely.
 
-Both name the likely causes and state that the cursor has not advanced,
-so nothing is lost once it clears.
+Both name the likely causes, and both say the audit cursor has not
+advanced, so nothing is lost once the problem clears: Celeste resumes
+from where it stopped.
 
 ## A note when a newer Celeste has been released
 
@@ -180,9 +179,9 @@ that figure came from VRChat or from Celeste's own default.
 
 Every audit poll reports what it found and whether the cursor moved:
 `Checked the group audit log for 23:03:41 to 23:04:41: 2 new entries —
-took 214ms, caught up to 23:04:39`. A cursor that stops moving is what
-moderation silently not reaching Discord looks like, and this is where it
-can be seen happening. When the local log brings a check forward instead
+took 214ms, caught up to 23:04:39`. A poll that stops appearing is what
+moderation silently not reaching Discord looks like, and this is where
+it can be seen happening. When the local log brings a check forward instead
 of waiting out the timer, it says that too, which is the line that
 explains how a kick reaches Discord in about a second.
 
@@ -217,10 +216,6 @@ settings somebody does not recognise.
 - The README now describes the Rust port rather than the Java app: its
   localization and training-mode sections documented features the port
   does not have.
-- The status-bar stall warning measures time since the last completed
-  poll rather than since the audit cursor last moved. The cursor only
-  advances when VRChat returns new entries, so the old measurement
-  announced a stall on any group that went a few quiet minutes.
 - The licence and contact details describe this project rather than the
   one it was forked from. The manifest said MIT, and **Help -> About ->
   License** opened a 404 that also claimed MIT, while Celeste has been
