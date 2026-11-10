@@ -30,13 +30,19 @@ pub const FORK_GROUP: &str = GROUP;
 pub const FORK_REPOSITORY: &str = NAME;
 pub const FORK_NOTE: &str =
     "Maintained by KozyBlake \u{2014} Based on Scarlet \u{2014} Windows & Linux";
-/// Who VRChat should contact about requests this client makes. It names
-/// whoever runs this fork, not Scarlet's author -- a question about this
-/// client's traffic reaching Vinyarion would be a question he cannot
-/// answer. Credit for Scarlet lives in CREDITS.md, which is what that is
-/// for.
+/// Who to contact about requests this client makes -- VRChat, and every
+/// avatar database the search commands query. It names whoever runs this
+/// fork, not Scarlet's author -- a question about this client's traffic
+/// reaching Vinyarion would be a question he cannot answer. Credit for
+/// Scarlet lives in CREDITS.md, which is what that is for.
 pub const DEV_DISCORD: &str = "Discord:@chieriontop/656328060701900836";
 pub const COMMUNITY_DISCORD_URL: &str = "https://discord.gg/shXBVdppW";
+/// A route that does not require Discord. Every other contact in the
+/// User-Agent needs an account on one service, and an operator who wants
+/// to say "throttle or I block you" will not make one in order to say it.
+/// The address is on a domain this project controls, so it can be pointed
+/// somewhere else without shipping a release to change the header.
+pub const CONTACT_EMAIL: &str = "chieriontop@chierion.top";
 
 pub const FORK_GITHUB_URL: &str = "https://github.com/KozyBlake/Celeste";
 pub const GITHUB_URL: &str = FORK_GITHUB_URL;
@@ -50,9 +56,20 @@ pub const API_HOST_0: &str = "vrchat.com";
 pub const API_HOST_1: &str = "api.vrchat.com";
 pub const API_HOST_2: &str = "api.vrchat.cloud";
 
+/// The identity every outbound request carries, in the shape RFC 9110
+/// describes: one `product/version`, then a comment holding the contacts.
+/// The previous form put them as bare text after the product, where `:`,
+/// `@` and `;` are not legal token characters -- readable to a person, but
+/// something a strict parser or a WAF may cut at the first `;`, which
+/// leaves the client looking unidentified again. The URLs carry the `+`
+/// prefix crawler operators already recognise.
+///
+/// `USER_AGENT_NAME` is the part a third party should match on. The
+/// version changes every release, so an allowlist or rate-limit rule built
+/// on the whole string breaks at the next one.
 pub fn user_agent() -> String {
     format!(
-        "{USER_AGENT_NAME}/{VERSION} {DEV_DISCORD}; {COMMUNITY_DISCORD_URL}; {GITHUB_URL}"
+        "{USER_AGENT_NAME}/{VERSION} (+{GITHUB_URL}; mailto:{CONTACT_EMAIL}; {DEV_DISCORD}; {COMMUNITY_DISCORD_URL})"
     )
 }
 
@@ -93,5 +110,33 @@ mod tests {
             !LICENSE_URL.contains("MIT"),
             "Celeste is PolyForm Shield 1.0.0, not MIT: {LICENSE_URL}"
         );
+    }
+
+    /// The whole point of the address: an operator who wants to reach
+    /// whoever runs this client should not have to join a Discord server
+    /// first in order to do it.
+    #[test]
+    fn there_is_a_contact_that_is_not_discord() {
+        let ua = user_agent();
+        assert!(ua.contains("mailto:"), "no non-Discord contact in: {ua}");
+        assert!(
+            CONTACT_EMAIL.contains('@') && !CONTACT_EMAIL.contains(' '),
+            "not an address: {CONTACT_EMAIL}"
+        );
+    }
+
+    /// The contacts belong inside a parenthesised comment, because `:`,
+    /// `@` and `;` are not legal in an RFC 9110 product token. Left
+    /// outside, a strict parser may keep only the text before the first
+    /// `;` -- which is the product, and nothing anyone could act on.
+    #[test]
+    fn the_contacts_sit_inside_a_comment() {
+        let ua = user_agent();
+        let (product, comment) = ua
+            .split_once(' ')
+            .expect("a product, then a space, then the comment");
+        assert!(!product.contains(';'), "product carries a `;`: {product}");
+        assert!(comment.starts_with('('), "comment is unopened: {ua}");
+        assert!(comment.ends_with(')'), "comment is unclosed: {ua}");
     }
 }

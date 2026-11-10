@@ -432,6 +432,22 @@ pull request needs to pass, and the terms contributions are offered under.
 
 ---
 
+## Contact
+
+- **Email:** chieriontop@chierion.top — reaches the maintainer without
+  needing an account on anything
+- **Discord:** `@chieriontop` (user ID `656328060701900836`)
+- **Issues:** https://github.com/KozyBlake/Celeste/issues
+
+If you operate a service Celeste queries — the VRChat API, one of the
+community avatar databases — and you want it throttled, identified
+differently or stopped, an email is enough and the request will be
+honoured. [SECURITY.md](SECURITY.md) records the `User-Agent` Celeste
+sends, says what its avatar-database requests actually do, and is where to
+report a vulnerability. Please do not use a public issue for that.
+
+---
+
 ## Credits and licence
 
 Celeste is licensed under the **[PolyForm Shield License 1.0.0](https://github.com/KozyBlake/Celeste?tab=License-1-ov-file)**.

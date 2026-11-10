@@ -103,7 +103,13 @@ pub struct AvatarSearch {
 impl Default for AvatarSearch {
     fn default() -> Self {
         let client = reqwest::Client::builder()
-            .user_agent(concat!("Celeste/", env!("CARGO_PKG_VERSION")))
+            // The shared identity, not a string of its own. These providers
+            // are small, often one-person services, and a client they
+            // cannot place is one they block rather than ask about. Its own
+            // string named no repository, no address and no person, and
+            // differed from the one every other request sends, so nothing
+            // they saw here could be matched to anything.
+            .user_agent(celeste_core::identity::user_agent())
             .timeout(Duration::from_secs(30))
             .build()
             .expect("valid avatar-search HTTP client");
