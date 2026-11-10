@@ -277,6 +277,7 @@ fn run() -> anyhow::Result<()> {
 
     let tts = Arc::new(celeste_ui::tts::TtsService::new());
     let pronoun_lists = Arc::new(celeste_core::pronoun_lists::PronounLists::open(&data_dir));
+    let bot_markers = Arc::new(celeste_core::bot_markers::BotMarkers::open(&data_dir));
 
     // Give Discord enough time to deliver the command acknowledgement, then
     // relaunch this exact executable with its original arguments. This is the
@@ -347,6 +348,7 @@ fn run() -> anyhow::Result<()> {
         watched_groups: shared.watched_groups.clone(),
         auto_ban_groups: shared.auto_ban_groups.clone(),
         pronoun_lists: pronoun_lists.clone(),
+        bot_markers,
         tts: tts_route.clone(),
         avatar_search: Arc::new(celeste_discord::avatar_search::ListenerAvatarSearch::new(
             avatar_search.clone(),

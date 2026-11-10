@@ -5,6 +5,7 @@
 pub mod change_listener;
 pub mod cache_cleanup;
 pub mod auto_ban_groups;
+pub mod bot_markers;
 pub mod data;
 pub mod features;
 pub mod file_backups;

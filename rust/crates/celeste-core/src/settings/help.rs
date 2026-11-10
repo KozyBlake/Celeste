@@ -28,6 +28,8 @@ pub fn describe(id: &str) -> Option<&'static str> {
         "advisory_show_mixed_character_names" => "Flags display names that mix scripts, a common way to impersonate another member.",
         "advisory_show_votes_to_kick" => "Flags players the instance has started a vote-kick against.",
         "advisory_flag_visitor_rank" => "Flags players still on Visitor rank.",
+        "advisory_flag_bot_indicator" => "Flags a player whose VRChat bio advertises an automation service, from the list in bot_bio_markers.json. Celeste never acts on this by itself: a bio is text its owner typed, so it can be a joke or a frame-up as easily as a confession. Reading a bio costs one extra API request per join, made only while this or the matching TTS setting is on.",
+        "tts_announce_bot_indicator" => "Speaks a warning, naming the matched string, when a joining player's bio advertises an automation service.",
         "advisory_flag_nuisance_rank" => "Flags players VRChat has marked as a probable nuisance.",
         "advisory_translate_endpoint" => "LibreTranslate server used to translate advisory text. Leave empty to skip translation.",
         "advisory_translate_api_key" => "API key for that translation server, if it needs one.",

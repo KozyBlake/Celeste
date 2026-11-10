@@ -204,8 +204,10 @@ pub struct Settings {
     pub advisory_show_suspicious_pronouns: Arc<FileValued<bool>>,
     pub advisory_flag_nuisance_rank: Arc<FileValued<bool>>,
     pub advisory_flag_visitor_rank: Arc<FileValued<bool>>,
+    pub advisory_flag_bot_indicator: Arc<FileValued<bool>>,
     pub announce_nuisance_rank: Arc<FileValued<bool>>,
     pub announce_visitor_rank: Arc<FileValued<bool>>,
+    pub announce_bot_indicator: Arc<FileValued<bool>>,
 
     // --- ScarletEventListener.java: Moderation ---
     pub attempt_avatar_image_match: Arc<FileValued<bool>>,
@@ -821,6 +823,18 @@ impl Settings {
                 "Advisory: flag Visitor trust rank",
                 SettingCategory::Notifications,
                 false,
+            ),
+            advisory_flag_bot_indicator: registry.boolean(
+                "advisory_flag_bot_indicator",
+                "Advisory: flag a bot service advertised in a bio",
+                SettingCategory::Notifications,
+                true,
+            ),
+            announce_bot_indicator: registry.boolean(
+                "tts_announce_bot_indicator",
+                "TTS: announce a bot indicator",
+                SettingCategory::Notifications,
+                true,
             ),
             announce_nuisance_rank: registry.boolean(
                 "tts_announce_nuisance_rank",

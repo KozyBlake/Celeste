@@ -59,6 +59,7 @@ or from Discord with `/settings edit`.
 
 | Setting | Id | Type | What it does |
 |---|---|---|---|
+| Advisory: flag a bot service advertised in a bio | `advisory_flag_bot_indicator` | boolean (default `true`) | Flags a player whose VRChat bio advertises an automation service, from the list in bot_bio_markers.json. Celeste never acts on this by itself: a bio is text its owner typed, so it can be a joke or a frame-up as easily as a confession. Reading a bio costs one extra API request per join, made only while this or the matching TTS setting is on. |
 | Advisory: flag Nuisance trust rank | `advisory_flag_nuisance_rank` | boolean (default `true`) | Flags players VRChat has marked as a probable nuisance. |
 | Advisory: flag Visitor trust rank | `advisory_flag_visitor_rank` | boolean (default `false`) | Flags players still on Visitor rank. |
 | Advisory: mixed-character names | `advisory_show_mixed_character_names` | boolean (default `true`) | Flags display names that mix scripts, a common way to impersonate another member. |
@@ -89,6 +90,7 @@ or from Discord with `/settings edit`.
 | Toast: watched avatars | `toast_notify_watched_avatars` | boolean (default `true`) | Raises one when someone wearing a watched avatar joins. |
 | Toast: watched groups | `toast_notify_watched_groups` | boolean (default `true`) | Raises one when someone representing a watched group joins. |
 | Toast: watched users | `toast_notify_watched_users` | boolean (default `true`) | Raises a desktop notification when a watched user joins. |
+| TTS: announce a bot indicator | `tts_announce_bot_indicator` | boolean (default `true`) | Speaks a warning, naming the matched string, when a joining player's bio advertises an automation service. |
 | TTS: Announce mixed-character names | `tts_announce_mixed_character_names` | boolean (default `true`) | Speaks a warning for display names that mix scripts. |
 | TTS: Announce new players | `tts_announce_new_players` | boolean (default `true`) | Speaks a warning when an account younger than the age below joins. |
 | TTS: announce Nuisance rank (with alarm chime) | `tts_announce_nuisance_rank` | boolean (default `true`) | Speaks a warning when a probable-nuisance player joins. |
@@ -163,4 +165,4 @@ or from Discord with `/settings edit`.
 
 ---
 
-106 settings in 6 categories.
+108 settings in 6 categories.

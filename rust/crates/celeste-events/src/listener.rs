@@ -56,6 +56,7 @@ use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDateTime, TimeZone, Utc};
 use celeste_core::auto_ban_groups::{AutoBanGroup, AutoBanGroups};
+use celeste_core::bot_markers::BotMarkers;
 use celeste_core::data::CelesteData;
 use celeste_core::instance_roster::InstanceRoster;
 use celeste_core::pacer::Pacer;
@@ -107,6 +108,7 @@ pub struct ListenerDeps {
     pub watched_groups: Arc<WatchedGroups>,
     pub auto_ban_groups: Arc<AutoBanGroups>,
     pub pronoun_lists: Arc<PronounLists>,
+    pub bot_markers: Arc<BotMarkers>,
     pub tts: Arc<dyn TtsSink>,
     pub emitter: Arc<dyn AuditEmitter>,
     pub avatar_search: Arc<dyn crate::emitter::AvatarSearch>,
@@ -1336,6 +1338,52 @@ impl CelesteEventListener {
             }
         }
 
+        // Bot indicator. Some automation services are advertised in the
+        // bio of the accounts running them, which is the cheapest signal
+        // there is: nothing to observe over time, just a string.
+        //
+        // The bio lives on the public-profile endpoint rather than on the
+        // user, so this is one more request per join. It is only made
+        // while one of the two settings is on, and it shares the join
+        // cache's max-age with the user lookup above for the same reason:
+        // a bio does not change minute to minute.
+        //
+        // Nothing here acts, and nothing should. A bio is text its owner
+        // typed, so it can be a joke or a frame-up as easily as a
+        // confession. This raises the advisory and the call-out a watched
+        // group would, and a person decides what to do about it.
+        let flag_bot = self.deps.settings.advisory_flag_bot_indicator.get();
+        let announce_bot = self.deps.settings.announce_bot_indicator.get();
+        if (flag_bot || announce_bot) && self.client_user_id.as_deref() != Some(user_id) {
+            if let Some(client) = self.vrchat().await {
+                match client
+                    .get_public_profile_cached(user_id, join_check_max_age())
+                    .await
+                {
+                    Ok(profile) => {
+                        let bio = profile.bio.unwrap_or_default();
+                        if let Some(marker) = self.deps.bot_markers.matched(&bio) {
+                            if flag_bot {
+                                add_advisory(
+                                    &mut advisories,
+                                    Some(&format!("\u{26a0} Bot indicator: {marker} in bio")),
+                                );
+                                outcome.priority = outcome.priority.max(1000);
+                            }
+                            if !preamble && announce_bot {
+                                tts_parts.push(format!("Bot indicator, {marker} in bio."));
+                            }
+                        }
+                    }
+                    // Only a missing signal, and the warning for a failed
+                    // user lookup above already covers a dead session.
+                    Err(err) => tracing::debug!(
+                        "Could not read {user_id}'s bio for the bot-indicator check: {err}"
+                    ),
+                }
+            }
+        }
+
         // One combined callout, e.g. "Vex joined the lobby. Watched groups:
         // Raiders, Trolls. New, 5 days."
         if !preamble && !tts_parts.is_empty() {
@@ -2519,6 +2567,7 @@ mod tests {
             watched_groups: Arc::new(WatchedGroups::open(dir.path(), "watched_groups.json")),
             auto_ban_groups: Arc::new(AutoBanGroups::open(dir.path())),
             pronoun_lists: Arc::new(PronounLists::open(dir.path())),
+            bot_markers: Arc::new(BotMarkers::open(dir.path())),
             tts: Arc::new(tts.clone()),
             avatar_search,
             emitter: Arc::new(emitter.clone()),
@@ -2988,6 +3037,7 @@ mod tests {
             watched_groups: Arc::new(WatchedGroups::open(h_dir.path(), "watched_groups.json")),
             auto_ban_groups: Arc::new(AutoBanGroups::open(h_dir.path())),
             pronoun_lists: Arc::new(PronounLists::open(h_dir.path())),
+            bot_markers: Arc::new(BotMarkers::open(h_dir.path())),
             tts: Arc::new(tts.clone()),
             avatar_search: Arc::new(crate::NoAvatarSearch),
             emitter: Arc::new(crate::NoopAuditEmitter),
@@ -3317,6 +3367,7 @@ mod tests {
             watched_groups,
             auto_ban_groups: Arc::new(AutoBanGroups::open(h_dir.path())),
             pronoun_lists: Arc::new(PronounLists::open(h_dir.path())),
+            bot_markers: Arc::new(BotMarkers::open(h_dir.path())),
             tts: Arc::new(RecordingTts::default()),
             avatar_search: Arc::new(crate::NoAvatarSearch),
             emitter: Arc::new(crate::NoopAuditEmitter),
