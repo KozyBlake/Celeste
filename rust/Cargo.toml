@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.40.0"
+version = "0.41.0"
 edition = "2021"
 license = "LicenseRef-PolyForm-Shield-1.0.0"
 repository = "https://github.com/KozyBlake/Celeste"
