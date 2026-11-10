@@ -12,15 +12,13 @@
 //! every crate instead of routed through a facade), so this module ports the
 //! *behavior* rather than the class shapes: [`init`] installs a
 //! `tracing_subscriber` that writes the same timestamp/level/name format to
-//! stdout/stderr and to `<data-dir>/logs/celeste_log_<timestamp>.txt`, using
-//! `tracing_appender`'s non-blocking writer as the equivalent of the Java
-//! background logging thread. [`normalize_target`] reproduces
+//! stdout/stderr and to `<data-dir>/logs/celeste_log_<timestamp>.txt`.
+//! [`normalize_target`] reproduces
 //! `ScarletLoggerFactory::getLogger`'s name rewriting for parity with the old
 //! log file naming scheme.
 
 use std::path::{Path, PathBuf};
 
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
 /// Logger names from before the rename, still rewritten to the current
@@ -110,10 +108,25 @@ pub fn log_file_path(data_dir: &Path) -> PathBuf {
 
 /// Initializes global tracing: stdout/stderr plus the per-run log file.
 ///
-/// The returned [`WorkerGuard`] must be kept alive for the lifetime of the
-/// process (it flushes the non-blocking file writer on drop) - this is the
-/// Rust equivalent of the Java shutdown hook that flushes `logFileStream`.
-pub fn init(data_dir: &Path) -> anyhow::Result<WorkerGuard> {
+/// The file is written synchronously, under a mutex, rather than through a
+/// background writer. A background writer buffers, and a buffer is only
+/// flushed when its guard drops -- which never happens when the process is
+/// killed rather than returning. A GPU reset takes the graphics driver's
+/// `abort()` with it, so the log lost the seconds leading up to its own
+/// death and ended mid-sentence: the one part worth reading. Writing
+/// straight to the file costs a syscall per line and loses nothing.
+///
+/// The mutex is what keeps a line intact. `tracing`'s formatter issues
+/// several writes per event and Celeste logs from the UI thread and every
+/// Tokio worker, so an unsynchronized file would interleave them into
+/// scrambled lines. Holding the guard for the whole event serializes them,
+/// which is the ordering the background thread used to provide.
+///
+/// Returns the file it opened. [`log_file_path`] stamps the name with the
+/// current time, so calling it again names a different file that nothing
+/// is writing to -- the caller needs the real one to record in
+/// [`self_crash::RunMarker`](crate::self_crash::RunMarker).
+pub fn init(data_dir: &Path) -> anyhow::Result<PathBuf> {
     let log_file = log_file_path(data_dir);
     if let Some(parent) = log_file.parent() {
         std::fs::create_dir_all(parent)?;
@@ -122,7 +135,6 @@ pub fn init(data_dir: &Path) -> anyhow::Result<WorkerGuard> {
         .create(true)
         .append(true)
         .open(&log_file)?;
-    let (non_blocking, guard) = tracing_appender::non_blocking(file);
 
     // Before this run adds another file, drop the oldest ones. Failing to
     // prune is never a reason not to start.
@@ -138,7 +150,7 @@ pub fn init(data_dir: &Path) -> anyhow::Result<WorkerGuard> {
         .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
 
     let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
+        .with_writer(std::sync::Mutex::new(file))
         .with_ansi(false)
         .with_target(true);
     let stdout_layer = tracing_subscriber::fmt::layer()
@@ -153,7 +165,7 @@ pub fn init(data_dir: &Path) -> anyhow::Result<WorkerGuard> {
         .with(file_layer)
         .init();
 
-    Ok(guard)
+    Ok(log_file)
 }
 
 /// Keeps the newest `keep` `celeste_log_*.txt` files and deletes the rest.

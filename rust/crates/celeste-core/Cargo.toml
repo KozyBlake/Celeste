@@ -10,7 +10,6 @@ tokio.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-appender.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
@@ -33,6 +32,11 @@ tar.workspace = true
 flate2.workspace = true
 bzip2.workspace = true
 lzma-rust2.workspace = true
+
+# Installing a handler for the signal a graphics driver raises when it
+# aborts the process. Unix-only: Windows has no signal disposition to use.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

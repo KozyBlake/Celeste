@@ -89,21 +89,8 @@ fn run() -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     startup_splash.status("Opening logs and checking imports...");
-    let _log_guard = celeste_core::log::init(&data_dir)?;
+    let log_file = celeste_core::log::init(&data_dir)?;
     install_panic_hook();
-
-    // Existing-install imports are queued from Settings and applied during
-    // restart before any store has cached the destination files. Otherwise
-    // shutdown saving could overwrite the newly merged records.
-    if let Some(result) = celeste_core::legacy_import::run_pending_with_progress(
-        &data_dir,
-        |fraction, label| startup_splash.progress(fraction, label),
-    ) {
-        match result {
-            Ok(report) => tracing::info!("{}", report.summary()),
-            Err(error) => tracing::error!(%error, "Queued Scarlet import failed"),
-        }
-    }
 
     tracing::info!("App: {} {}", celeste_core::identity::APP_NAME, celeste_core::identity::VERSION);
     // Say which of the five rules picked the folder. A blank-looking
@@ -121,6 +108,58 @@ fn run() -> anyhow::Result<()> {
         // Java prompts when a config exists in more than one known
         // location; at minimum, say so rather than silently preferring one.
         tracing::warn!("Another Celeste config also exists at {} - it is not being used", other.display());
+    }
+
+    // The panic hook above covers a Rust panic. It cannot cover being
+    // killed outright: a lost GPU context ends the process from inside the
+    // graphics driver's `abort()`, where no Rust code runs by default.
+    // This arms a signal handler that gets one line into the log on the
+    // way out, so the log says how it died rather than simply stopping.
+    if !celeste_core::crash_signal::install(&log_file) {
+        tracing::debug!("No crash handler armed; a fatal signal will leave no line in the log");
+    }
+
+    // A run killed from outside cannot report on itself. A GPU reset ends
+    // the process from inside the graphics driver's `abort()`, so the panic
+    // hook above never runs and neither does any shutdown; the next run is
+    // the only place left to notice. Writing the report is never a reason
+    // to fail a launch.
+    if let Some(previous) = celeste_core::self_crash::take_stale_marker(&data_dir) {
+        match celeste_core::self_crash::write_report(&data_dir, &previous) {
+            Ok(report) => tracing::error!(
+                report = %report.display(),
+                previous_log = %previous.log_file.display(),
+                "The previous Celeste run ended without shutting down; wrote a crash report"
+            ),
+            Err(error) => tracing::warn!(
+                %error,
+                "The previous Celeste run ended without shutting down, and the crash report could not be written"
+            ),
+        }
+    }
+    if let Err(error) = celeste_core::self_crash::mark_running(
+        &data_dir,
+        &celeste_core::self_crash::RunMarker {
+            log_file,
+            version: celeste_core::identity::VERSION.to_string(),
+            started_at: chrono::Utc::now(),
+            pid: std::process::id(),
+        },
+    ) {
+        tracing::warn!(%error, "Could not record this run, so a crash would go unreported");
+    }
+
+    // Existing-install imports are queued from Settings and applied during
+    // restart before any store has cached the destination files. Otherwise
+    // shutdown saving could overwrite the newly merged records.
+    if let Some(result) = celeste_core::legacy_import::run_pending_with_progress(
+        &data_dir,
+        |fraction, label| startup_splash.progress(fraction, label),
+    ) {
+        match result {
+            Ok(report) => tracing::info!("{}", report.summary()),
+            Err(error) => tracing::error!(%error, "Queued Scarlet import failed"),
+        }
     }
 
     // Java's `ScarletJsonCache` caches live at `<Scarlet.dir>/caches` and
@@ -251,10 +290,16 @@ fn run() -> anyhow::Result<()> {
     if headless {
         runtime.spawn({
             let data = shared.celeste_data.clone();
+            // This path leaves through `process::exit`, so it never reaches
+            // the orderly exit below and has to clear the marker itself.
+            let marker_dir = data_dir.clone();
             async move {
                 if let Some(celeste_discord::data::ProcessRequest::Restart) = process_requests.recv().await {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     data.save_all();
+                    if let Err(error) = celeste_core::self_crash::mark_exited(&marker_dir) {
+                        tracing::debug!(%error, "Could not clear this run's marker");
+                    }
                     match relaunch_current_process() {
                         Ok(()) => std::process::exit(0),
                         Err(error) => {
@@ -410,6 +455,7 @@ fn run() -> anyhow::Result<()> {
     // the process-wide store so returning from either one can still perform
     // Java's final `saveAll`.
     let shutdown_data = shared.celeste_data.clone();
+    let shutdown_data_dir = data_dir.clone();
     if headless {
         tracing::info!("No display detected; running headless. Ctrl+C to exit.");
         // Headless can't run the interactive setup wizard (no window to show
@@ -507,6 +553,13 @@ fn run() -> anyhow::Result<()> {
     // confirmation path. The periodic saver limits hard-crash loss; this
     // makes every orderly exit durable.
     shutdown_data.save_all();
+
+    // This run is ending on purpose, so the next one has nothing to report.
+    // A marker left behind here would make every orderly exit look like a
+    // crash on the following launch.
+    if let Err(error) = celeste_core::self_crash::mark_exited(&shutdown_data_dir) {
+        tracing::debug!(%error, "Could not clear this run's marker");
+    }
 
     let restart_requested = !headless && lifecycle_process_controller.restart_queued();
 

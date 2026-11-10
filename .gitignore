@@ -48,6 +48,9 @@ scarlet-rust-testing
 celeste-testing
 
 # Runtime data, when running with CELESTE_HOME pointed at rust/
+# running-run.json marks a run as in progress; one left behind is how the
+# next start knows the last one was killed. Never a committed file.
+rust/running-run.json
 rust/live.json
 rust/global.json
 rust/registry.json
@@ -76,6 +79,7 @@ home/
 /global.json
 /secure-prefs.json
 /global-prefs.key
+/running-run.json
 /discord_bot.json
 /staff_list.json
 /secret_staff_list.json
