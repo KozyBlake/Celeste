@@ -24,12 +24,36 @@ pub struct Version {
     pre_release: Option<String>,
 }
 
+/// Removes a leading `Celeste-` (or the pre-rename `Scarlet-`) from a tag.
+///
+/// The names come from [`identity`](crate::identity) rather than being
+/// written out here, so a future rename carries the update check with it
+/// instead of quietly breaking it the way the last one did.
+fn strip_project_prefix(text: &str) -> &str {
+    for name in [crate::identity::NAME, crate::identity::LEGACY_NAME] {
+        let Some(head) = text.get(..name.len()) else { continue };
+        if head.eq_ignore_ascii_case(name) {
+            if let Some(rest) = text[name.len()..].strip_prefix('-') {
+                return rest;
+            }
+        }
+    }
+    text
+}
+
 impl Version {
     /// Reads a version from a release tag (`v0.11.0`) or a plain version
     /// string (`0.11.0`). `None` when it is not a version at all, which is
     /// the signal to say nothing rather than to guess.
     pub fn parse(text: &str) -> Option<Self> {
         let text = text.trim();
+        // Releases here are tagged `Celeste-0.40.0`. The project name has
+        // to come off before anything else: the `-` after it would
+        // otherwise be read as the start of a pre-release label, leaving
+        // `Celeste` where the numbers belong, which parses as nothing --
+        // so every release this repository has published was invisible to
+        // the update check.
+        let text = strip_project_prefix(text);
         let text = text.strip_prefix(['v', 'V']).unwrap_or(text);
         let (numbers, pre_release) = match text.split_once('-') {
             Some((numbers, rest)) if !rest.is_empty() => (numbers, Some(rest.to_string())),
@@ -145,5 +169,34 @@ mod tests {
     #[test]
     fn tags_parse_with_or_without_the_v() {
         assert_eq!(Version::parse("v0.10.0"), Version::parse("0.10.0"));
+    }
+
+    /// Every release in this repository is tagged `Celeste-<version>`.
+    /// Without the prefix coming off first, `split_once('-')` leaves
+    /// `Celeste` where the numbers belong and the tag parses as nothing,
+    /// so the update check silently never fired for anybody.
+    #[test]
+    fn release_tags_carrying_the_project_name_parse() {
+        assert!(is_update("Celeste-0.40.0", "0.30.0"));
+        assert!(!is_update("Celeste-0.30.0", "0.30.0"), "the same version is not an update");
+        assert!(!is_update("Celeste-0.20.0", "0.30.0"), "older is not an update");
+        assert!(is_update("celeste-0.40.0", "0.30.0"), "case should not matter");
+        assert!(is_update("Scarlet-0.40.0", "0.30.0"), "tags from before the rename still read");
+    }
+
+    /// The prefix must not swallow a real pre-release label.
+    #[test]
+    fn a_pre_release_label_survives_the_prefix() {
+        assert!(is_update("Celeste-0.40.0", "0.40.0-beta1"));
+        assert!(!is_update("Celeste-0.40.0-beta1", "0.40.0"));
+    }
+
+    /// Anything that is not a version is still rejected, or a stray tag
+    /// would be announced to everyone as an update.
+    #[test]
+    fn a_name_on_its_own_is_still_not_a_version() {
+        assert!(!is_update("Celeste", "0.30.0"));
+        assert!(!is_update("Celeste-", "0.30.0"));
+        assert!(!is_update("Celeste-nightly", "0.30.0"));
     }
 }

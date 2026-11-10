@@ -1,9 +1,12 @@
 name: Release
 
-# Pushing a tag like v0.10.0 builds both downloads and opens a draft
-# release with them attached. The tag has to match the version in
+# Pushing a tag like Celeste-0.40.0 builds both downloads and opens a
+# draft release with them attached. The tag has to match the version in
 # rust/Cargo.toml, so a release can never carry binaries that report a
 # different version than the tag promises.
+#
+# `v0.40.0` is accepted too, but Celeste-<version> is the name this
+# repository uses and the one the in-app update check reads.
 #
 # Every main-branch push and manual run builds and uploads the same two files
 # as workflow artifacts without publishing anything. That keeps both release
@@ -12,7 +15,7 @@ name: Release
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["Celeste-*", "v*"]
   workflow_dispatch:
 
 permissions:
@@ -40,8 +43,10 @@ jobs:
             exit 1
           fi
           echo "rust/Cargo.toml says $version"
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match rust/Cargo.toml version $version"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] \
+             && [ "$GITHUB_REF_NAME" != "Celeste-$version" ] \
+             && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match rust/Cargo.toml version $version (expected Celeste-$version)"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
