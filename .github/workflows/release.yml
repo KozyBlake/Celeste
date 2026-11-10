@@ -129,6 +129,14 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
 
+      # The AppImage is written inside rust/target/, which is restored from
+      # the Cargo cache, so without this every previously built AppImage
+      # comes back and the upload below ships all of them. A version bump
+      # is what spreads it: the new Cargo.lock makes a new cache key, and
+      # the cache saved under it keeps the old AppImage alongside the new.
+      - name: Clear AppImages restored from the cache
+        run: rm -rf rust/target/appimage
+
       - name: Package the AppImage
         run: ./packaging/linux/build-appimage.sh
 
@@ -142,7 +150,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: linux-x86_64
-          path: rust/target/appimage/Celeste-*-x86_64.AppImage
+          path: rust/target/appimage/Celeste-${{ needs.version.outputs.version }}-x86_64.AppImage
           if-no-files-found: error
 
   publish:
